@@ -1,1 +1,1 @@
-# delyric
+# delyrism
