@@ -1,0 +1,34 @@
+# ---- Core app ----
+streamlit>=1.32
+numpy>=1.24
+matplotlib>=3.7
+scikit-learn>=1.3
+networkx>=3.2
+
+# ---- Embedding backends ----
+sentence-transformers>=2.3.1
+transformers>=4.41
+accelerate>=0.30
+tokenizers>=0.15
+
+# PyTorch (CPU wheels by default from PyPI)
+torch>=2.2
+
+# ---- Audio context paths ----
+# AudioCLIP path (open_clip import)
+open-clip-torch>=2.24.0
+
+# CLAP path (via Hugging Face)
+# (uses transformers + torch above)
+
+# Librosa for loading/processing audio files and mic WAV bytes
+librosa>=0.10
+soundfile>=0.12
+
+# Mic recorder Streamlit component
+streamlit-mic-recorder>=0.0.8
+
+# ---- Optional but used if available ----
+umap-learn>=0.5.5      # UMAP reducer
+scipy>=1.10            # ConvexHull for hulls
+seaborn>=0.13          # nicer heatmaps (optional)
