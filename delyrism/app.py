@@ -58,6 +58,7 @@ from delyrism import (
     plot_ambiguity_metrics
 )
 
+
 primaryColor = "#3498db"
 # =============================
 # Helpers
@@ -65,18 +66,118 @@ primaryColor = "#3498db"
 
 def _default_symbols_map() -> Dict[str, List[str]]:
     return {
-        "CLOUDS": [
-            "spirit world",
-            "transcendence",
-            "wisdom",
-            "portal",
-            "spiritual connection",
+        "EARTH": [
+            "ground",
+            "soil",
+            "minerals",
+            "crystal lattice",
+            "plate tectonics",
+            "sedimentation",
+            "geomagnetism",
+            "gravity",
+            "fertility",
+            "body",
+            "stability",
+            "structure",
+            "homeostasis",
+            "roots",
+            "mycorrhizae",
+            "nourishment",
+            "boundaries",
+            "patience",
+            "pentacle",
+            "muladhara",
         ],
-        "EARTH": ["ground", "soil", "people", "life", "physical world"],
-        "WATER": ["river", "emotion", "flow", "cleansing", "change"],
-        "DRAGONFLY": ["messenger", "transformation", "threshold", "quick movement", "reflection"],
-        "HOUSE": ["home", "shelter", "family", "boundary", "gathering"],
+        "WATER": [
+            "river",
+            "ocean",
+            "universal solvent",
+            "cohesion",
+            "surface tension",
+            "capillarity",
+            "osmosis",
+            "hydrologic cycle",
+            "blood",
+            "lymph",
+            "emotion",
+            "cleansing",
+            "reflection",
+            "adaptability",
+            "tides",
+            "lunar influence",
+            "baptism",
+            "flow state",
+            "viscosity",
+            "purification",
+        ],
+        "FIRE": [
+            "combustion",
+            "ignition",
+            "exothermy",
+            "heat transfer",
+            "radiation",
+            "photons",
+            "plasma",
+            "volcano",
+            "lightning",
+            "metabolism",
+            "fever",
+            "calcination",
+            "transformation",
+            "passion",
+            "will",
+            "forge",
+            "entropy increase",
+            "catalysis",
+            "solar radiation",
+            "hearth",
+        ],
+        "AIR": [
+            "breath",
+            "oxygenation",
+            "wind",
+            "turbulence",
+            "convection",
+            "pressure gradients",
+            "diffusion",
+            "sound wave",
+            "speech",
+            "communication",
+            "intellect",
+            "clarity",
+            "birds",
+            "pollen dispersal",
+            "volatility",
+            "fragrance",
+            "prana",
+            "qi (chi)",
+            "inspiration",
+            "changeability",
+        ],
+        "ETHER": [
+            "space",
+            "akasha",
+            "subtle body",
+            "sahasrara",
+            "emptiness",
+            "silence",
+            "awareness",
+            "consciousness",
+            "nonlocality",
+            "resonance",
+            "coherence",
+            "electromagnetism",
+            "spacetime",
+            "quantum vacuum",
+            "zero-point",
+            "information",
+            "connectivity",
+            "signal",
+            "harmony",
+            "presence",
+        ],
     }
+
 
 def _embedder_key(e: TextEmbedder) -> str:
     # include all params that change embeddings
@@ -200,15 +301,36 @@ with st.sidebar:
     # --- Embeddings (sidebar) ---
     with st.expander("Embeddings", expanded=True):
         # ADD (audio): include audioclip as a backend option
-        backend = st.selectbox("Backend", ["qwen3", "qwen2", "original", "clap"], index=0)
-        model = st.text_input("HF model override (optional)")
-        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0)
+        backend_help = (
+            "Which encoder turns your inputs into vectors.\n"
+            "- Sentence-Transformer: good general text embeddings (e.g., all-mpnet-base-v2).\n"
+            "- Qwen2/Qwen3 Embedding: strong multilingual; uses token pooling (EOS by default).\n"
+            "- AudioCLIP / CLAP: enable AUDIO → vector (and text, for AudioCLIP). Use only if you need audio.\n"
+            "Changing backend re-embeds descriptors and context; results, dims, and speed can change."
+        )
+        # backend = st.selectbox("Embedding backend", [...], help=backend_help)
+        backend = st.selectbox("Backend", ["qwen3", "qwen2", "sentence-transformer", "clap"], index=0, help=backend_help)
+        hf_model_help = (
+            "Hugging Face repo ID for the embedding model (e.g., 'sentence-transformers/all-mpnet-base-v2', "
+            "'Qwen/Qwen2-Embedding', 'Qwen/Qwen3-Embedding-0.6B').\n"
+            "Pick an *embedding* model (not a causal LM) to get fixed-size vectors.\n"
+            "Changing this will re-embed everything (dimension, quality, and speed can differ)."
+        )
+        model = st.text_input("HF model override (optional)", help=hf_model_help)
+        pooling_help = (
+            "How token embeddings are collapsed into one vector per text.\n"
+            "- eos (default): last *non-padding* token. Length-safe and works well for Qwen-style encoders.\n"
+            "- mean: mask-aware average over all real tokens. Very robust for sentence embeddings.\n"
+            "- cls: first token ([CLS]). Best when the model was trained to use CLS (e.g., BERT family).\n"
+            "- last: final position regardless of padding/truncation. Can be brittle—avoid unless you need it.\n"
+            "All pooled vectors are L2-normalized. Keep the same setting when comparing runs."
+        )
+        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help)
         embedder = get_embedder(backend, model or None, pooling)
 
         # (optional) tiny hint when audioclip is selected
         if backend == "clap":
             st.caption("CLAP enabled. Upload or record short audio clip in the Context panel to drive the analysis.")
-
 
     # --- Context (panel-colored sliders) --------------------------
     st.markdown('<div class="sb-three panel-context">', unsafe_allow_html=True)
@@ -298,11 +420,25 @@ with st.sidebar:
 
         # selection
         default_ctx = st.session_state.get("ctx_chosen", sym_preview[:2])
+        context_symbols_help = (
+            "Optional symbol priors to steer the context.\n\n"
+            "What it feeds: we build v_ctx = normalize(  Σᵢ wᵢ·centroid(symbolᵢ)  +  sentence_vector ).\n"
+            "Only positive weights are used; they are internally normalized.\n\n"
+            "Where it matters:\n"
+            "1) Descriptor shifting (all strategies): v_ctx sets the direction of the shift/tilt.\n"
+            "2) Proposals/ranking: contributes to the coherence/attention term; with PPR on, weights also seed PR personalization.\n"
+            "3) Graph visuals: marked as ‘context’ in the big symbol/descriptor graph (highlighted nodes).\n\n"
+            "Tips:\n"
+            "- Prefer a few focused symbols with moderate weights over many tiny weights.\n"
+            "- Heavy weights can dominate the sentence; lower them if text isn’t showing effect.\n"
+            "- Set to none (or all zeros) to rely purely on the sentence context."
+        )
         ctx_chosen = st.multiselect(
             "Context symbols",
             options=sym_preview,
             default=[s for s in default_ctx if s in sym_preview],
             key="ctx_chosen",
+            help=context_symbols_help
         )
 
         # weights (these sliders inherit .panel-context color)
@@ -322,13 +458,17 @@ with st.sidebar:
     with st.expander("Semantic Map", expanded=True):
         st.markdown("**Map display**")
         with_hulls = st.checkbox("Draw convex hulls", True)
-        include_centroids = st.checkbox("Include centroids (stars)", True)
-        normalize_centroids = st.checkbox("Normalize centroids (unit-length)", False)
-        st.markdown("**Shift settings**")
-        beta = st.slider("Shift strength β", 0.0, 2.0, 0.6, 0.05)
-        gate = st.selectbox("Gate", ["relu", "cos", "softmax", "uniform"], index=0)
-        within_symbol_softmax = st.checkbox("Softmax within symbol (if gate=softmax)", True)
-        membership_alpha = st.slider("Membership α (desc vs centroid)", 0.0, 1.0, 0.0, 0.05)
+        inc_cent_help = "Show one star per symbol at its mean descriptor position."
+        include_centroids = st.checkbox("Include centroids (stars)", True, help=inc_cent_help)
+
+        norm_cent_help = (
+            "Scale each centroid to unit length BEFORE projection.\n"
+            "On → star positions reflect direction (angle) only, ignoring vector length effects "
+            "from cluster tightness/size. Off → magnitude can tug centroids in the layout."
+        )
+        normalize_centroids = st.checkbox("Normalize centroids (unit-length)", False, help=norm_cent_help)
+
+        
         show_arrow = st.checkbox("Show arrows", True)
         
     st.markdown('</div>', unsafe_allow_html=True)
@@ -336,31 +476,142 @@ with st.sidebar:
     # --- Ranking (panel-colored sliders) --------------------------
     st.markdown('<div class="panel-ranking">', unsafe_allow_html=True)
     with st.expander("Ranking (proposal)", expanded=True):
-        tau = st.slider("Softmax temperature (τ)", 0.01, 2.0, 0.3, 0.01)
-        alpha = st.slider("PageRank damping (α)", 0.10, 0.99, 0.8, 0.01)
-        lam = st.slider("Blend λ (PR-graph vs Softmax-attention)", 0.0, 1.0, 0.6, 0.01)
-        use_ppr = st.checkbox("Use Personalized PageRank", True)
+        tau_help = "Lower τ = sharper attention; higher τ = broader attention."
+        tau = st.slider("Softmax temperature (τ)", 0.01, 2.0, 0.3, 0.01, help=tau_help)
+
+        # PageRank damping (α)
+        alpha_help = (
+            "Affects HOW PR is computed (inside the graph walk), not the blend.\n"
+            "α = chance to follow graph edges each step; (1−α) = jump back to the context prior.\n"
+            "Higher α (e.g., 0.9) → trust graph structure more; lower α (e.g., 0.6) → trust the context prior more."
+        )
+        alpha = st.slider("PageRank damping (α)", 0.10, 0.99, 0.8, 0.01, help=alpha_help)
+
+        # Blend λ (PR vs. attention)
+        lam_help = (
+            "Affects HOW scores are combined AFTER PR is computed.\n"
+            "Final score = (1−λ)·PR + λ·attention/coherence.\n"
+            "λ = 0 → PR only; λ = 1 → attention only. λ does not change PR itself; it just mixes it.\n"
+            "If PPR is off, the PR term is zero, so λ≈1 has no PR to blend."
+        )
+        lam = st.slider("Blend λ (PR-graph vs Softmax-attention)", 0.0, 1.0, 0.6, 0.01, help=lam_help)
+
+        ppr_help = "Include graph-aware Personalized PageRank in the score blend."
+        use_ppr = st.checkbox("Use Personalized PageRank", True, help=ppr_help)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Contextual Subgraph (panel-colored sliders) --------------
     st.markdown('<div class="panel-subgraph">', unsafe_allow_html=True)
     with st.expander("Contextual Subgraph (network)", expanded=True):
-        ctx_topk_symbols = st.slider("Top symbols", 1, 12, 3)
-        ctx_topk_desc = st.slider("Top descriptors / symbol", 1, 12, 3)
-        ctx_method = st.selectbox("Scoring method", ["ppr", "softmax"], index=0)
-        ctx_focus = st.slider("Context Focus (sharper → right)", 0.0, 1.0, 0.6, 0.01)
-        ctx_alpha = st.slider("α (subgraph PageRank)", 0.50, 0.99, 0.85, 0.01)
-        ctx_normalize = st.checkbox("Normalize by baseline PR (remove centrality)", True)
-        descriptor_threshold = st.slider("Descriptor edge threshold (cosine)", 0.0, 0.9, 0.7, 0.02)
+        topk_symbols_help = "How many highest-scoring symbols to show for this context."
+        ctx_topk_symbols = st.slider("Top symbols", 1, 12, 3, help=topk_symbols_help)
+
+        topk_desc_help = "How many of each symbol’s descriptors to keep (highest weighted)."
+        ctx_topk_desc = st.slider("Top descriptors / symbol", 1, 12, 3, help=topk_desc_help)
+
+        ctx_method_help = "ppr = graph-aware PageRank; softmax = direct context→descriptor attention."
+        ctx_method = st.selectbox("Scoring method", ["ppr", "softmax"], index=0, help=ctx_method_help)
+
+        focus_help = "Right = sharper focus (lower τ). Left = broader context (higher τ)."
+        ctx_focus = st.slider("Context Focus (sharper → right)", 0.0, 1.0, 0.95, 0.01, help=focus_help)
+
+        alpha_help = "PageRank damping: higher α = more graph influence; lower α = more context."
+        ctx_alpha = st.slider("α (subgraph PageRank)", 0.50, 0.99, 0.85, 0.01, help=alpha_help)
+
+        norm_help = "Remove centrality prior: show PR(context) minus PR(uniform). (PPR only)"
+        ctx_normalize = st.checkbox("Normalize by baseline PR (remove centrality)", True, help=norm_help)
+
+        thr_help = "Cosine cutoff for descriptor–descriptor edges. Higher = sparser/cleaner; lower = denser/noisier."
+        descriptor_threshold = st.slider("Descriptor edge threshold (cosine)", 0.0, 0.9, 0.7, 0.02, help=thr_help)
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Δ Graph (panel-colored sliders) --------------------------
     st.markdown('<div class="panel-delta">', unsafe_allow_html=True)
     with st.expander("Δ Graph", expanded=True):
+        st.markdown("**Shift settings**")
+        # add "pooling" to the strategy list
+        strategy_help = """
+        How to inject context into descriptors:
+         - gate: tilt existing vectors toward the context (fast, geometry-preserving)
+         - reembed: re-encode “sentence + descriptor” (expressive, heavier)
+         - hybrid: blend gate & reembed (γ controls the mix)
+         - pooling: average with the context (or max/min), smoother group motion
+        """
+        shift_mode = st.selectbox("Strategy", ["gate", "reembed", "hybrid", "pooling"],
+                                index=0, help=strategy_help)
+
+        if shift_mode in ('reembed', 'hybrid'):
+            st.caption("Reembed and hybrid modes only take into account textual context")
+
+        # --- pooling controls (visible only when selected) ---
+        if shift_mode == "pooling":
+            pool_type = st.selectbox("Pooling type", ["avg", "max", "min"], index=0, help="Element-wise pool of descriptors with context vector")
+            if pool_type == 'avg':
+                pool_w = st.slider("Pooling weight w (avg mode)", 0.0, 1.0, 0.7, 0.05, help="Weight of context for pool_type='avg'")
+            else:
+                pool_w = 0.7
+            st.caption("Pooling blends each descriptor with the context vector directly (no β/gate). Try max for aggressive context, or avg with w≈0.7–0.9.")
+
+        else:
+            # still define defaults so downstream calls don't KeyError
+            pool_type, pool_w = "avg", 0.7
+        if shift_mode == 'gate':
+            help_text_alpha = """
+            **Membership (α)** controls how much each descriptor moves with its symbol.
+            - α=0: per-descriptor shift only (fine detail, spikier Δ).
+            - α=1: all descriptors follow the symbol centroid (smooth, group-level Δ).
+            On the Δ graph, higher α makes within-symbol changes rise/fall together, highlighting coherent shifts.
+            """
+
+            membership_alpha = st.slider("Membership α (desc vs centroid)", 0.0, 1.0, 0.0, 0.05, help=help_text_alpha)
+            gate_help = """
+            Per-descriptor gate g_i (used by 'gate' and 'hybrid'):
+            - relu: max(0, cos) — only aligned descriptors move
+            - cos: signed cos — aligned move toward, anti-aligned move away
+            - softmax: softmax(cos/τ) — sharp focus on the most relevant descriptors
+            - uniform: 1 — uniform tilt toward the context
+            """
+            gate = st.selectbox(
+                "Gate",
+                ["relu", "cos", "softmax", "uniform"],
+                index=0,
+                disabled=(shift_mode == "pooling"),
+                help=gate_help
+            )
+
+            softmax_help = """
+            If gate='softmax': normalize per symbol instead of globally.
+            - ON: each symbol's descriptors compete only with each other (fairer, comparable emphasis).
+            - OFF: all descriptors compete together (strong global winners).
+            """
+            within_symbol_softmax = st.checkbox(
+                "Softmax within symbol (if gate=softmax)",
+                True,
+                # NOTE: Enable this for both 'gate' *and* 'hybrid' (hybrid uses the gate too).
+                disabled=not (shift_mode in ("gate", "hybrid") and gate == "softmax"),
+                help=softmax_help
+            )
+
+        else:
+            membership_alpha = 0.0
+            gate = 'relu'
+            within_symbol_softmax = True
+        # existing controls (unchanged)
+        if shift_mode == "hybrid":
+            gamma = st.slider("Hybrid blend γ (0=gate, 1=reembed)", 0.0, 1.0, 0.5, 0.05, disabled=(shift_mode != "hybrid"))
+        else:
+            gamma = 0.5
+
+        beta = st.slider("Shift strength β", 0.0, 2.0, 0.6, 0.05, disabled=(shift_mode == "pooling"))  # β not used by pooling
+        
+        
+        st.markdown("**Graph network settings**")
         within_symbol = st.checkbox("Within-symbol pairs only", False)
         sym_filter_sel = st.multiselect("Or restrict to symbols", sym_preview)
         top_abs_edges = st.slider("Top |Δ| edges", 2, 100, 10, 1)
         connected_only = st.checkbox("Connected nodes only", True)
+        
     st.markdown('</div>', unsafe_allow_html=True)
 
 # after you compute 'symbols_map' and 'embedder'
@@ -389,7 +640,7 @@ else:
 # Row 1: Meaning Space (left) | Rankings & Attention (right)
 # =============================
 colL, colR = st.columns([1.15, 1])
-
+color_map = space.get_symbol_color_dict("AuroraPop")
 with colL:
     st.subheader("Meaning Space (2D)")
     reducer = st.selectbox("Reducer", ["umap", "tsne","pca"], index=0)
@@ -414,6 +665,7 @@ with colL:
         beta=beta,
         membership_alpha=membership_alpha,
         within_symbol_softmax=within_symbol_softmax,
+        color_dict=color_map
     )
     st.pyplot(fig_ms, clear_figure=True)
 
@@ -421,7 +673,9 @@ with colL:
     st.subheader("Ambiguity Metrics")
 
     sort_opt = st.selectbox("Sort by", ["dispersion", "leakage", "entropy", "none"], index=0)
-    color_map = getattr(space, "get_symbol_color_dict", lambda: None)()
+    # color_map = getattr(space, "get_symbol_color_dict", lambda: None)()
+    
+    
     fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4))
     st.pyplot(fig_amb, clear_figure=True)
 
@@ -533,7 +787,7 @@ with colN:
             alpha=ctx_alpha,
             tau=tau_subgraph,
             normalize=ctx_normalize,
-            global_color_map=global_color_map,
+            global_color_map=color_map
         )
         st.pyplot(fig_ctxnet, clear_figure=True)
     except Exception as e:
@@ -547,11 +801,20 @@ with colH:
             simdict = space.descriptor_similarity_matrices(
                 weights=ctx_weights if ctx_weights else None,
                 sentence=sentence if sentence else None,
+                strategy=shift_mode,
                 beta=beta,
                 gate=gate,
                 tau=tau,
+                within_symbol_softmax=within_symbol_softmax,
+                gamma=gamma,
+                pool_type=pool_type,
+                pool_w=pool_w,
                 order_by_attention=True,
+                # NEW ▼
+                membership_alpha=membership_alpha,
             )
+
+
             from functools import partial
             fig_heat = fig_from_callable(
                 space.plot_symbol_similarity_heatmaps,
@@ -575,23 +838,32 @@ if nx is None:
     st.info("networkx not installed — delta graph requires networkx.")
 else:
     try:
-        cdict = getattr(space, "get_symbol_color_dict", None)
-        color_map = cdict() if callable(cdict) else None
+        # cdict = getattr(space, "get_symbol_color_dict", None)
+        # color_map = cdict() if callable(cdict) else None
+
         sym_filter_arg = sym_filter_sel if sym_filter_sel else None
 
         G = context_delta_graph(
             space,
             sentence=sentence if sentence else None,
             weights=ctx_weights if ctx_weights else None,
+            strategy=shift_mode,
             beta=beta,
             gate=gate,
             tau=tau,
+            within_symbol_softmax=within_symbol_softmax,
+            gamma=gamma,
+            pool_type=pool_type,
+            pool_w=pool_w,
             top_abs_edges=top_abs_edges,
             sym_filter=sym_filter_arg,
             within_symbol=within_symbol,
             connected_only=connected_only,
-
+            # NEW ▼
+            membership_alpha=membership_alpha,
         )
+
+
 
         fig_delta = fig_from_callable(
             plot_delta_graph,

@@ -91,6 +91,54 @@ def l2_normalize(X, axis=1, eps=1e-9):
 def _l2norm_torch(x, eps=1e-9):
     return torch.nn.functional.normalize(x, p=2, dim=1)
 
+def make_symbol_palette(symbols, name="Nord"):
+    base = CHIC_PALETTES[name]
+    print('BASE', base)
+
+    # extend if you have more symbols than base colors (cycles: normal, slightly lighter, slightly darker)
+    layers = [0, +1, -1]
+    if len(base) < len(symbols):
+        colors = []
+        while len(colors) < len(symbols):
+            for s in base:
+                for step in layers:
+                    colors.append(_vary_luma(s, step))
+                    if len(colors) >= len(symbols):
+                        break
+                if len(colors) >= len(symbols):
+                    break
+    else:
+        colors = base[0:len(symbols)]
+    return {s: colors[i] for i, s in enumerate(symbols)}
+
+CHIC_PALETTES = {
+    "Nord": ["#8FBCBB","#88C0D0","#81A1C1","#5E81AC","#BF616A","#D08770","#EBCB8B","#A3BE8C","#B48EAD","#4C566A","#3B4252","#2E3440"],
+    "TeaHouse": ["#2D3142","#4F5D75","#BFC0C0","#EF8354","#2A9D8F","#E9C46A","#264653","#A26769","#7B6D8D","#C9ADA7"],
+    "Jewel": ["#355070","#6D597A","#B56576","#E56B6F","#EAAC8B","#2A9D8F","#264653","#E9C46A","#F4A261","#E76F51"],
+    "NeonEarth": ["#1F271B","#A6A57A","#FFE45E","#FF6392","#7AE582","#2DE1FC","#FF9F1C","#5F0F40","#227C9D","#17C3B2"],
+    "MonoPop": ["#0B132B","#1C2541","#3A506B","#5BC0BE","#6FFFE9","#E0FBFC","#F17300","#F71735","#A1A1A1"],
+    "OkabeIto": ["#E69F00","#56B4E9","#009E73","#F0E442","#0072B2","#D55E00","#CC79A7","#000000"],
+    "AuroraPop": ["#FF6F59","#FFD166","#06D6A0","#118AB2","#073B4C",
+                    "#EF476F","#8D99AE","#8338EC","#3A86FF","#F77F00",
+                    "#2A9D8F","#E63946"],
+    "NeonBodega": ["#F15BB5","#00BBF9","#00F5D4","#B9FBC0","#FEE440",
+                "#9B5DE5","#F72585","#4CC9F0","#3A0CA3","#FF9F1C",
+                "#2EC4B6","#90BE6D"]
+                    }
+    
+
+
+import matplotlib.colors as mcolors
+
+def _vary_luma(hex_color, step=0):  # subtle lighten/darken
+    r,g,b = mcolors.to_rgb(hex_color)
+    if step > 0:
+        r,g,b = r+(1-r)*0.12*step, g+(1-g)*0.12*step, b+(1-b)*0.12*step
+    elif step < 0:
+        r,g,b = r*(1-0.12*abs(step)), g*(1-0.12*abs(step)), b*(1-0.12*abs(step))
+    return (min(max(r,0),1), min(max(g,0),1), min(max(b,0),1), 1.0)
+
+
 class TextEmbedder:
     """
     Flexible text embedder supporting:
@@ -115,7 +163,7 @@ class TextEmbedder:
         self._proj = None
         self.audio_capable = False        # <-- ADD
 
-        if self.backend_type == "original":
+        if self.backend_type == "sentence-transformer":
             self._init_original(model or "sentence-transformers/all-mpnet-base-v2")
         elif self.backend_type == "qwen2":
             self._init_qwen(model or "Qwen/Qwen2-Embedding")
@@ -409,6 +457,28 @@ class SymbolSpace:
                                weight=float(C[i, j]))
         return G
 
+    # in class SymbolSpace
+
+    def _pool_with_context(self, D, vctx, *, pool_type="avg", pool_w=0.7):
+        """
+        Pool each descriptor vector with the context vector.
+        pool_type: "avg" | "max" | "min"
+        pool_w: weight for context when pool_type='avg'  (0..1)
+        """
+        if np.linalg.norm(vctx) < 1e-8:
+            return D.copy()
+
+        if pool_type == "avg":
+            # weighted average: (1-w)*desc + w*ctx
+            D_ctx = ((1.0 - float(pool_w)) * D) + (float(pool_w) * vctx[None, :])
+        elif pool_type == "max":
+            D_ctx = np.maximum(D, vctx[None, :])
+        elif pool_type == "min":
+            D_ctx = np.minimum(D, vctx[None, :])
+        else:
+            raise ValueError(f"Unknown pool_type '{pool_type}'")
+        return l2_normalize(D_ctx, axis=1)
+
     # -------- context helpers --------
     def set_context_vec(self, vec: Optional[np.ndarray]) -> None:
         if vec is None:
@@ -561,9 +631,9 @@ class SymbolSpace:
         return {n[2:]: float(v) for n, v in pr.items() if n.startswith("S:")}
 
     
-    def get_symbol_color_dict(self):
-        colors = plt.cm.tab20(np.linspace(0, 1, len(self.symbols)))
-        return {s: colors[i] for i, s in enumerate(self.symbols)}
+    def get_symbol_color_dict(self, palette="Nord"):
+        return make_symbol_palette(self.symbols, name=palette)
+
         
     def propose(self, weights=None, sentence=None,
                 topk=5, tau=0.3, lam=0.6, alpha=0.85, use_ppr=True):
@@ -595,12 +665,78 @@ class SymbolSpace:
         descriptors = self.symbols_to_descriptors[symbol]
         if self.contextual_embeddings and sentence:
             # Example template; you can adjust for better results
-            texts = [f"In this context: {sentence}. Descriptor: {desc}" for desc in descriptors]
+            texts = [f"{sentence}, {desc}" for desc in descriptors]
             D = l2_normalize(self.embedder.encode(texts), axis=1)
         else:
             idx = self.symbol_to_idx[symbol]
             D = self.D[idx]
         return D, descriptors
+
+    # in class SymbolSpace
+    def make_shifted_matrix(
+        self,
+        *,
+        weights=None,
+        sentence=None,
+        strategy: str = "gate",
+        beta: float = 0.6,
+        gate: str = "relu",
+        tau: float = 0.5,
+        within_symbol_softmax: bool = False,
+        gamma: float = 0.5,
+        prompt_template: str = "{sent}, {desc}",
+        pool_type: str = "avg",
+        pool_w: float = 0.7,
+        # NEW ▼
+        membership_alpha: float = 0.0,
+    ):
+        ...
+        vctx = self.ctx_vec(weights=weights, sentence=sentence)
+        # --- pooling ---
+        if strategy == "pooling":
+            Dtmp = self._pool_with_context(self.D, vctx, pool_type=pool_type, pool_w=pool_w)
+        # --- gate / hybrid ---
+        elif strategy in ("gate", "hybrid"):
+            sims = self.D @ vctx
+            if gate == "relu":
+                g = np.maximum(0.0, sims)
+            elif gate == "cos":
+                g = sims
+            elif gate == "softmax":
+                if within_symbol_softmax:
+                    g = np.zeros_like(sims)
+                    for s in self.symbols:
+                        idx = self.symbol_to_idx[s]
+                        if len(idx) > 0:
+                            g[idx] = softmax(sims[idx], tau=tau)
+                else:
+                    g = softmax(sims, tau=tau)
+            elif gate == "uniform":
+                g = np.ones_like(sims)
+            else:
+                raise ValueError(f"Unknown gate '{gate}'")
+            D_gate = l2_normalize(self.D + (beta * g[:, None]) * vctx[None, :], axis=1)
+
+            if strategy == "gate":
+                Dtmp = D_gate
+            else:
+                # hybrid: blend gate + reembed, then norm
+                desc_texts = [prompt_template.format(sent=sentence, desc=d) for d in self.descriptors]
+                D_re = l2_normalize(self.embedder.encode(desc_texts), axis=1)
+                D_mix = (1.0 - float(gamma)) * D_gate + float(gamma) * D_re
+                Dtmp = l2_normalize(D_mix, axis=1)
+        # --- reembed ---
+        elif strategy == "reembed":
+            desc_texts = [prompt_template.format(sent=sentence, desc=d) for d in self.descriptors]
+            Dtmp = l2_normalize(self.embedder.encode(desc_texts), axis=1)
+        else:
+            raise ValueError(f"Unknown strategy '{strategy}'")
+
+        # NEW: apply membership blend so downstream (heatmaps/Δ-graph) see the same α effect
+        if float(membership_alpha) > 0.0:
+            return self._apply_membership_blend(self.D, Dtmp, float(membership_alpha))
+        return Dtmp
+
 
     # -------- metrics --------
     def dispersion(self, symbol):
@@ -790,23 +926,27 @@ class SymbolSpace:
         *,
         weights=None,
         sentence=None,
+        strategy: str = "gate",
         beta: float = 0.6,
         gate: str = "relu",
         tau: float = 0.5,
+        within_symbol_softmax: bool = False,
         order_by_attention: bool = True,
+        gamma: float = 0.5,
+        prompt_template: str = "In this context: {sent}. Descriptor: {desc}",
+        pool_type: str = "avg",
+        pool_w: float = 0.7,
+        # NEW ▼
+        membership_alpha: float = 0.0,
     ):
-        """
-        Returns a dict:
-        symbol -> {
-            "descriptors": [list of names in matrix order],
-            "S_before":  (m x m) cosine sim among that symbol's descriptors (original self.D),
-            "S_after":   (m x m) cosine sim among that symbol's descriptors (shifted D_ctx),
-            "S_delta":   S_after - S_before
-        }
-        """
-        # 1) shifted descriptor matrix for ALL descriptors (same shape as self.D)
-        D_ctx = self.descriptor_shifted_embeddings(
-            weights=weights, sentence=sentence, beta=beta, gate=gate, tau=tau
+        D_ctx = self.make_shifted_matrix(
+            weights=weights, sentence=sentence,
+            strategy=strategy,
+            beta=beta, gate=gate, tau=tau, within_symbol_softmax=within_symbol_softmax,
+            gamma=gamma, prompt_template=prompt_template,
+            pool_type=pool_type, pool_w=pool_w,
+            # NEW ▼
+            membership_alpha=membership_alpha,
         )
 
         out = {}
@@ -817,17 +957,14 @@ class SymbolSpace:
             D_before = self.D[idx]
             D_after  = D_ctx[idx]
 
-            # optional: reorder by attention (most context-relevant first)
             if order_by_attention and (weights is not None or sentence):
                 _, att = self.conditioned_symbol(s, weights=weights, sentence=sentence, tau=tau)
-                # build sort index (fallback to original order if some desc not in att)
                 scores = [att.get(d, 0.0) for d in desc_names]
                 order = np.argsort(scores)[::-1]
                 D_before = D_before[order]
                 D_after  = D_after[order]
                 desc_names = [desc_names[i] for i in order]
 
-            # pairwise cosine sims
             S_before = cosine_similarity(D_before)
             S_after  = cosine_similarity(D_after)
             S_delta  = S_after - S_before
@@ -839,6 +976,7 @@ class SymbolSpace:
                 "S_delta": S_delta,
             }
         return out
+
 
 
     # ------------------------------------------------------------------
@@ -929,6 +1067,26 @@ class SymbolSpace:
         plt.show()
 
 
+    def _apply_membership_blend(self, D0: np.ndarray, Dtmp: np.ndarray, alpha: float) -> np.ndarray:
+        """
+        Membership blend:
+        Δ_i = (1-α) * (Dtmp_i - D0_i) + α * Δ_centroid(symbol_i)
+        and return L2-normalized matrix.
+        """
+        alpha = float(alpha)
+        if alpha <= 1e-8:
+            return l2_normalize(Dtmp, axis=1)
+
+        D_out = D0.copy()
+        for s, idx in self.symbol_to_idx.items():
+            if not idx:
+                continue
+            c0 = D0[idx].mean(0)
+            c1 = Dtmp[idx].mean(0)
+            delta_sym = c1 - c0                       # centroid shift for this symbol
+            # per-row blend: keep each descriptor's own move + a share of the centroid move
+            D_out[idx] = D0[idx] + (1.0 - alpha) * (Dtmp[idx] - D0[idx]) + alpha * delta_sym[None, :]
+        return l2_normalize(D_out, axis=1)
 
 
     # --- in class SymbolSpace ---
@@ -951,7 +1109,8 @@ class SymbolSpace:
         tau=0.5,
         beta=0.6,
         membership_alpha=0.0,      # existing: 0 = pure descriptor shift, 1 = pure symbol-centroid shift
-        within_symbol_softmax=False # NEW: if gate=='softmax', apply softmax per symbol (temperature=tau)
+        within_symbol_softmax=False, # NEW: if gate=='softmax', apply softmax per symbol (temperature=tau),
+        color_dict=None
     ):
         """
         Show original descriptor positions and their context-shifted positions, with arrows.
@@ -1089,8 +1248,9 @@ class SymbolSpace:
                     Zc_ctx[s]  = Z_ctx[idx].mean(0)
 
         # ---------- 7) Plot ----------
-        colors = plt.cm.tab20(np.linspace(0, 1, len(self.symbols)))
-        color_dict = {s: colors[i] for i, s in enumerate(self.symbols)}
+        if color_dict is None:
+            colors = plt.cm.tab20(np.linspace(0, 1, len(self.symbols)))
+            color_dict = {s: colors[i] for i, s in enumerate(self.symbols)}
 
         plt.figure(figsize=figsize)
         for s in self.symbols:
@@ -1707,30 +1867,32 @@ def plot_centroid_context_plane(space, symbol, sentences, tau=0.3, figsize=(7,5)
     plt.show()
 
 
-def context_delta_graph(space, *, sentence=None, weights=None,
-                        beta=0.6, gate="relu", tau=0.2,
-                        top_abs_edges=150, sym_filter=None,
-                        min_abs_delta=0.02,
-                        within_symbol=True,   # keep only same-symbol edges
-                        only_symbol=None,     # restrict to a single symbol
-                        connected_only=False  # NEW: keep only nodes with edges
-                        ):
-    """
-    Build a graph where edges are weighted by Δcos = cos_after - cos_before.
-    Keeps the strongest |Δ| edges.
-
-    within_symbol=True  -> keep only edges whose endpoints belong to the same symbol.
-    only_symbol="EARTH" -> convenience: restrict to one symbol’s descriptors.
-    sym_filter=[...]    -> restrict to a set of symbols (still respects within_symbol flag).
-    connected_only=True -> only keep nodes that are part of at least one edge.
-    """
-    import networkx as nx
-    import numpy as np
-
-    # --- descriptor matrices (before/after) ---
+def context_delta_graph(
+    space, *,
+    sentence=None, weights=None,
+    strategy: str = "gate",
+    beta=0.6, gate="relu", tau=0.2,
+    within_symbol_softmax: bool = False,
+    gamma: float = 0.5,
+    prompt_template: str = "In this context: {sent}. Descriptor: {desc}",
+    top_abs_edges=150, sym_filter=None,
+    min_abs_delta=0.02, within_symbol=True, only_symbol=None, connected_only=False,
+    pool_type: str = "avg",
+    pool_w: float = 0.7,
+    # NEW ▼
+    membership_alpha: float = 0.0,
+):
     D0 = space.D
-    D1 = space.descriptor_shifted_embeddings(weights=weights, sentence=sentence,
-                                             beta=beta, gate=gate, tau=tau)
+    D1 = space.make_shifted_matrix(
+        weights=weights, sentence=sentence,
+        strategy=strategy,
+        beta=beta, gate=gate, tau=tau,
+        within_symbol_softmax=within_symbol_softmax,
+        gamma=gamma, prompt_template=prompt_template,
+        pool_type=pool_type, pool_w=pool_w,
+        # NEW ▼
+        membership_alpha=membership_alpha,
+    )
 
     # --- choose which descriptors to keep ---
     if only_symbol is not None:
@@ -1891,11 +2053,6 @@ def plot_delta_graph(
     plt.tight_layout()
     plt.show()
 
-def lighten_color(color, amount=0.5):
-    """Blend a color with white to lighten it."""
-    white = np.array([1, 1, 1])
-    color = np.array(color[:3])
-    return tuple((1-amount)*color + amount*white)
 
 def plot_contextual_subgraph_colored(
     space,
@@ -1953,6 +2110,7 @@ def plot_contextual_subgraph_colored(
             context_sentence, topk=topk_symbols, tau=tau, n_best=topk_desc
         )
 
+
     # --- Build subgraph ---
     symbols = [r['symbol'] for r in results]
     symbol_to_desc = {r['symbol']: r['best_descriptors'] for r in results}
@@ -1998,6 +2156,17 @@ def plot_contextual_subgraph_colored(
     plt.axis("off")
     plt.tight_layout()
     plt.show()
+
+# Also make your other helper robust:
+def lighten_color(color, amount=0.5):
+    r, g, b, a = _rgba_tuple(color)
+    r, g, b = r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount
+    return (min(1, r), min(1, g), min(1, b), a)
+    
+def _rgba_tuple(c):
+        """Robustly convert any Matplotlib color (hex, name, RGB/RGBA tuple) to (r,g,b,a)."""
+        r, g, b, a = mcolors.to_rgba(c)
+        return float(r), float(g), float(b), float(a)
 
 def plot_ambiguity_metrics(
     space,
@@ -2067,13 +2236,26 @@ def plot_ambiguity_metrics(
 
     colors_sorted = [color_dict[s] for s in symbols_sorted]
 
-    def _darken(c, factor=0.65):
-        rgb = np.array(c[:3], float)
-        return tuple((factor * rgb).clip(0, 1))
+    
 
-    def _lighten(c, factor=0.8):
-        rgb = np.array(c[:3], float)
-        return tuple((1 - factor) + factor * rgb)
+    def _darken(c, amount=0.35):
+        """
+        Darken color by 'amount' in [0,1]; 0=no change, 1=black.
+        Works for hex strings, named colors, RGB/RGBA tuples.
+        """
+        r, g, b, a = _rgba_tuple(c)
+        r, g, b = r * (1 - amount), g * (1 - amount), b * (1 - amount)
+        return (max(0, r), max(0, g), max(0, b), a)
+
+    def _lighten(c, amount=0.35):
+        """
+        Lighten color by 'amount' in [0,1]; 0=no change, 1=white.
+        """
+        r, g, b, a = _rgba_tuple(c)
+        r, g, b = r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount
+        return (min(1, r), min(1, g), min(1, b), a)
+
+    
 
     # --- plot ---
     fig, ax = plt.subplots(figsize=figsize)
