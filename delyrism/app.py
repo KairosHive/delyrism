@@ -48,6 +48,8 @@ try:
 except Exception:
     nx = None
 
+import hashlib, json  # add at top if not present
+
 # ---- import your core code (from your package/module) ----
 from delyrism import (
     SymbolSpace,
@@ -179,13 +181,19 @@ def _default_symbols_map() -> Dict[str, List[str]]:
     }
 
 
+
 def _embedder_key(e: TextEmbedder) -> str:
-    # include all params that change embeddings
     b = getattr(e, "backend_type", "unknown")
     m = getattr(e, "model_name", None)
     p = getattr(e, "pooling", None)
     d = getattr(e, "dim", None)
-    return f"{b}|{m}|{p}|{d}"
+    inst = getattr(e, "default_instruction", None)
+    ctx  = getattr(e, "default_context", None)  # may be "Distributed" sentinel, a string, or None
+
+    base = f"{b}|{m}|{p}|{d}"
+    extra = json.dumps({"inst": inst or "", "ctx": ctx or ""}, ensure_ascii=False, sort_keys=True)
+    h = hashlib.sha1(extra.encode("utf-8")).hexdigest()[:10]
+    return f"{base}|{h}"
 
 def _symbols_map_key(symbols_map: Dict[str, List[str]]) -> str:
     return json.dumps(symbols_map, sort_keys=True, ensure_ascii=False)
@@ -328,6 +336,46 @@ with st.sidebar:
         pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help)
         embedder = get_embedder(backend, model or None, pooling)
 
+        if backend == "qwen3":  # (use `in ("qwen2","qwen3")` if you want both)
+            st.markdown("**Qwen prompting (instruction + context)**")
+
+            instr_help = (
+                "A global instruction prepended to every encode. Keep it stable across runs to make embeddings comparable.\n"
+                "Example: 'Instruction: Encode archetypal descriptors for retrieval and clustering.'"
+            )
+            qwen_instruction = st.text_area(
+                "Instruction (applied to all encodes)", height=80, help=instr_help,
+                placeholder="Instruction: Encode archetypal descriptors for retrieval and clustering."
+            )
+
+            ctx_mode_help = (
+                "Choose how to provide `Context:` for Qwen:\n"
+                "• None — no context added\n"
+                "• Global string — one context string for all descriptors (good for dataset-wide framing)\n"
+                "• Per-descriptor owner — uses each descriptor's owning symbol as its context"
+            )
+            qwen_ctx_mode = st.radio(
+                "Context mode", ["None", "Global string", "Per-descriptor owner"],
+                index=0, horizontal=False, help=ctx_mode_help
+            )
+
+            qwen_ctx_global = ""
+            if qwen_ctx_mode == "Global string":
+                qwen_ctx_global = st.text_input(
+                    "Global context string",
+                    help="Will be used for every descriptor as `Context:`. Example: 'Domain=archetypes; Audience=practitioners.'",
+                    placeholder="Domain=archetypes; Audience=practitioners."
+                )
+
+            # Apply to the embedder (these affect how `encode()` templates inputs)
+            embedder.default_instruction = (qwen_instruction or None)
+            if   qwen_ctx_mode == "Global string" and qwen_ctx_global.strip():
+                embedder.default_context = qwen_ctx_global.strip()
+            elif qwen_ctx_mode == "Per-descriptor owner":
+                # sentinel used by your SymbolSpace.__post_init__ to pass per-descriptor contexts
+                embedder.default_context = "Distributed"
+            else:
+                embedder.default_context = None
         # (optional) tiny hint when audioclip is selected
         if backend == "clap":
             st.caption("CLAP enabled. Upload or record short audio clip in the Context panel to drive the analysis.")
@@ -580,6 +628,14 @@ with st.sidebar:
                 help=gate_help
             )
 
+            if gate == "softmax":
+                tau_gate = st.slider(
+                    "Softmax temperature (τ)",
+                    0.01, 2.0, 0.3, 0.01,
+                    help="Lower = sharper (focus on a few descriptors). Higher = broader."
+                )
+            else:
+                tau_gate = None  # not used by other gates
             softmax_help = """
             If gate='softmax': normalize per symbol instead of globally.
             - ON: each symbol's descriptors compete only with each other (fairer, comparable emphasis).
@@ -619,9 +675,9 @@ st.session_state["_current_symbols_map"] = symbols_map
 st.session_state["_current_embedder"] = embedder
 
 space = build_space(
-    _symbols_map_key(symbols_map),          # changes when the JSON changes
-    descriptor_threshold,                   # changes when slider changes
-    _embedder_key(embedder)                 # changes when backend/model/pooling/dim changes
+    _symbols_map_key(symbols_map),
+    descriptor_threshold,
+    _embedder_key(embedder)  # ← includes instruction/context
 )
 space.set_context_vec(audio_ctx_vec)  # None clears; vector overrides text everywhere
 # Clear stale audio when backend changes away from an audio-capable model
@@ -804,13 +860,12 @@ with colH:
                 strategy=shift_mode,
                 beta=beta,
                 gate=gate,
-                tau=tau,
+                tau=(tau_gate if tau_gate is not None else 0.5),  # pick a default if not softmax
                 within_symbol_softmax=within_symbol_softmax,
                 gamma=gamma,
                 pool_type=pool_type,
                 pool_w=pool_w,
                 order_by_attention=True,
-                # NEW ▼
                 membership_alpha=membership_alpha,
             )
 
@@ -850,7 +905,7 @@ else:
             strategy=shift_mode,
             beta=beta,
             gate=gate,
-            tau=tau,
+            tau=(tau_gate if tau_gate is not None else 0.5),
             within_symbol_softmax=within_symbol_softmax,
             gamma=gamma,
             pool_type=pool_type,
@@ -859,9 +914,9 @@ else:
             sym_filter=sym_filter_arg,
             within_symbol=within_symbol,
             connected_only=connected_only,
-            # NEW ▼
             membership_alpha=membership_alpha,
         )
+
 
 
 

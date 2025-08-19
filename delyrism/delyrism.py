@@ -329,28 +329,33 @@ class TextEmbedder:
         return _l2norm_torch(pooled)
 
     # ---------- input templating ----------
-    def _apply_prompt_template(self, texts: List[str], instruction: Optional[str], context: Optional[str]) -> List[str]:
+    def _apply_prompt_template(self, texts: List[str],
+                            instruction: Optional[str],
+                            context: Optional[str]) -> List[str]:
         inst = instruction if instruction is not None else self.default_instruction
-        ctx = context if context is not None else self.default_context
+        ctx  = context if context is not None else self.default_context
 
-        # simple neutral template — keeps your vectors comparable
-        # You can change labels "Context:" / "Text:" to match your pipeline.
+        # Nothing to add? Return unchanged.
         if inst is None and ctx is None:
             return texts
+
+        # Allow a single global context (str) or per-text contexts (list/tuple/ndarray)
+        ctx_is_seq = isinstance(ctx, (list, tuple, np.ndarray))
+        if ctx_is_seq:
+            if len(ctx) != len(texts):
+                raise ValueError(f"Context list length ({len(ctx)}) must match texts ({len(texts)})")
 
         templated = []
         for i, t in enumerate(texts):
             parts = []
             if inst:
-                parts.append(inst.strip())
+                parts.append(str(inst).strip())                # e.g., "Instruction: …"
             if ctx is not None:
-                ctx = list(ctx)
-                print(f"[Embedder] Using context for text {i}: {ctx[i] if isinstance(ctx, list) else ctx}")
-                parts.append(f"Context: {ctx[i] if isinstance(ctx, list) else ctx}")
-            
+                parts.append(f"Context: {ctx[i] if ctx_is_seq else ctx}")
             parts.append(f"Text: {t}")
             templated.append("\n".join(parts))
         return templated
+
 
     # ---------- encoding ----------
     def encode(
