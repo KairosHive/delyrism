@@ -653,6 +653,7 @@ with st.sidebar:
             membership_alpha = 0.0
             gate = 'relu'
             within_symbol_softmax = True
+            tau_gate = None
         # existing controls (unchanged)
         if shift_mode == "hybrid":
             gamma = st.slider("Hybrid blend γ (0=gate, 1=reembed)", 0.0, 1.0, 0.5, 0.05, disabled=(shift_mode != "hybrid"))
