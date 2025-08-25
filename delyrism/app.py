@@ -22,6 +22,10 @@ import io
 import json
 from typing import Dict, List, Optional
 
+from typing import Sequence
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+ 
 import streamlit as st
 import numpy as np
 
@@ -60,11 +64,480 @@ from delyrism import (
     plot_ambiguity_metrics
 )
 
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+import os
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
+try:
+    import torch._dynamo as _dynamo
+    _dynamo.config.enabled = False
+    _dynamo.config.suppress_errors = True
+    _dynamo.reset()
+except Exception:
+    pass
 
 primaryColor = "#3498db"
 # =============================
 # Helpers
 # =============================
+
+def _freeze_weights(w: Optional[Dict[str, float]]):
+    if not w: 
+        return []
+    return sorted((str(k), float(v)) for k, v in w.items())
+
+def _delta_key(
+    sentence, weights, shift_mode, beta, gate, tau_gate, within_symbol_softmax,
+    gamma, pool_type, pool_w, top_abs_edges, sym_filter_sel, within_symbol,
+    connected_only, membership_alpha, descriptor_threshold, embedder_fp, symbols_key
+) -> str:
+    payload = {
+        "sentence": (sentence or "").strip(),
+        "weights": _freeze_weights(weights),
+        "shift_mode": shift_mode,
+        "beta": float(beta),
+        "gate": gate,
+        "tau_gate": float(tau_gate if tau_gate is not None else 0.5),
+        "within_symbol_softmax": bool(within_symbol_softmax),
+        "gamma": float(gamma),
+        "pool_type": pool_type,
+        "pool_w": float(pool_w),
+        "top_abs_edges": int(top_abs_edges),
+        "sym_filter_sel": list(sym_filter_sel or []),
+        "within_symbol": bool(within_symbol),
+        "connected_only": bool(connected_only),
+        "membership_alpha": float(membership_alpha),
+        "descriptor_threshold": float(descriptor_threshold),
+        "embedder_fp": embedder_fp,
+        "symbols_key": symbols_key,
+    }
+    import hashlib, json as _json
+    return hashlib.sha1(_json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+
+TONE_PRESETS = {
+    "pynchon": {
+        "en": {
+            "directives": (
+                "Style: long, braided sentences with occasional sudden fragments; paranoid, satirical undertone; "
+                "dense technical and historical vocabulary; quick zooms from street-level detail to systems theory. "
+                "Favor appositives, parentheticals, sly asides in em-dashes, and conspiratorial hints. "
+                "Weave motifs as if signals in a noisy network—interference, entropy, logistics, bureaucracy. "
+                "Let humor flicker dryly; never explain the joke."
+            ),
+            "avoid": "Avoid tidy morals, flat exposition, and contemporary internet slang.",
+            "lexicon": ["entropy", "carrier wave", "paper trail", "solder", "ledger", "detritus", "ballistic", "telemetry", "archive"]
+        },
+        "fr": {
+            "directives": (
+                "Style : phrases longues et tressées, apartés ironiques ; humour sec ; vocabulaire technique et historique. "
+                "Glisse de la micro-sensation au système global ; sous-texte paranoïaque, satirique."
+            ),
+            "avoid": "Évite les explications plates et l’argot web contemporain.",
+            "lexicon": ["entropie", "onde porteuse", "registre", "soudure", "archives"]
+        },
+        "es": {
+            "directives": (
+                "Estilo: frases largas entretejidas, apartes irónicos; humor seco; léxico técnico e histórico. "
+                "Saltos de lo microscópico a lo sistémico; subtexto paranoico y satírico."
+            ),
+            "avoid": "Evita moralejas claras y jerga de internet moderna.",
+            "lexicon": ["entropía", "onda portadora", "archivo", "soldadura", "bitácora"]
+        }
+    },
+
+    "blake": {
+        "en": {
+            "directives": (
+                "Style: prophetic lyricism with visionary imagery; elevated diction; choral cadences; "
+                "antinomies (Innocence/Experience, Fire/Water); occasional archaic turns; "
+                "capitalized abstract Nouns as presences. Employ parallelism and anaphora."
+            ),
+            "avoid": "Avoid modern bureaucratic phrasing and pop-culture references.",
+            "lexicon": ["Tyger", "Albion", "Urizen", "Eternity", "Lambent", "Firmament", "Vesture", "Anvil"]
+        },
+        "fr": {
+            "directives": (
+                "Style : lyrisme prophétique, images visionnaires ; diction élevée ; parallélismes et anaphores ; "
+                "antinomies ; Noms abstraits capitalisés comme Présences."
+            ),
+            "avoid": "Évite le jargon administratif et les références pop.",
+            "lexicon": ["Urizen", "Albion", "Firmament", "Vesture", "Éternité"]
+        },
+        "es": {
+            "directives": (
+                "Estilo: lirismo profético, imaginería visionaria; dicción elevada; paralelismos y anáforas; "
+                "antinomias; Sustantivos abstractos en mayúscula como Presencias."
+            ),
+            "avoid": "Evita jerga administrativa y referencias pop.",
+            "lexicon": ["Urizen", "Albion", "Firmamento", "Vestidura", "Eternidad"]
+        }
+    },
+
+    # two extra “complex & rich” options
+    "mystic-baroque": {
+        "en": {
+            "directives": (
+                "Style: ornate, clause-rich sentences; sensuous concretes; theological shimmer; "
+                "use asyndeton and periodic build-ups; switch between close tactile detail and cosmic scales."
+            ),
+            "avoid": "Avoid minimalism and corporate clichés.",
+            "lexicon": ["thurible", "vellum", "nave", "coruscation", "meridian", "throne", "censorial"]
+        },
+        "fr": {
+            "directives": "Style : baroque mystique ; phrases amples ; concret sensuel ; élans cosmiques.",
+            "avoid": "Évite le minimalisme et le jargon d’entreprise.",
+            "lexicon": ["encensoir", "vélin", "nef", "coruscation", "méridien"]
+        },
+        "es": {
+            "directives": "Estilo: barroco místico; frases amplias; concreción sensual; amplitud cósmica.",
+            "avoid": "Evita minimalismo y clichés corporativos.",
+            "lexicon": ["incensario", "vitela", "nave", "coruscación", "meridiano"]
+        }
+    },
+
+    "gnostic-techno": {
+        "en": {
+            "directives": (
+                "Style: luminous cyber-gnostic register; terse sentences braided with sudden liturgical bursts; "
+                "mix semiconductor jargon with apocryphal reverence. Let signal and revelation mirror each other."
+            ),
+            "avoid": "Avoid comic-book technobabble and over-explaining.",
+            "lexicon": ["lattice", "gate", "angelic protocol", "firmware", "pleroma", "daemon", "checksum"]
+        },
+        "fr": {
+            "directives": "Style : cyber-gnostique lumineux ; phrases brèves entrecoupées d’élans liturgiques.",
+            "avoid": "Évite le techno-jargon caricatural.",
+            "lexicon": ["trame", "passerelle", "pleroma", "daemon", "somme de contrôle"]
+        },
+        "es": {
+            "directives": "Estilo: ciber-gnóstico luminoso; frases breves con irrupciones litúrgicas.",
+            "avoid": "Evita tecnicismos caricaturescos.",
+            "lexicon": ["retícula", "compuerta", "pleroma", "daemon", "suma de verificación"]
+        }
+    },
+}
+
+SIMPLE_TONE_EXTRAS = {
+    "dreamy": {
+        "en": "soft focus, hypnagogic transitions, sensory synesthesia, ellipsis of motives, light anaphora.",
+        "fr": "flou doux, transitions hypnagogiques, synesthésie sensorielle, ellipses de motifs.",
+        "es": "foco suave, transiciones hipnagógicas, sinestesia sensorial, elipsis de motivos.",
+    },
+    "eerie": {
+        "en": "quiet dread, negative space, mundane objects made numinous, withheld explanations, sparse adjectives.",
+        "fr": "crainte silencieuse, vides, banal devenu numineux, explications retenues.",
+        "es": "temor silencioso, espacios vacíos, lo banal hecho numinoso, explicaciones retenidas.",
+    },
+}
+
+
+def build_gemma_prompt(
+    *,
+    context_sentence: str | None,
+    motifs: Sequence[str],
+    tone: str = "dreamy",
+    pov: str = "first",
+    tense: str = "present",
+    target_words: tuple[int, int] = (120, 180),
+    language: str = "English",
+) -> list[dict]:
+    """
+    Build a chat-style prompt with localized constraints (EN/FR/ES),
+    enriching `tone` via TONE_PRESETS or SIMPLE_TONE_EXTRAS when available.
+    """
+    # --- language maps ---
+    lang_code = {
+        "English": "en", "Français": "fr", "French": "fr",
+        "Español": "es", "Spanish": "es",
+        "en": "en", "fr": "fr", "es": "es",
+    }.get(language, "en")
+
+    sys_by_lang = {
+        "en": (
+            "You are a mythopoetic dream narrator. Write vivid, concise micro-fiction. "
+            "No analysis or lists—just one cohesive paragraph. Evoke images, not exposition. "
+            "Always write in English."
+        ),
+        "fr": (
+            "Tu es un narrateur onirique et mythopoétique. Rédige une micro-fiction vive et concise. "
+            "Aucune analyse ni liste—un seul paragraphe. Évoque des images, pas de l'exposition. "
+            "Écris toujours en français."
+        ),
+        "es": (
+            "Eres un narrador onírico y mitopoético. Escribe microficción vívida y concisa. "
+            "Sin análisis ni listas—un solo párrafo. Evoca imágenes, no exposición. "
+            "Escribe siempre en español."
+        ),
+    }
+
+    # localized labels and style words
+    tone_map = {
+        "en": {"dreamy": "dreamy", "eerie": "eerie", "warm": "warm"},
+        "fr": {"dreamy": "rêveur", "eerie": "étrange", "warm": "chaleureux"},
+        "es": {"dreamy": "soñador", "eerie": "inquietante", "warm": "cálido"},
+    }
+    pov_map = {
+        "en": {"first": "first person", "third": "third person"},
+        "fr": {"first": "à la première personne", "third": "à la troisième personne"},
+        "es": {"first": "en primera persona", "third": "en tercera persona"},
+    }
+    tense_map = {
+        "en": {"present": "present tense", "past": "past tense"},
+        "fr": {"present": "au présent", "past": "au passé"},
+        "es": {"present": "en presente", "past": "en pasado"},
+    }
+    labels = {
+        "en": {"context": "Context", "motifs": "Motifs to weave (use several explicitly)"},
+        "fr": {"context": "Contexte", "motifs": "Motifs à tisser (utiliser plusieurs explicitement)"},
+        "es": {"context": "Contexto", "motifs": "Motivos a entretejer (usa varios explícitamente)"},
+    }
+
+    # pick localized words for the basic constraints line
+    tone_loc  = tone_map[lang_code].get(tone, tone)   # falls back to raw tone (e.g., 'pynchon')
+    pov_loc   = pov_map[lang_code].get(pov, pov)
+    tense_loc = tense_map[lang_code].get(tense, tense)
+
+    # base constraints line (kept compact so models follow it)
+    if lang_code == "en":
+        style = (
+            f"tone={tone_loc}; POV={pov_loc}; tense={tense_loc}; "
+            f"length≈{target_words[0]}–{target_words[1]} words; avoid clichés; end with a resonant image."
+        )
+    elif lang_code == "fr":
+        style = (
+            f"ton={tone_loc} ; PDV={pov_loc} ; temps={tense_loc} ; "
+            f"longueur≈{target_words[0]}–{target_words[1]} mots ; évite les clichés ; "
+            "termine sur une image marquante."
+        )
+    else:  # es
+        style = (
+            f"tono={tone_loc}; punto de vista={pov_loc}; tiempo verbal={tense_loc}; "
+            f"longitud≈{target_words[0]}–{target_words[1]} palabras; evita los clichés; "
+            "termina con una imagen sugerente."
+        )
+
+    # ── enrich tone via presets or simple extras ───────────────────────────
+    extra_style = ""
+    preset = TONE_PRESETS.get(tone)
+    if preset:
+        loc = preset.get(lang_code, preset.get("en", {}))
+        directives = loc.get("directives", "")
+        avoid = loc.get("avoid", "")
+        lex = loc.get("lexicon", [])
+        if directives:
+            extra_style += f"\nStyle directives: {directives}"
+        if avoid:
+            extra_style += f"\nAvoid: {avoid}"
+        if lex:
+            extra_style += f"\nSuggested lexicon: {', '.join(map(str, lex[:10]))}"
+    else:
+        # not a preset: try to augment simple tones like 'dreamy', 'eerie'
+        simple_extra = SIMPLE_TONE_EXTRAS.get(tone, {})
+        extra_text = simple_extra.get(lang_code) or simple_extra.get("en")
+        if extra_text:
+            extra_style += f"\nStyle directives: {extra_text}"
+
+    # labels + content
+    ctx_lab = labels[lang_code]["context"]
+    motifs_lab = labels[lang_code]["motifs"]
+    ctx_line = f"{ctx_lab}: {context_sentence.strip()}" if (context_sentence and context_sentence.strip()) else f"{ctx_lab}: (—)"
+    motif_line = f"{motifs_lab}: " + (", ".join(map(str, motifs[:12])) if motifs else "—")
+
+    # final chat payload
+    messages = [
+        {"role": "system", "content": sys_by_lang[lang_code]},
+        {"role": "user", "content": f"{ctx_line}\n{motif_line}\nConstraints: {style}{extra_style}"},
+    ]
+    return messages
+
+
+
+
+import transformers as tf
+
+@st.cache_resource(show_spinner=False)
+def load_gemma(model_id: str, use_8bit: bool=False, force_gpu: bool=False):
+    """
+    Works with:
+      • Gemma 2 chat (e.g., google/gemma-2-2b-it)
+      • Gemma 3 1B chat (google/gemma-3-1b-it)
+      • Gemma 3n E2B chat (google/gemma-3n-e2b-it)  -> needs transformers >= 4.50.0
+    Returns (tok_or_proc, model).
+    """
+    kw = dict(low_cpu_mem_usage=True)
+
+    if torch.cuda.is_available():
+        kw["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        kw["attn_implementation"] = "eager"
+        kw["device_map"] = {"": 0} if (force_gpu and not use_8bit) else "auto"
+
+    if use_8bit:
+        try:
+            from transformers import BitsAndBytesConfig
+            kw["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+            kw["device_map"] = "auto"
+            kw["offload_folder"] = "offload"
+        except Exception:
+            st.warning("bitsandbytes not installed; using full precision.")
+
+    mid = model_id.strip().lower()
+
+    # ---- Gemma 3n (multimodal; we use text-only path via processor) ----
+    if "gemma-3n" in mid:
+        # version guard
+        try:
+            from packaging.version import Version
+            if Version(tf.__version__) < Version("4.50.0"):
+                st.error(f"Gemma 3n needs transformers>=4.50.0 (found {tf.__version__}). "
+                         "Upgrade with: pip install -U transformers accelerate safetensors")
+                raise RuntimeError("transformers too old for Gemma 3n")
+        except Exception:
+            # If packaging not available, still try and show version
+            st.info(f"transformers version: {getattr(tf, '__version__', 'unknown')}")
+
+        try:
+            from transformers import AutoProcessor, Gemma3nForConditionalGeneration
+        except Exception as e:
+            st.error("Could not import Gemma3nForConditionalGeneration. "
+                     "Please upgrade transformers (>=4.50.0).")
+            raise
+
+        proc = tf.AutoProcessor.from_pretrained(model_id)
+        mdl  = tf.Gemma3nForConditionalGeneration.from_pretrained(model_id, **kw).eval()
+        return proc, mdl
+
+    # ---- Gemma 3 (1B, text-only) ----
+    if "gemma-3-" in mid or mid.endswith("gemma-3"):
+        try:
+            from transformers import Gemma3ForCausalLM
+            mdl = tf.Gemma3ForCausalLM.from_pretrained(model_id, **kw).eval()
+        except Exception:
+            # Fallback keeps things running on slightly older transformers
+            mdl = tf.AutoModelForCausalLM.from_pretrained(model_id, **kw).eval()
+        tok = tf.AutoTokenizer.from_pretrained(model_id, use_fast=True)
+        return tok, mdl
+
+    # ---- Gemma 2 (baseline that worked for you) ----
+    tok = tf.AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    mdl = tf.AutoModelForCausalLM.from_pretrained(model_id, **kw).eval()
+    return tok, mdl
+
+
+def generate_with_gemma(tok_or_proc, mdl, messages, *, max_new_tokens=180, temperature=0.8, top_p=0.9, repetition_penalty=1.05):
+    """
+    Compatible with:
+      • tokenizer + causal LM (Gemma 2 / Gemma 3 1B)
+      • processor + Gemma3nForConditionalGeneration (text-only)
+    """
+    def is_processor(x):
+        name = x.__class__.__name__.lower()
+        return ("processor" in name) or hasattr(x, "image_processor")
+
+    # normalize messages for processor vs tokenizer
+    normalized = []
+    for m in messages:
+        if is_processor(tok_or_proc):
+            content = m.get("content", "")
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            normalized.append({"role": m.get("role", "user"), "content": content})
+        else:
+            normalized.append(m)
+
+    # render to tensors
+    try:
+        if is_processor(tok_or_proc):
+            inputs = tok_or_proc.apply_chat_template(
+                normalized, add_generation_prompt=True, return_tensors="pt"
+            )
+        else:
+            prompt = tok_or_proc.apply_chat_template(normalized, tokenize=False, add_generation_prompt=True)
+            inputs = tok_or_proc(prompt, return_tensors="pt")
+    except Exception as err:
+        # fallback for tokenizers without system role support
+        if not is_processor(tok_or_proc) and "system role" in str(err).lower():
+            sys_text = "\n".join(m["content"] for m in messages if m.get("role") == "system").strip()
+            user_msgs = [m for m in messages if m.get("role") == "user"]
+            user_text = user_msgs[0]["content"] if user_msgs else ""
+            fused = ("[System guidelines]\n" + sys_text + "\n\n" + user_text).strip() if sys_text else user_text
+            inputs = tok_or_proc(fused, return_tensors="pt")
+        else:
+            raise
+
+    # move to model device
+    inputs = {k: v.to(mdl.device) for k, v in inputs.items()}
+    input_len = inputs["input_ids"].shape[1]
+
+    # eos/pad + decoder for text
+    if is_processor(tok_or_proc):
+        eos_id = getattr(mdl.config, "eos_token_id", None)
+        pad_id = getattr(mdl.config, "pad_token_id", eos_id)
+        tok_for_decode = getattr(tok_or_proc, "tokenizer", None)
+    else:
+        if tok_or_proc.pad_token_id is None:
+            tok_or_proc.pad_token_id = tok_or_proc.eos_token_id
+        eos_id = tok_or_proc.eos_token_id
+        pad_id = tok_or_proc.pad_token_id
+        tok_for_decode = tok_or_proc
+
+    from contextlib import nullcontext
+    sdp_ctx = nullcontext()
+    if torch.cuda.is_available():
+        sdp_ctx = torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True)
+
+    with torch.no_grad(), sdp_ctx:
+        out = mdl.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            eos_token_id=eos_id,
+            pad_token_id=pad_id,
+            use_cache=True,
+        )
+
+    gen = out[0, input_len:] if isinstance(out, torch.Tensor) else out.sequences[0, input_len:]
+    return tok_for_decode.decode(gen, skip_special_tokens=True).strip() if tok_for_decode else ""
+
+
+
+# ===== Δ-graph → motifs =====
+def top_motifs_from_delta_graph(G, *, k_nodes=10, positive_only=True):
+    """
+    Pick salient descriptors from the Δ graph.
+    - Rank edges by |Δ| (or Δ>0 if positive_only).
+    - Return top unique node labels (descriptor names).
+    """
+    if G is None or G.number_of_edges() == 0:
+        return []
+
+    # sort edges
+    edges = []
+    for u, v, d in G.edges(data=True):
+        delta = float(d.get("delta", 0.0))
+        if positive_only and delta <= 0:
+            continue
+        edges.append((u, v, abs(delta)))
+    edges.sort(key=lambda x: x[2], reverse=True)
+
+    picked = []
+    seen = set()
+    for u, v, _ in edges:
+        for n in (u, v):
+            if n not in seen:
+                seen.add(n)
+                picked.append(n)
+                if len(picked) >= k_nodes:
+                    return picked
+    return picked
 
 def _default_symbols_map() -> Dict[str, List[str]]:
     return {
@@ -571,7 +1044,7 @@ with st.sidebar:
         ctx_normalize = st.checkbox("Normalize by baseline PR (remove centrality)", True, help=norm_help)
 
         thr_help = "Cosine cutoff for descriptor–descriptor edges. Higher = sparser/cleaner; lower = denser/noisier."
-        descriptor_threshold = st.slider("Descriptor edge threshold (cosine)", 0.0, 0.9, 0.7, 0.02, help=thr_help)
+        descriptor_threshold = st.slider("Descriptor edge threshold (cosine)", 0.0, 0.9, 0.1, 0.02, help=thr_help)
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Δ Graph (panel-colored sliders) --------------------------
@@ -660,7 +1133,7 @@ with st.sidebar:
         else:
             gamma = 0.5
 
-        beta = st.slider("Shift strength β", 0.0, 2.0, 0.6, 0.05, disabled=(shift_mode == "pooling"))  # β not used by pooling
+        beta = st.slider("Shift strength β", 0.0, 2.0, 1.2, 0.05, disabled=(shift_mode == "pooling"))  # β not used by pooling
         
         
         st.markdown("**Graph network settings**")
@@ -693,267 +1166,420 @@ if backend in ("audioclip", "clap") and audio_vec is not None:
     space.set_context_vec(audio_vec)
 else:
     space.set_context_vec(None)
-# =============================
-# Row 1: Meaning Space (left) | Rankings & Attention (right)
-# =============================
-colL, colR = st.columns([1.15, 1])
-color_map = space.get_symbol_color_dict("AuroraPop")
-with colL:
-    st.subheader("Meaning Space (2D)")
-    reducer = st.selectbox("Reducer", ["umap", "tsne","pca"], index=0)
-    if show_arrow is True:
-        arrow_scale = 0.5
-    if show_arrow is False:
-        arrow_scale = 0
-    fig_ms = fig_from_callable(
-        space.plot_map_shift,
-        weights=ctx_weights if ctx_weights else None,
-        sentence=sentence if sentence else None,
-        method=reducer,
-        with_hulls=with_hulls,
-        include_centroids=include_centroids,
-        normalize_centroids=normalize_centroids,
-        figsize=(6.8, 5.4),
-        title="Context shift on descriptor map",
-        arrow_scale=arrow_scale,
-        arrow_alpha=0.65,
-        gate=gate,
-        tau=tau,
-        beta=beta,
-        membership_alpha=membership_alpha,
-        within_symbol_softmax=within_symbol_softmax,
-        color_dict=color_map
-    )
-    st.pyplot(fig_ms, clear_figure=True)
 
-    st.divider()
-    st.subheader("Ambiguity Metrics")
+tab_explore, tab_story = st.tabs(["Explorer", "Story Generator"])
 
-    sort_opt = st.selectbox("Sort by", ["dispersion", "leakage", "entropy", "none"], index=0)
-    # color_map = getattr(space, "get_symbol_color_dict", lambda: None)()
-    
-    
-    fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4))
-    st.pyplot(fig_amb, clear_figure=True)
+with tab_explore:
+    # =============================
+    # Row 1: Meaning Space (left) | Rankings & Attention (right)
+    # =============================
+    colL, colR = st.columns([1.15, 1])
+    color_map = space.get_symbol_color_dict("AuroraPop")
+    with colL:
+        st.subheader("Meaning Space (2D)")
+        reducer = st.selectbox("Reducer", ["umap", "tsne","pca"], index=0)
+        if show_arrow is True:
+            arrow_scale = 0.5
+        if show_arrow is False:
+            arrow_scale = 0
+        fig_ms = fig_from_callable(
+            space.plot_map_shift,
+            weights=ctx_weights if ctx_weights else None,
+            sentence=sentence if sentence else None,
+            method=reducer,
+            with_hulls=with_hulls,
+            include_centroids=include_centroids,
+            normalize_centroids=normalize_centroids,
+            figsize=(6.8, 5.4),
+            title="Context shift on descriptor map",
+            arrow_scale=arrow_scale,
+            arrow_alpha=0.65,
+            gate=gate,
+            tau=tau,
+            beta=beta,
+            membership_alpha=membership_alpha,
+            within_symbol_softmax=within_symbol_softmax,
+            color_dict=color_map
+        )
+        st.pyplot(fig_ms, clear_figure=True)
+
+        st.divider()
+        st.subheader("Ambiguity Metrics")
+
+        sort_opt = st.selectbox("Sort by", ["dispersion", "leakage", "entropy", "none"], index=0)
+        # color_map = getattr(space, "get_symbol_color_dict", lambda: None)()
+        
+        
+        fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4))
+        st.pyplot(fig_amb, clear_figure=True)
 
 
-with colR:
+    with colR:
 
-    
-    st.subheader("Descriptor Attention")
-    sym = st.selectbox("Symbol", list(space.symbols))
-    if sym:
+        
+        st.subheader("Descriptor Attention")
+        sym = st.selectbox("Symbol", list(space.symbols))
+        if sym:
+            try:
+                fig_att = fig_from_callable(
+                    space.plot_attention,
+                    sym,
+                    weights=ctx_weights if ctx_weights else None,
+                    sentence=sentence if sentence else None,
+                    tau=tau,
+                    top_n=8,
+                    figsize=(6, 3.6),
+                )
+                st.pyplot(fig_att, clear_figure=True)
+            except Exception as e:
+                st.warning(f"Attention plot failed: {e}")
+        
+        st.subheader("Top Symbols for Context")
         try:
-            fig_att = fig_from_callable(
-                space.plot_attention,
-                sym,
+            print('-----------------------------------')
+            print(ctx_weights, sentence)
+            print('-----------------------------------')
+            preds = space.propose(
                 weights=ctx_weights if ctx_weights else None,
                 sentence=sentence if sentence else None,
                 tau=tau,
-                top_n=8,
-                figsize=(6, 3.6),
+                lam=lam,
+                alpha=alpha,
+                topk=len(space.symbols),
+                use_ppr=use_ppr,
             )
-            st.pyplot(fig_att, clear_figure=True)
-        except Exception as e:
-            st.warning(f"Attention plot failed: {e}")
-    
-    st.subheader("Top Symbols for Context")
-    try:
-        print('-----------------------------------')
-        print(ctx_weights, sentence)
-        print('-----------------------------------')
-        preds = space.propose(
-            weights=ctx_weights if ctx_weights else None,
-            sentence=sentence if sentence else None,
-            tau=tau,
-            lam=lam,
-            alpha=alpha,
-            topk=len(space.symbols),
-            use_ppr=use_ppr,
-        )
 
-        if preds:
-            # Exclude symbols explicitly in the context weights
-            exclude = {k.lower() for k in (ctx_weights or {}).keys()}
-            
-            # (optional) also exclude symbols literally mentioned in the sentence
-            ctx_words = {w.strip(".,;:!?()[]{}\"'").lower() for w in (sentence or "").split()}
-            preds = [p for p in preds if (p[0].lower() not in exclude and p[0].lower() not in ctx_words)]
+            if preds:
+                # Exclude symbols explicitly in the context weights
+                exclude = {k.lower() for k in (ctx_weights or {}).keys()}
+                
+                # (optional) also exclude symbols literally mentioned in the sentence
+                ctx_words = {w.strip(".,;:!?()[]{}\"'").lower() for w in (sentence or "").split()}
+                preds = [p for p in preds if (p[0].lower() not in exclude and p[0].lower() not in ctx_words)]
 
-            if not preds:
-                st.info("All top symbols are part of the context.")
+                if not preds:
+                    st.info("All top symbols are part of the context.")
+                else:
+                    labels = [p[0] for p in preds]
+                    scores = np.array([p[1] for p in preds])
+
+                    norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
+                    cmap = plt.cm.coolwarm
+                    colors = [cmap(n) for n in norm]
+
+                    fig_rank, ax = plt.subplots(figsize=(6, 4))
+                    bars = ax.barh(
+                        range(len(scores))[::-1],
+                        scores[::-1],
+                        color=colors[::-1],
+                        edgecolor='gray',
+                        linewidth=1.2
+                    )
+                    ax.set_yticks(range(len(labels))[::-1])
+                    ax.set_yticklabels(labels[::-1])
+                    vmin, vmax = scores.min(), scores.max()
+                    ax.set_xlim(vmin - 0.01, vmax + 0.01)
+                    ax.set_xlabel("Score")
+                    ax.set_title("Symbol prediction for context (excluding context symbols)")
+
+                    for bar, v in zip(bars, scores[::-1]):
+                        ax.add_patch(plt.Rectangle(
+                            (bar.get_x(), bar.get_y()), bar.get_width(), bar.get_height(),
+                            color='white', alpha=0.08, zorder=0
+                        ))
+
+                    fig_rank.tight_layout()
+                    st.pyplot(fig_rank, clear_figure=True)
             else:
-                labels = [p[0] for p in preds]
-                scores = np.array([p[1] for p in preds])
+                st.info("No predictions yet.")
+        except Exception as e:
+            st.warning(f"Ranking failed: {e}")
 
-                norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
-                cmap = plt.cm.coolwarm
-                colors = [cmap(n) for n in norm]
+    st.divider()
 
-                fig_rank, ax = plt.subplots(figsize=(6, 4))
-                bars = ax.barh(
-                    range(len(scores))[::-1],
-                    scores[::-1],
-                    color=colors[::-1],
-                    edgecolor='gray',
-                    linewidth=1.2
-                )
-                ax.set_yticks(range(len(labels))[::-1])
-                ax.set_yticklabels(labels[::-1])
-                vmin, vmax = scores.min(), scores.max()
-                ax.set_xlim(vmin - 0.01, vmax + 0.01)
-                ax.set_xlabel("Score")
-                ax.set_title("Symbol prediction for context (excluding context symbols)")
+    # =============================
+    # Row 2: Contextual Subgraph (network) | Heatmaps
+    # =============================
 
-                for bar, v in zip(bars, scores[::-1]):
-                    ax.add_patch(plt.Rectangle(
-                        (bar.get_x(), bar.get_y()), bar.get_width(), bar.get_height(),
-                        color='white', alpha=0.08, zorder=0
-                    ))
+    colN, colH = st.columns([1.1, 1])
 
-                fig_rank.tight_layout()
-                st.pyplot(fig_rank, clear_figure=True)
-        else:
-            st.info("No predictions yet.")
-    except Exception as e:
-        st.warning(f"Ranking failed: {e}")
-
-st.divider()
-
-# =============================
-# Row 2: Contextual Subgraph (network) | Heatmaps
-# =============================
-
-colN, colH = st.columns([1.1, 1])
-
-with colN:
-    st.subheader("Network View — Contextual Subgraph")
-    try:
-        tau_subgraph = focus_to_tau(ctx_focus)
-        print('Tau subgraph', tau_subgraph)
-        # Build a stable global color palette once
-        cmap = plt.cm.tab20
-        global_color_map = {s: cmap(i / max(1, len(space.symbols)-1)) for i, s in enumerate(space.symbols)}
-        fig_ctxnet = fig_from_callable(
-            plot_contextual_subgraph_colored,
-            space,
-            context_sentence=sentence or "",
-            topk_symbols=ctx_topk_symbols,
-            topk_desc=ctx_topk_desc,
-            method=ctx_method,
-            alpha=ctx_alpha,
-            tau=tau_subgraph,
-            normalize=ctx_normalize,
-            global_color_map=color_map
-        )
-        st.pyplot(fig_ctxnet, clear_figure=True)
-    except Exception as e:
-        st.warning(f"Contextual subgraph failed: {e}")
-
-with colH:
-    st.subheader("Within-Symbol Associative Increase (Δ)")
-    sym2 = st.selectbox("Symbol for heatmaps", list(space.symbols), key="heat_sym")
-    if sym2:
+    with colN:
+        st.subheader("Network View — Contextual Subgraph")
         try:
-            simdict = space.descriptor_similarity_matrices(
-                weights=ctx_weights if ctx_weights else None,
+            tau_subgraph = focus_to_tau(ctx_focus)
+            print('Tau subgraph', tau_subgraph)
+            # Build a stable global color palette once
+            cmap = plt.cm.tab20
+            global_color_map = {s: cmap(i / max(1, len(space.symbols)-1)) for i, s in enumerate(space.symbols)}
+            fig_ctxnet = fig_from_callable(
+                plot_contextual_subgraph_colored,
+                space,
+                context_sentence=sentence or "",
+                topk_symbols=ctx_topk_symbols,
+                topk_desc=ctx_topk_desc,
+                method=ctx_method,
+                alpha=ctx_alpha,
+                tau=tau_subgraph,
+                normalize=ctx_normalize,
+                global_color_map=color_map
+            )
+            st.pyplot(fig_ctxnet, clear_figure=True)
+        except Exception as e:
+            st.warning(f"Contextual subgraph failed: {e}")
+
+    with colH:
+        st.subheader("Within-Symbol Associative Increase (Δ)")
+        sym2 = st.selectbox("Symbol for heatmaps", list(space.symbols), key="heat_sym")
+        if sym2:
+            try:
+                simdict = space.descriptor_similarity_matrices(
+                    weights=ctx_weights if ctx_weights else None,
+                    sentence=sentence if sentence else None,
+                    strategy=shift_mode,
+                    beta=beta,
+                    gate=gate,
+                    tau=(tau_gate if tau_gate is not None else 0.5),  # pick a default if not softmax
+                    within_symbol_softmax=within_symbol_softmax,
+                    gamma=gamma,
+                    pool_type=pool_type,
+                    pool_w=pool_w,
+                    order_by_attention=True,
+                    membership_alpha=membership_alpha,
+                )
+
+
+                from functools import partial
+                fig_heat = fig_from_callable(
+                    space.plot_symbol_similarity_heatmaps,
+                    simdict,
+                    sym2,
+                    vmax=1.0,
+                    figsize=(12, 3.8),
+                )
+                st.pyplot(fig_heat, clear_figure=True)
+            except Exception as e:
+                st.warning(f"Heatmaps failed: {e}")
+
+    st.divider()
+
+    # =============================
+    # Row 3: Context Δ Graph
+    # =============================
+
+    st.subheader("Graph of strongest edge changes within network")
+    if nx is None:
+        st.info("networkx not installed — delta graph requires networkx.")
+    else:
+        try:
+            # cdict = getattr(space, "get_symbol_color_dict", None)
+            # color_map = cdict() if callable(cdict) else None
+
+            sym_filter_arg = sym_filter_sel if sym_filter_sel else None
+
+            G = context_delta_graph(
+                space,
                 sentence=sentence if sentence else None,
+                weights=ctx_weights if ctx_weights else None,
                 strategy=shift_mode,
                 beta=beta,
                 gate=gate,
-                tau=(tau_gate if tau_gate is not None else 0.5),  # pick a default if not softmax
+                tau=(tau_gate if tau_gate is not None else 0.5),
                 within_symbol_softmax=within_symbol_softmax,
                 gamma=gamma,
                 pool_type=pool_type,
                 pool_w=pool_w,
-                order_by_attention=True,
+                top_abs_edges=top_abs_edges,
+                sym_filter=sym_filter_arg,
+                within_symbol=within_symbol,
+                connected_only=connected_only,
                 membership_alpha=membership_alpha,
             )
 
-
-            from functools import partial
-            fig_heat = fig_from_callable(
-                space.plot_symbol_similarity_heatmaps,
-                simdict,
-                sym2,
-                vmax=1.0,
-                figsize=(12, 3.8),
+            key_dg = _delta_key(
+                sentence, ctx_weights, shift_mode, beta, gate, (tau_gate if tau_gate is not None else 0.5),
+                within_symbol_softmax, gamma, pool_type, pool_w, top_abs_edges, sym_filter_sel,
+                within_symbol, connected_only, membership_alpha, descriptor_threshold,
+                _embedder_key(embedder), _symbols_map_key(symbols_map),
             )
-            st.pyplot(fig_heat, clear_figure=True)
+            st.session_state["delta_graph"] = G
+            st.session_state["delta_graph_key"] = key_dg
+
+            fig_delta = fig_from_callable(
+                plot_delta_graph,
+                G,
+                title="Context Δ graph",
+                color_dict=color_map,
+                figsize=(8.0, 3.0),        # ⬅️ smaller figure
+                node_size_base=130,        # ⬇️ shrink nodes
+                node_size_scale=700.0,
+                edge_width_min=0.4,        # ⬇️ thinner edges
+                edge_width_max=3.0,
+            )
+            st.pyplot(fig_delta, clear_figure=True, use_container_width=False)  # prevent auto-stretch
         except Exception as e:
-            st.warning(f"Heatmaps failed: {e}")
+            st.warning(f"Δ graph failed: {e}")
 
-st.divider()
+    st.divider()
 
-# =============================
-# Row 3: Context Δ Graph
-# =============================
+    # =============================
+    # Save / Export
+    # =============================
 
-st.subheader("Graph of strongest edge changes within network")
-if nx is None:
-    st.info("networkx not installed — delta graph requires networkx.")
-else:
-    try:
-        # cdict = getattr(space, "get_symbol_color_dict", None)
-        # color_map = cdict() if callable(cdict) else None
+    st.subheader("📦 Export / Save")
+    colA, colB = st.columns(2)
+    with colA:
+        buf = io.StringIO()
+        json.dump(symbols_map, buf, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="Download symbols.json",
+            data=buf.getvalue().encode("utf-8"),
+            file_name="symbols.json",
+            mime="application/json",
+        )
+    with colB:
+        st.caption("(Coming soon) Export PNGs/CSVs for figures and descriptor weights.")
 
-        sym_filter_arg = sym_filter_sel if sym_filter_sel else None
+    st.caption("Tip: steer the landscape with the prompt/weights; adjust β/τ/α/λ; use contextual subgraph + Δ graph to inspect structural changes.")
 
-        G = context_delta_graph(
-            space,
-            sentence=sentence if sentence else None,
-            weights=ctx_weights if ctx_weights else None,
-            strategy=shift_mode,
-            beta=beta,
-            gate=gate,
-            tau=(tau_gate if tau_gate is not None else 0.5),
-            within_symbol_softmax=within_symbol_softmax,
-            gamma=gamma,
-            pool_type=pool_type,
-            pool_w=pool_w,
-            top_abs_edges=top_abs_edges,
-            sym_filter=sym_filter_arg,
-            within_symbol=within_symbol,
-            connected_only=connected_only,
-            membership_alpha=membership_alpha,
+with tab_story:
+    st.subheader("Dream-like Story (Gemma)")
+
+    # --- Controls live inside a FORM so nothing "executes" until submit ---
+    with st.form("story_form", clear_on_submit=False):
+        # Model controls
+        GEMMA_MODEL_PRESETS = {
+            "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
+            "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",   # text-only chat
+            "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it", # multimodal (we use text-only here)
+        }
+
+        # ... inside the story_form() block, replace the single text_input with:
+        preset = st.selectbox(
+            "Model preset",
+            list(GEMMA_MODEL_PRESETS.keys()),
+            index=0,
+            help="Quick-switch between Gemma 2, Gemma 3 1B, and Gemma 3n."
+        )
+        
+        default_model_id = GEMMA_MODEL_PRESETS[preset]
+        model_id = st.text_input(
+            "Hugging Face repo (override if you want)",
+            value=default_model_id,
+            help="Use a chat-tuned repo ID. You must accept the model license on Hugging Face first."
+        )
+        use_8bit = st.checkbox("Load in 8-bit (less VRAM, slightly lower quality)", False)
+
+        # Narrative controls
+        story_len_words = st.slider("Target length (words)", 60, 300, 140, 10)
+        language = st.selectbox("Language", ["English", "Français", "Español"], index=0)  # NEW
+        temperature = st.slider("Temperature", 0.1, 1.8, 0.85, 0.05)
+        top_p = st.slider("Top-p", 0.1, 1.0, 0.9, 0.05)
+        pos_only = st.checkbox("Use only strengthening (Δ > 0) edges", True)
+        pov = st.selectbox("POV", ["first","third"], index=0)
+        tense = st.selectbox("Tense", ["present","past"], index=0)
+        tone = st.selectbox(
+            "Tone",
+            ["dreamy","eerie","warm","pynchon","blake","mystic-baroque","gnostic-techno"],
+            index=0
         )
 
+        submit = st.form_submit_button("🚀 Generate story", type="primary", use_container_width=True)
+
+    # --- Only generate when the button was pressed ---
+    if submit:
+        with st.spinner("Generating..."):
+            # Build Δ graph only on demand
+            sym_filter_arg = sym_filter_sel if sym_filter_sel else None
+            tau_gate_eff = tau_gate if (gate == "softmax" and tau_gate is not None) else 0.5
 
 
+            key_story = _delta_key(
+                sentence, ctx_weights, shift_mode, beta, gate, tau_gate_eff,
+                within_symbol_softmax, gamma, pool_type, pool_w, top_abs_edges, sym_filter_sel,
+                within_symbol, connected_only, membership_alpha, descriptor_threshold,
+                _embedder_key(embedder), _symbols_map_key(symbols_map),
+            )
 
-        fig_delta = fig_from_callable(
-            plot_delta_graph,
-            G,
-            title="Context Δ graph",
-            color_dict=color_map,
-            figsize=(8.0, 3.0),        # ⬅️ smaller figure
-            node_size_base=130,        # ⬇️ shrink nodes
-            node_size_scale=700.0,
-            edge_width_min=0.4,        # ⬇️ thinner edges
-            edge_width_max=3.0,
-        )
-        st.pyplot(fig_delta, clear_figure=True, use_container_width=False)  # prevent auto-stretch
-    except Exception as e:
-        st.warning(f"Δ graph failed: {e}")
+            G_story = None
+            if st.session_state.get("delta_graph_key") == key_story and "delta_graph" in st.session_state:
+                G_story = st.session_state["delta_graph"]
+            else:
+                G_story = context_delta_graph(
+                    space,
+                    sentence=sentence or None,
+                    weights=ctx_weights or None,
+                    strategy=shift_mode,
+                    beta=beta,
+                    gate=gate,
+                    tau=tau_gate_eff,
+                    within_symbol_softmax=within_symbol_softmax,
+                    gamma=gamma,
+                    pool_type=pool_type,
+                    pool_w=pool_w,
+                    top_abs_edges=top_abs_edges,
+                    sym_filter=sym_filter_sel if sym_filter_sel else None,
+                    within_symbol=within_symbol,
+                    connected_only=connected_only,          # <-- same as Explorer now
+                    membership_alpha=membership_alpha,
+                )
+                st.session_state["delta_graph"] = G_story
+                st.session_state["delta_graph_key"] = key_story
+            
+            motifs = top_motifs_from_delta_graph(G_story, k_nodes=12, positive_only=pos_only)
 
-st.divider()
+            # Free VRAM from embedder, then lazy-load Gemma
+            import gc, torch as _torch
+            try:
+                getattr(space.embedder, "to", lambda *_: None)("cpu")
+            except Exception:
+                pass
+            gc.collect()
+            if _torch.cuda.is_available():
+                _torch.cuda.empty_cache()
 
-# =============================
-# Save / Export
-# =============================
+            force_gpu = st.checkbox("Force GPU (no offload)", False)
+            tok, mdl = load_gemma(model_id, use_8bit=use_8bit, force_gpu=force_gpu)  
 
-st.subheader("📦 Export / Save")
-colA, colB = st.columns(2)
-with colA:
-    buf = io.StringIO()
-    json.dump(symbols_map, buf, ensure_ascii=False, indent=2)
-    st.download_button(
-        label="Download symbols.json",
-        data=buf.getvalue().encode("utf-8"),
-        file_name="symbols.json",
-        mime="application/json",
-    )
-with colB:
-    st.caption("(Coming soon) Export PNGs/CSVs for figures and descriptor weights.")
+            with st.expander("⚙️ Inference device map (debug)"):
+                lines = [f"torch.cuda.is_available(): {torch.cuda.is_available()}"]
+                if torch.cuda.is_available():
+                    lines.append(f"CUDA device: {torch.cuda.get_device_name(0)}")
+                dm = getattr(mdl, "hf_device_map", None)
+                lines.append(f"hf_device_map: {dm if dm else '(none)'}")
+                try:
+                    first_param_dev = next(mdl.parameters()).device
+                    lines.append(f"first parameter device: {first_param_dev}")
+                except StopIteration:
+                    pass
+                st.code("\n".join(lines), language="text")
+   
+            messages = build_gemma_prompt(
+                context_sentence=sentence or "",
+                motifs=motifs,
+                tone=tone, pov=pov, tense=tense,
+                target_words=(story_len_words-30, story_len_words+30),
+                language=language,   # NEW
+            )
+            story = generate_with_gemma(
+                tok, mdl, messages,
+                max_new_tokens=story_len_words + 60,
+                temperature=temperature,
+                top_p=top_p,
+                repetition_penalty=1.07
+            )
 
-st.caption("Tip: steer the landscape with the prompt/weights; adjust β/τ/α/λ; use contextual subgraph + Δ graph to inspect structural changes.")
+            # Persist for display on future reruns without regenerating
+            st.session_state["story_text"] = story
+            st.session_state["story_motifs"] = motifs
+
+    # --- Display last generated story (or a hint) ---
+    if st.session_state.get("story_text"):
+        st.text_area("Story", st.session_state["story_text"], height=260)
+        st.download_button("Download story.txt", st.session_state["story_text"], file_name="story.txt")
+        m = st.session_state.get("story_motifs") or []
+        st.caption("Motifs used: " + (", ".join(m) if m else "—"))
+        if st.button("🧹 Clear story"):
+            st.session_state.pop("story_text", None)
+            st.session_state.pop("story_motifs", None)
+    else:
+        st.info("Set your context and parameters, then click **Generate story**.")
