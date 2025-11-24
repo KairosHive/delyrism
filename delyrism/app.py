@@ -80,6 +80,20 @@ try:
 except Exception:
     pass
 
+# === Multimodal miner & IO helpers ===
+from multimodal_archetype_miner import ArchetypeMiner, MMItem
+
+# Image & OpenCLIP
+try:
+    import open_clip
+    from PIL import Image
+except Exception:
+    open_clip = None
+    Image = None
+
+import tempfile, pathlib, uuid
+
+
 primaryColor = "#3498db"
 # =============================
 # Helpers
@@ -703,52 +717,148 @@ def build_space(
 
 
 def fig_from_callable(callable_fn, *args, **kwargs):
-    """Call a plotting function that draws with pyplot; return the current figure."""
-    fig = plt.figure()
-    plt.close(fig)
-    callable_fn(*args, **kwargs)
-    return plt.gcf()
+    """
+    Call a plotting function that draws with pyplot; return the *live* current figure.
+    We temporarily no-op plt.close() so internal helpers can't detach artists.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    # Keep original close; temporarily block closes inside callable_fn
+    _orig_close = plt.close
+    try:
+        plt.close = lambda *a, **k: None  # prevent premature figure teardown
+
+        # Ensure there is a current figure before drawing
+        _ = plt.figure()
+        callable_fn(*args, **kwargs)
+
+        fig = plt.gcf()
+        # Make sure the figure has a canvas so Streamlit can savefig
+        if fig.canvas is None:
+            FigureCanvasAgg(fig)
+        return fig
+    finally:
+        # Restore normal behavior
+        plt.close = _orig_close
+
 
 def focus_to_tau(focus: float, tau_min: float = 0.01, tau_max: float = 0.2) -> float:
     # focus=0 -> tau_max (soft); focus=1 -> tau_min (sharp)
     return tau_max - focus * (tau_max - tau_min)
+
+
+def _ensure_upload_dir() -> str:
+    """Per-session upload dir for images/audio/text."""
+    if "_upload_dir" not in st.session_state:
+        d = tempfile.mkdtemp(prefix="delyrism_uploads_")
+        st.session_state["_upload_dir"] = d
+    return st.session_state["_upload_dir"]
+
+def _save_upload(file, subdir: str) -> str:
+    """Persist an uploaded file; return local path."""
+    base = _ensure_upload_dir()
+    sd = pathlib.Path(base) / subdir
+    sd.mkdir(parents=True, exist_ok=True)
+    ext = pathlib.Path(file.name).suffix or ".bin"
+    out = sd / f"{uuid.uuid4().hex}{ext}"
+    out.write_bytes(file.read())
+    return str(out)
+
+@st.cache_resource(show_spinner=False)
+def _load_openclip(model_name="ViT-B-32", pretrained="laion2b_s34b_b79k"):
+    if open_clip is None or Image is None:
+        raise RuntimeError("open-clip-torch and pillow are required for image embeddings.")
+    model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
+    model.eval()
+    if torch.cuda.is_available():
+        model = model.to("cuda")
+    tokenizer = open_clip.get_tokenizer(model_name)
+    return model, preprocess, tokenizer
+
+class _ImageAdapter:
+    def __init__(self, model_name="ViT-B-32", pretrained="laion2b_s34b_b79k"):
+        self.model, self.preprocess, _ = _load_openclip(model_name, pretrained)
+        self.device = next(self.model.parameters()).device
+
+    @torch.no_grad()
+    def encode_images(self, paths):
+        ims = []
+        for p in paths:
+            im = Image.open(p).convert("RGB")
+            ims.append(self.preprocess(im))
+        x = torch.stack(ims).to(self.device)
+        feats = self.model.encode_image(x)
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+        return feats.detach().cpu().numpy()
+
+class _AudioAdapter:
+    """Uses your existing embedder if it exposes embed_audio_array(y, sr). Falls back to CLAP via HF if needed."""
+    def __init__(self, text_embedder):
+        self.e = text_embedder
+        self.has_embed_audio = hasattr(text_embedder, "embed_audio_array")
+        # Optional HF fallback (kept lazy to avoid import cost)
+        self._hf = None
+
+    def _hf_init(self):
+        if self._hf is None:
+            import transformers as _tf
+            self._hf = _tf.pipeline("feature-extraction", model="laion/clap-htsat-unfused", trust_remote_code=True)
+        return self._hf
+
+    def _embed_with_embedder(self, wav_paths):
+        vecs = []
+        import soundfile as sf
+        import numpy as np
+        for p in wav_paths:
+            y, sr = sf.read(p, always_2d=False)
+            if isinstance(y, np.ndarray) and y.ndim > 1:
+                y = y.mean(axis=1)  # mono
+            # Resample to 48k if your embedder expects that; librosa is already in your deps:
+            if librosa is not None and sr != 48000:
+                y = librosa.resample(y.astype(np.float32), orig_sr=sr, target_sr=48000)
+                sr = 48000
+            v = self.e.embed_audio_array(y, sr)
+            vecs.append(v)
+        import numpy as np
+        X = np.stack(vecs, 0)
+        X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-8)
+        return X
+
+    def _embed_with_hf(self, wav_paths):
+        # Minimal CLAP feature extractor; average-pool frames, L2-normalize.
+        pipe = self._hf_init()
+        import numpy as np
+        outs = []
+        for p in wav_paths:
+            feat = pipe(p)  # [T, D] or [1, T, D]
+            arr = np.array(feat)
+            arr = arr.squeeze(0) if arr.ndim == 3 else arr
+            v = arr.mean(axis=0)
+            v = v / (np.linalg.norm(v) + 1e-8)
+            outs.append(v)
+        return np.stack(outs, 0)
+
+    def embed_audio_files(self, paths):
+        if self.has_embed_audio:
+            return self._embed_with_embedder(paths)
+        return self._embed_with_hf(paths)
+
+class _TextAdapter:
+    def __init__(self, text_embedder): self.e = text_embedder
+    def encode(self, texts): return self.e.encode(texts)
+
 # =============================
 # UI
 # =============================
 
 st.set_page_config(page_title="Archetype Explorer", layout="wide")
 st.title("🧭 DELYRISM - Archetype Explorer ")
+st.session_state.setdefault("mm_items", [])  # list[MMItem-like dicts]
 
 with st.sidebar:
     
-    st.markdown("""
-    <style>
-      /* --- Existing custom headers (Data / Embeddings / Context) --- */
-      .sb-one summary {
-        background-color: #2a1536 !important;
-        border: 1px solid #4b2560 !important;
-        border-radius: 8px !important;
-        padding: 6px 10px !important;
-        color: #fff !important;
-      }
-      .sb-two summary {
-        background-color: #0f1a2b !important;
-        border: 1px solid #1b2b44 !important;
-        border-radius: 8px !important;
-        padding: 6px 10px !important;
-        color: #fff !important;
-      }
-      .sb-three summary {
-        background-color: #14403d !important;
-        border: 1px solid #23736e !important;
-        border-radius: 8px !important;
-        padding: 6px 10px !important;
-        color: #fff !important;
-      }
-
-    </style>
-    """, unsafe_allow_html=True)
-
+    
 
     # --- Data ----------------------------------------------------
     # --- Data ----------------------------------------------------
@@ -1167,7 +1277,7 @@ if backend in ("audioclip", "clap") and audio_vec is not None:
 else:
     space.set_context_vec(None)
 
-tab_explore, tab_story = st.tabs(["Explorer", "Story Generator"])
+tab_explore, tab_story, tab_mine = st.tabs(["Explorer", "Story Generator", "Corpus Miner"])
 
 with tab_explore:
     # =============================
@@ -1583,3 +1693,143 @@ with tab_story:
             st.session_state.pop("story_motifs", None)
     else:
         st.info("Set your context and parameters, then click **Generate story**.")
+
+with tab_mine:
+    st.subheader("🧪 Corpus Miner — build symbols & descriptors from multimodal items")
+
+    st.markdown("Add **text**, **images**, and/or **audio** items. Then mine clusters → propose **symbols** with **descriptors**.")
+
+    # --- Left: Add items | Right: Preview queue ---
+    cL, cR = st.columns([1, 1])
+
+    with cL:
+        st.markdown("### Add items")
+        with st.expander("➕ Text items"):
+            txts = st.text_area("One item per line (use `id:::text` to set a custom id)", height=120, placeholder="ritual:::river stones and lanterns at dusk\ncrow:::wings cut the wind…")
+            if st.button("Add text"):
+                for line in [l.strip() for l in txts.splitlines() if l.strip()]:
+                    if ":::" in line:
+                        i, t = line.split(":::", 1)
+                        item_id = i.strip()
+                        text = t.strip()
+                    else:
+                        item_id = uuid.uuid4().hex[:8]
+                        text = line
+                    st.session_state["mm_items"].append({"id": item_id, "text": text})
+
+        with st.expander("🖼️ Image items"):
+            imgs = st.file_uploader("Upload images", type=["png","jpg","jpeg","webp"], accept_multiple_files=True)
+            if imgs and st.button("Add images"):
+                for f in imgs:
+                    path = _save_upload(f, "img")
+                    item_id = pathlib.Path(f.name).stem + "-" + uuid.uuid4().hex[:6]
+                    st.session_state["mm_items"].append({"id": item_id, "image_path": path})
+
+        with st.expander("🎧 Audio items"):
+            auds = st.file_uploader("Upload audio", type=["wav","mp3","m4a"], accept_multiple_files=True)
+            if auds and st.button("Add audio"):
+                for f in auds:
+                    path = _save_upload(f, "aud")
+                    item_id = pathlib.Path(f.name).stem + "-" + uuid.uuid4().hex[:6]
+                    st.session_state["mm_items"].append({"id": item_id, "audio_path": path})
+
+        with st.expander("🧩 Pair modalities (optional)"):
+            st.caption("If you want to **pair** text ↔ image ↔ audio for the same concept, give them the **same id**. Edit below.")
+            st.caption("At least ~8 paired items help the alignment learn a good projection.")
+
+    with cR:
+        st.markdown("### Queue")
+        if not st.session_state["mm_items"]:
+            st.info("No items yet. Add some on the left.")
+        else:
+            # Small editable table-like view
+            for idx, row in enumerate(list(st.session_state["mm_items"])):
+                with st.container(border=True):
+                    c1, c2, c3, c4, c5 = st.columns([0.8, 2.2, 2.2, 2.2, 0.6])
+                    st.session_state["mm_items"][idx]["id"] = c1.text_input("id", value=row.get("id",""), key=f"mm_id_{idx}")
+                    st.session_state["mm_items"][idx]["text"] = c2.text_input("text", value=row.get("text",""), key=f"mm_tx_{idx}")
+                    c3.write("image")
+                    if p := row.get("image_path"):
+                        c3.image(p, use_column_width=True)
+                    c4.write("audio")
+                    if p := row.get("audio_path"):
+                        c4.audio(p)
+                    if c5.button("🗑️", key=f"mm_del_{idx}"):
+                        st.session_state["mm_items"].pop(idx)
+                        st.experimental_rerun()
+
+    st.divider()
+
+    # --- Mining hyperparams ---
+    st.markdown("### Mining settings")
+    c1, c2, c3 = st.columns(3)
+    k = c1.slider("k-NN (per item)", 4, 32, 12)
+    min_cluster = c2.slider("Min cluster size", 4, 64, 8)
+    top_desc = c3.slider("Top descriptors / symbol", 4, 24, 12)
+    canon = st.selectbox("Canonical space (for alignment)", ["text","image","audio"], index=0)
+    ridge_lambda = st.slider("Ridge λ (alignment)", 1e-5, 1e-1, 1e-3, step=1e-5, format="%.0e")
+
+    # --- Build adapters ---
+    st.markdown("### Encoders")
+    img_ok = Image is not None and open_clip is not None
+    aud_ok = True  # we have a fallback pipeline inside adapter
+    img_model = st.selectbox("OpenCLIP image encoder", ["ViT-B-32","ViT-L-14"], index=0, disabled=not img_ok)
+    img_pretrained = st.text_input("OpenCLIP weights", "laion2b_s34b_b79k", disabled=not img_ok)
+
+    if st.button("⚙️ Run miner", type="primary", use_container_width=True, disabled=not st.session_state["mm_items"]):
+        with st.spinner("Mining symbols & descriptors…"):
+            # Build miner items
+            mm_items = []
+            for row in st.session_state["mm_items"]:
+                mm_items.append(MMItem(
+                    id=row.get("id") or uuid.uuid4().hex[:8],
+                    text=(row.get("text") or None),
+                    image_path=(row.get("image_path") or None),
+                    audio_path=(row.get("audio_path") or None),
+                    meta=None
+                ))
+
+            # Adapters: reuse your current text embedder; load image/audio adapters lazily
+            text_adapter = _TextAdapter(embedder)
+            image_adapter = _ImageAdapter(model_name=img_model, pretrained=img_pretrained) if img_ok else None
+            audio_adapter = _AudioAdapter(embedder)
+
+            # Miner
+            miner = ArchetypeMiner(
+                text_encoder=text_adapter,
+                image_encoder=image_adapter if image_adapter is not None else _ImageAdapter,  # placeholder if none
+                audio_encoder=audio_adapter,
+                canon=canon,
+                ridge_lambda=float(ridge_lambda)
+            )
+            for it in mm_items: miner.add(it)
+
+            try:
+                symbols_json = miner.run(k=int(k), min_cluster=int(min_cluster), top_desc=int(top_desc))
+            except Exception as e:
+                st.error(f"Mining failed: {e}")
+                symbols_json = {}
+
+        if symbols_json:
+            st.success(f"Discovered {len(symbols_json)} symbols.")
+            with st.expander("Preview symbols", expanded=True):
+                for s, descs in symbols_json.items():
+                    st.markdown(f"**{s}** — {', '.join(descs)}")
+
+            colA, colB = st.columns(2)
+            with colA:
+                # Use in Explorer right away
+                if st.button("👉 Use these in Explorer", type="primary", use_container_width=True):
+                    st.session_state["_current_symbols_map"] = symbols_json
+                    # rebuild state & rerun
+                    st.experimental_rerun()
+            with colB:
+                st.download_button(
+                    "Download symbols.json",
+                    data=json.dumps(symbols_json, ensure_ascii=False, indent=2).encode("utf-8"),
+                    file_name="symbols.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+        else:
+            st.info("No symbols discovered. Try lowering min cluster size or adding more items / paired examples.")

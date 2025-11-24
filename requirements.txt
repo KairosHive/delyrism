@@ -16,6 +16,7 @@ sentencepiece>=0.2.0    # needed for Gemma tokenization
 
 # PyTorch (CPU wheels by default from PyPI)
 torch>=2.2
+timm>=0.9.12
 
 # ---- Audio context paths ----
 open-clip-torch>=2.24.0  # import: `import open_clip`
@@ -34,6 +35,7 @@ streamlit-mic-recorder>=0.0.8
 umap-learn>=0.5.5      # UMAP reducer
 scipy>=1.10            # ConvexHull for hulls
 seaborn>=0.13          # nicer heatmaps (optional)
+pillow>=10.0.0         # for Image.open
 
 # ---- Compatibility pin to avoid known conflicts (mediapipe / google libs) ----
 protobuf==4.25.3
