@@ -15,8 +15,8 @@ safetensors>=0.4.5
 sentencepiece>=0.2.0
 bitsandbytes>=0.41.0    # Recommended for 8-bit model loading
 
-# PyTorch
-torch>=2.2
+# PyTorch (Installed via nixpacks.toml for Railway CPU optimization)
+# torch>=2.2
 timm>=0.9.12
 
 # ---- Audio context paths ----
