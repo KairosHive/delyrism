@@ -52,6 +52,12 @@ try:
 except Exception:
     nx = None
 
+try:
+    import umap
+    _HAS_UMAP = True
+except ImportError:
+    _HAS_UMAP = False
+
 import hashlib, json  # add at top if not present
 
 # ---- import your core code (from your package/module) ----
@@ -93,6 +99,16 @@ except Exception:
 
 import tempfile, pathlib, uuid
 
+# --- Fragment compatibility ---
+try:
+    from streamlit import fragment
+except ImportError:
+    try:
+        from streamlit import experimental_fragment as fragment
+    except ImportError:
+        # Fallback: no-op decorator if not supported
+        def fragment(func):
+            return func
 
 primaryColor = "#3498db"
 # =============================
@@ -706,7 +722,8 @@ def get_embedder(backend: str, model: Optional[str], pooling: str) -> TextEmbedd
 def build_space(
     symbols_map_key: str,
     descriptor_threshold: float,
-    embedder_fingerprint: str
+    embedder_fingerprint: str,
+    version: str = "v1"
 ) -> SymbolSpace:
     # Rebuild the actual objects inside the cached function
     # by reading from the global session state or by passing the real objects back in.
@@ -1200,6 +1217,39 @@ with st.sidebar:
                 step=0.05,
                 key=f"w_{s}",
             )
+            
+        # --- Alchemist Mode (Context B) ---
+        st.divider()
+        enable_alchemist = st.checkbox("⚗️ Enable Alchemist Mode (Context B)", False, help="Mix two contexts together.")
+        
+        ctx_b_sentence = ""
+        ctx_b_weights = {}
+        
+        if enable_alchemist:
+            st.markdown("#### Context B (Secondary)")
+            ctx_b_sentence = st.text_area(
+                "Context B prompt",
+                value="",
+                placeholder="e.g., A chaotic storm of entropy and decay",
+                height=70,
+                key="ctx_b_sentence",
+            )
+            
+            ctx_b_chosen = st.multiselect(
+                "Context B symbols",
+                options=sym_preview,
+                default=[],
+                key="ctx_b_chosen",
+            )
+            
+            for s in ctx_b_chosen:
+                ctx_b_weights[s] = st.slider(
+                    f"Weight B: {s}",
+                    0.0, 1.0,
+                    value=0.5,
+                    step=0.05,
+                    key=f"wb_{s}",
+                )
     # st.markdown('</div>', unsafe_allow_html=True)
     # --- Embeddings ----------------------------------------------
     # --- Embeddings (sidebar) ---
@@ -1454,7 +1504,8 @@ st.session_state["_current_embedder"] = embedder
 space = build_space(
     _symbols_map_key(symbols_map),
     descriptor_threshold,
-    _embedder_key(embedder)  # ← includes instruction/context
+    _embedder_key(embedder),  # ← includes instruction/context
+    "v2_blind_spot"
 )
 space.set_context_vec(audio_ctx_vec)  # None clears; vector overrides text everywhere
 # Clear stale audio when backend changes away from an audio-capable model
@@ -1476,281 +1527,509 @@ with tab_explore:
     color_map = space.get_symbol_color_dict("AuroraPop")
 
     # =============================
-    # Row 1: Meaning Space | Ambiguity Metrics
+    # Alchemist / Explorer Fragment
     # =============================
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.subheader("Meaning Space (2D)")
-        reducer = st.selectbox("Reducer", ["umap", "tsne","pca"], index=0)
-        if show_arrow is True:
-            arrow_scale = 0.5
-        if show_arrow is False:
-            arrow_scale = 0
-        fig_ms = fig_from_callable(
-            space.plot_map_shift,
-            weights=ctx_weights if ctx_weights else None,
-            sentence=sentence if sentence else None,
-            method=reducer,
-            with_hulls=with_hulls,
-            include_centroids=include_centroids,
-            normalize_centroids=normalize_centroids,
-            figsize=(6.8, 4.5),
-            title="Context shift on descriptor map",
-            arrow_scale=arrow_scale,
-            arrow_alpha=0.65,
-            gate=gate,
-            tau=tau,
-            beta=beta,
-            membership_alpha=membership_alpha,
-            within_symbol_softmax=within_symbol_softmax,
-            color_dict=color_map
-        )
-        st.pyplot(fig_ms, clear_figure=True)
-
-    with c2:
-        st.subheader("Ambiguity Metrics")
-        sort_opt = st.selectbox("Sort by", ["dispersion", "leakage", "entropy", "none"], index=0)
-        fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4.0))
+    @fragment
+    def render_explorer_view(
+        space, 
+        ctx_weights, sentence, 
+        ctx_b_weights, ctx_b_sentence, enable_alchemist,
+        tau, lam, alpha, use_ppr,
+        show_arrow, with_hulls, include_centroids, normalize_centroids,
+        gate, beta, membership_alpha, within_symbol_softmax,
+        ctx_focus, ctx_topk_symbols, ctx_topk_desc, ctx_method, ctx_alpha, ctx_normalize,
+        shift_mode, pool_type, pool_w, gamma,
+        audio_vec,
+        mix_t, mix_mode, fluid_mode
+    ):
+        # --- 1. Compute Mixed Context Vector ---
+        # If Alchemist mode is ON, we blend A and B.
+        # If OFF, we just use A (which is passed as `ctx_weights`, `sentence`).
         
-        # Apply dark theme styling manually
-        fig_amb.patch.set_alpha(0.0)
-        for ax in fig_amb.axes:
-            ax.patch.set_alpha(0.0)
-            ax.xaxis.label.set_color('white')
-            ax.yaxis.label.set_color('white')
-            ax.title.set_color('white')
-            ax.tick_params(axis='x', colors='white')
-            ax.tick_params(axis='y', colors='white')
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-            if ax.get_legend():
-                legend = ax.get_legend()
-                legend.get_frame().set_alpha(0.0)
-                legend.get_frame().set_linewidth(0.0)
-                plt.setp(legend.get_texts(), color='white')
-                if legend.get_title():
-                    legend.get_title().set_color('white')
-                
-        st.pyplot(fig_amb, clear_figure=True)
-        plt.close(fig_amb)
-
-    st.divider()
-
-    # =============================
-    # Row 2: Descriptor Attention | Top Symbols
-    # =============================
-    c3, c4 = st.columns(2)
-
-    with c3:
-        st.subheader("Descriptor Attention")
-        # Container for the plot to appear ABOVE the selectbox
-        att_container = st.container()
-        sym = st.selectbox("Symbol", list(space.symbols))
-        if sym:
-            try:
-                fig_att = fig_from_callable(
-                    space.plot_attention,
-                    sym,
-                    weights=ctx_weights if ctx_weights else None,
-                    sentence=sentence if sentence else None,
-                    tau=tau,
-                    top_n=8,
-                    figsize=(6, 4.0),
-                )
-                with att_container:
-                    st.pyplot(fig_att, clear_figure=True)
-            except Exception as e:
-                st.warning(f"Attention plot failed: {e}")
-
-    with c4:
-        st.subheader("Top Symbols for Context")
-        try:
-            # print('-----------------------------------')
-            # print(ctx_weights, sentence)
-            # print('-----------------------------------')
-            preds = space.propose(
-                weights=ctx_weights if ctx_weights else None,
-                sentence=sentence if sentence else None,
-                tau=tau,
-                lam=lam,
-                alpha=alpha,
-                topk=len(space.symbols),
-                use_ppr=use_ppr,
-            )
-
-            if preds:
-                # Exclude symbols explicitly in the context weights
-                exclude = {k.lower() for k in (ctx_weights or {}).keys()}
-                
-                # (optional) also exclude symbols literally mentioned in the sentence
-                ctx_words = {w.strip(".,;:!?()[]{}\"'").lower() for w in (sentence or "").split()}
-                preds = [p for p in preds if (p[0].lower() not in exclude and p[0].lower() not in ctx_words)]
-
-                if not preds:
-                    st.info("All top symbols are part of the context.")
-                else:
-                    labels = [p[0] for p in preds]
-                    scores = np.array([p[1] for p in preds])
-
-                    norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
-                    cmap = plt.cm.coolwarm
-                    colors = [cmap(n) for n in norm]
-
-                    fig_rank, ax = plt.subplots(figsize=(6, 4.0))
-                    # Apply dark theme styling manually since we don't use fig_from_callable here
-                    fig_rank.patch.set_alpha(0.0)
-                    ax.patch.set_alpha(0.0)
-                    ax.xaxis.label.set_color('white')
-                    ax.yaxis.label.set_color('white')
-                    ax.title.set_color('white')
-                    ax.tick_params(axis='x', colors='white')
-                    ax.tick_params(axis='y', colors='white')
-                    for spine in ax.spines.values():
-                        spine.set_visible(False)
-
-                    bars = ax.barh(
-                        range(len(scores))[::-1],
-                        scores[::-1],
-                        color=colors[::-1],
-                        edgecolor='gray',
-                        linewidth=1.2
-                    )
-                    ax.set_yticks(range(len(labels))[::-1])
-                    ax.set_yticklabels(labels[::-1])
-                    vmin, vmax = scores.min(), scores.max()
-                    ax.set_xlim(vmin - 0.01, vmax + 0.01)
-                    ax.set_xlabel("Score")
-                    ax.set_title("Symbol prediction for context (excluding context symbols)")
-
-                    for bar, v in zip(bars, scores[::-1]):
-                        ax.add_patch(plt.Rectangle(
-                            (bar.get_x(), bar.get_y()), bar.get_width(), bar.get_height(),
-                            color='white', alpha=0.08, zorder=0
-                        ))
-
-                    fig_rank.tight_layout()
-                    st.pyplot(fig_rank, clear_figure=True)
-                    plt.close(fig_rank)
+        final_vec = None
+        
+        # Pre-declare variables for Fluid Mode
+        v_a_fluid = None
+        v_b_fluid = None
+        
+        if enable_alchemist:
+            # Compute vectors for A and B
+            # We must ensure we don't use a stale override from a previous fragment run.
+            
+            # Vector A
+            if audio_vec is not None:
+                v_a = audio_vec.copy()
             else:
-                st.info("No predictions yet.")
-        except Exception as e:
-            st.warning(f"Ranking failed: {e}")
+                space.set_context_vec(None)
+                v_a = space.ctx_vec(weights=ctx_weights, sentence=sentence)
 
-    st.divider()
+            # Vector B
+            space.set_context_vec(None)
+            v_b = space.ctx_vec(weights=ctx_b_weights, sentence=ctx_b_sentence)
+            
+            # Store for Fluid Mode
+            v_a_fluid = v_a
+            v_b_fluid = v_b
+            
+            # Blend
+            if mix_mode == "Morph (A→B)":
+                # Linear interpolation: (1-t)A + tB
+                v_mix = (1.0 - mix_t) * v_a + mix_t * v_b
+            elif mix_mode == "Infuse (A+tB)":
+                # Additive: A + tB
+                v_mix = v_a + mix_t * v_b
+            elif mix_mode == "Mask (A-tB)":
+                # Subtractive: A - tB
+                v_mix = v_a - mix_t * v_b
+            else:
+                v_mix = v_a
 
-    # =============================
-    # Row 2: Contextual Subgraph (network) | Heatmaps
-    # =============================
+            # Normalize result
+            n = np.linalg.norm(v_mix)
+            if n > 1e-9:
+                final_vec = v_mix / n
+            else:
+                final_vec = v_mix # zero
+                
+            # Apply to space as override
+            space.set_context_vec(final_vec)
+            
+            # For plotting functions below, we pass None for weights/sentence 
+            # because the vector is already set in the space override.
+            p_weights = None
+            p_sentence = None
+            
+            # FORCE "gate" strategy if Alchemist is active, because "hybrid" requires text re-embedding
+            # which we cannot do with a pure vector mix.
+            if shift_mode in ("hybrid", "reembed"):
+                shift_mode = "gate"
+            
+        else:
+            # Standard mode: restore original context (Audio or None)
+            space.set_context_vec(audio_vec)
+            p_weights = ctx_weights
+            p_sentence = sentence
 
-    colN, colH = st.columns([1.1, 1])
+        # =============================
+        # Row 1: Meaning Space | Ambiguity Metrics
+        # =============================
+        c1, c2 = st.columns(2)
 
-    with colN:
-        st.subheader("Network View — Contextual Subgraph")
-        try:
-            tau_subgraph = focus_to_tau(ctx_focus)
-            print('Tau subgraph', tau_subgraph)
-            # Build a stable global color palette once
-            cmap = plt.cm.tab20
-            global_color_map = {s: cmap(i / max(1, len(space.symbols)-1)) for i, s in enumerate(space.symbols)}
-            fig_ctxnet = fig_from_callable(
-                plot_contextual_subgraph_colored,
-                space,
-                context_sentence=sentence or "",
-                topk_symbols=ctx_topk_symbols,
-                topk_desc=ctx_topk_desc,
-                method=ctx_method,
-                alpha=ctx_alpha,
-                tau=tau_subgraph,
-                normalize=ctx_normalize,
-                global_color_map=color_map,
-                figsize=(7, 5)
-            )
-            st.pyplot(fig_ctxnet, clear_figure=True)
-        except Exception as e:
-            st.warning(f"Contextual subgraph failed: {e}")
-
-    with colH:
-        st.subheader("Within-Symbol Associative Increase (Δ)")
-        
-        # Container for the plot to appear ABOVE the selectbox
-        plot_container = st.container()
-        
-        sym2 = st.selectbox("Symbol for heatmaps", list(space.symbols), key="heat_sym")
-        
-        if sym2:
-            try:
-                simdict = space.descriptor_similarity_matrices(
-                    weights=ctx_weights if ctx_weights else None,
-                    sentence=sentence if sentence else None,
-                    strategy=shift_mode,
-                    beta=beta,
-                    gate=gate,
-                    tau=(tau_gate if tau_gate is not None else 0.5),  # pick a default if not softmax
-                    within_symbol_softmax=within_symbol_softmax,
-                    gamma=gamma,
-                    pool_type=pool_type,
-                    pool_w=pool_w,
-                    order_by_attention=True,
-                    membership_alpha=membership_alpha,
-                )
-
-
-                # New Strategy: Interactive Altair Heatmap
-                import pandas as pd
+        with c1:
+            st.subheader("Meaning Space (2D)")
+            reducer = st.selectbox("Reducer", ["umap", "tsne","pca"], index=0)
+            
+            if fluid_mode and enable_alchemist:
+                # --- FLUID MODE (Altair) ---
                 import altair as alt
+                import pandas as pd
+                
+                with st.spinner("Computing fluid interpolation..."):
+                    # 1. Compute Shifted Matrices for A and B
+                    # We need to temporarily set the context vector to A, then B
+                    
+                    # State A
+                    space.set_context_vec(v_a_fluid)
+                    D_a = space.make_shifted_matrix(
+                        weights=None, sentence=None,
+                        strategy=shift_mode, beta=beta, gate=gate, tau=tau,
+                        within_symbol_softmax=within_symbol_softmax, gamma=gamma,
+                        pool_type=pool_type, pool_w=pool_w, membership_alpha=membership_alpha
+                    )
+                    
+                    # State B
+                    space.set_context_vec(v_b_fluid)
+                    D_b = space.make_shifted_matrix(
+                        weights=None, sentence=None,
+                        strategy=shift_mode, beta=beta, gate=gate, tau=tau,
+                        within_symbol_softmax=within_symbol_softmax, gamma=gamma,
+                        pool_type=pool_type, pool_w=pool_w, membership_alpha=membership_alpha
+                    )
+                    
+                    # Restore mixed vector
+                    space.set_context_vec(final_vec)
+                    
+                    # 2. Project to 2D
+                    # We must fit on the BASE space (space.D) to ensure a common coordinate system
+                    # Note: space.reduce_2d fits on space.D. We need to access the fitted reducer.
+                    # But space.reduce_2d returns the transformed array, it doesn't return the reducer object easily unless we hack it.
+                    # Actually, space._pca is stored. But UMAP/t-SNE are not stored in the class instance persistently in a way we can reuse easily 
+                    # unless we re-fit or modify delyrism.py.
+                    # However, for PCA, we can use space._pca.
+                    # For UMAP, we have to fit a new one on space.D.
+                    
+                    # Use cached reducer from SymbolSpace
+                    red, _, _, _ = space.get_cached_reducer_and_projection(
+                        method=reducer, n_neighbors=15, 
+                        include_centroids=include_centroids, normalize_centroids=normalize_centroids
+                    )
+                    
+                    if reducer == "tsne":
+                        st.warning("t-SNE does not support fluid interpolation well (no transform). Using PCA fallback.")
+                        red, _, _, _ = space.get_cached_reducer_and_projection(method="pca")
+                        
+                    XY_a = red.transform(D_a)
+                    XY_b = red.transform(D_b)
+                    
+                    # 3. Build DataFrame
+                    # We need symbol labels and colors
+                    # space.descriptors is the list of descriptors
+                    # space.owner maps descriptor -> symbol
+                    
+                    data = []
+                    for i, desc in enumerate(space.descriptors):
+                        sym = space.owner[desc]
+                        data.append({
+                            "desc": desc,
+                            "symbol": sym,
+                            "xA": XY_a[i, 0], "yA": XY_a[i, 1],
+                            "xB": XY_b[i, 0], "yB": XY_b[i, 1],
+                            "color": color_map.get(sym, "#333333")
+                        })
+                    df_fluid = pd.DataFrame(data)
+                    
+                    # 4. Altair Chart
+                    slider = alt.binding_range(min=0, max=1, step=0.01, name='Mix (t): ')
+                    t_param = alt.param(bind=slider, value=mix_t, name='t')
+                    
+                    # Interpolation expression
+                    # x = xA * (1-t) + xB * t
+                    
+                    chart = alt.Chart(df_fluid).mark_circle(size=60).encode(
+                        x=alt.X('x:Q', axis=None),
+                        y=alt.Y('y:Q', axis=None),
+                        color=alt.Color('color:N', scale=None),
+                        tooltip=['symbol', 'desc']
+                    ).transform_calculate(
+                        x = f"datum.xA * (1 - t) + datum.xB * t",
+                        y = f"datum.yA * (1 - t) + datum.yB * t"
+                    ).add_params(
+                        t_param
+                    ).properties(
+                        width=600,
+                        height=450,
+                        title="Fluid Context Morph (Client-Side)"
+                    ).configure_view(
+                        stroke=None
+                    ).interactive()
+                    
+                    st.altair_chart(chart, use_container_width=True)
+                    st.caption("💡 Drag the slider **below the chart** (or use the sidebar) to morph.")
 
-                data = simdict[sym2]
-                matrix = data["S_delta"]
-                labels = data["descriptors"]
+            else:
+                # --- STANDARD MODE (Matplotlib) ---
+                if show_arrow is True:
+                    arrow_scale = 0.5
+                if show_arrow is False:
+                    arrow_scale = 0
+                
+                try:
+                    fig_ms = fig_from_callable(
+                        space.plot_map_shift,
+                        weights=p_weights,
+                        sentence=p_sentence,
+                        method=reducer,
+                        with_hulls=with_hulls,
+                        include_centroids=include_centroids,
+                        normalize_centroids=normalize_centroids,
+                        figsize=(6.8, 4.5),
+                        title="Context shift on descriptor map",
+                        arrow_scale=arrow_scale,
+                        arrow_alpha=0.65,
+                        gate=gate,
+                        tau=tau,
+                        beta=beta,
+                        membership_alpha=membership_alpha,
+                        within_symbol_softmax=within_symbol_softmax,
+                        color_dict=color_map
+                    )
+                    st.pyplot(fig_ms, clear_figure=True)
+                except Exception as e:
+                    st.error(f"Map plot error: {e}")
 
-                # Convert to long format for Altair
-                df_heat = pd.DataFrame(matrix, index=labels, columns=labels)
-                df_heat.index.name = "Row"
-                df_heat.columns.name = "Col"
-                df_long = df_heat.stack().reset_index(name="Delta")
+        with c2:
+            st.subheader("Ambiguity Metrics")
+            sort_opt = st.selectbox("Sort by", ["dispersion", "leakage", "entropy", "none"], index=0, key="amb_sort")
+            fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4.0))
+            
+            # Apply dark theme styling manually
+            fig_amb.patch.set_alpha(0.0)
+            for ax in fig_amb.axes:
+                ax.patch.set_alpha(0.0)
+                ax.xaxis.label.set_color('white')
+                ax.yaxis.label.set_color('white')
+                ax.title.set_color('white')
+                ax.tick_params(axis='x', colors='white')
+                ax.tick_params(axis='y', colors='white')
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+                if ax.get_legend():
+                    legend = ax.get_legend()
+                    legend.get_frame().set_alpha(0.0)
+                    legend.get_frame().set_linewidth(0.0)
+                    plt.setp(legend.get_texts(), color='white')
+                    if legend.get_title():
+                        legend.get_title().set_color('white')
+                    
+            st.pyplot(fig_amb, clear_figure=True)
+            plt.close(fig_amb)
 
-                # Determine color domain excluding diagonal (self-correlations often skew the range)
-                mask_nd = df_long['Row'] != df_long['Col']
-                if mask_nd.any():
-                    min_d = df_long.loc[mask_nd, "Delta"].min()
-                    max_d = df_long.loc[mask_nd, "Delta"].max()
-                else:
-                    min_d, max_d = df_long["Delta"].min(), df_long["Delta"].max()
+        st.divider()
 
-                # Custom palette: Blue -> Green -> Yellow -> Orange -> Red
-                if max_d - min_d < 1e-9:
-                    scale = alt.Scale(domain=[min_d, max_d], range=['#3498DB', '#3498DB'])
-                else:
-                    step = (max_d - min_d) / 4.0
-                    dom = [min_d, min_d + step, min_d + 2*step, min_d + 3*step, max_d]
-                    # Colors: Blue, Green, Yellow, Orange, Red
-                    scale = alt.Scale(domain=dom, range=['#3498DB', '#2ECC71', '#FFD700', '#FF9F1C', '#E74C3C'])
+        # =============================
+        # Row 2: Descriptor Attention | Top Symbols
+        # =============================
+        c3, c4 = st.columns(2)
 
-                chart = alt.Chart(df_long).mark_rect().encode(
-                    x=alt.X('Col', sort=labels, title=None, axis=alt.Axis(labelAngle=-90, labelFontSize=10, labelColor='white', titleColor='white')),
-                    # Force all labels to appear by disabling overlap checks
-                    y=alt.Y('Row', sort=labels, title=None, axis=alt.Axis(labelFontSize=10, labelOverlap=False, labelColor='white', titleColor='white')),
-                    color=alt.Color('Delta', scale=scale, title="Δ", legend=alt.Legend(titleColor='white', labelColor='white')),
-                    tooltip=['Row', 'Col', alt.Tooltip('Delta', format='.4f')]
-                ).properties(
-                    title=alt.TitleParams(text=f"Δ After-Before for {sym2}", color='white'),
-                    width=550,
-                    height=550
-                ).configure_axis(
-                    grid=False,
-                    domainColor='white',
-                    tickColor='white'
-                ).configure_view(
-                    strokeWidth=0
-                ).configure(
-                    background='transparent'
+        with c3:
+            st.subheader("Descriptor Attention")
+            att_blind_spot = st.checkbox("Blind Spots", False, key="att_blind_spot", help="Show least attended descriptors")
+            
+            # Container for the plot to appear ABOVE the selectbox
+            att_container = st.container()
+            
+            sym = st.selectbox("Symbol", list(space.symbols), key="att_sym_select")
+                
+            if sym:
+                try:
+                    fig_att = fig_from_callable(
+                        space.plot_attention,
+                        sym,
+                        weights=p_weights,
+                        sentence=p_sentence,
+                        tau=tau,
+                        top_n=8,
+                        figsize=(6, 4.0),
+                        blind_spot=att_blind_spot
+                    )
+                    with att_container:
+                        st.pyplot(fig_att, clear_figure=True)
+                except Exception as e:
+                    st.warning(f"Attention plot failed: {e}")
+
+        with c4:
+            st.subheader("Top Symbols for Context")
+            rank_blind_spot = st.checkbox("Show Anti-Matches (Blind Spots)", False, key="rank_blind_spot", help="Show symbols most distant from the context")
+            try:
+                preds = space.propose(
+                    weights=p_weights,
+                    sentence=p_sentence,
+                    tau=tau,
+                    lam=lam,
+                    alpha=alpha,
+                    topk=len(space.symbols),
+                    use_ppr=use_ppr,
+                    blind_spot=rank_blind_spot
                 )
 
-                with plot_container:
-                    st.altair_chart(chart, use_container_width=False)
+                if preds:
+                    # Exclude symbols explicitly in the context weights (only if using direct weights)
+                    exclude = set()
+                    if p_weights:
+                        exclude = {k.lower() for k in p_weights.keys()}
+                    
+                    # (optional) also exclude symbols literally mentioned in the sentence
+                    ctx_words = set()
+                    if p_sentence:
+                        ctx_words = {w.strip(".,;:!?()[]{}\"'").lower() for w in p_sentence.split()}
+                        
+                    preds = [p for p in preds if (p[0].lower() not in exclude and p[0].lower() not in ctx_words)]
+
+                    if not preds:
+                        st.info("All top symbols are part of the context.")
+                    else:
+                        labels = [p[0] for p in preds]
+                        scores = np.array([p[1] for p in preds])
+
+                        norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
+                        cmap = plt.cm.coolwarm
+                        colors = [cmap(n) for n in norm]
+
+                        fig_rank, ax = plt.subplots(figsize=(6, 4.0))
+                        # Apply dark theme styling manually since we don't use fig_from_callable here
+                        fig_rank.patch.set_alpha(0.0)
+                        ax.patch.set_alpha(0.0)
+                        ax.xaxis.label.set_color('white')
+                        ax.yaxis.label.set_color('white')
+                        ax.title.set_color('white')
+                        ax.tick_params(axis='x', colors='white')
+                        ax.tick_params(axis='y', colors='white')
+                        for spine in ax.spines.values():
+                            spine.set_visible(False)
+
+                        bars = ax.barh(
+                            range(len(scores))[::-1],
+                            scores[::-1],
+                            color=colors[::-1],
+                            edgecolor='gray',
+                            linewidth=1.2
+                        )
+                        ax.set_yticks(range(len(labels))[::-1])
+                        ax.set_yticklabels(labels[::-1])
+                        vmin, vmax = scores.min(), scores.max()
+                        ax.set_xlim(vmin - 0.01, vmax + 0.01)
+                        ax.set_xlabel("Score")
+                        title_suffix = " (Anti-Matches)" if rank_blind_spot else ""
+                        ax.set_title(f"Symbol prediction for context{title_suffix}")
+
+                        for bar, v in zip(bars, scores[::-1]):
+                            ax.add_patch(plt.Rectangle(
+                                (bar.get_x(), bar.get_y()), bar.get_width(), bar.get_height(),
+                                color='white', alpha=0.08, zorder=0
+                            ))
+
+                        fig_rank.tight_layout()
+                        st.pyplot(fig_rank, clear_figure=True)
+                        plt.close(fig_rank)
+                else:
+                    st.info("No predictions yet.")
             except Exception as e:
-                st.warning(f"Heatmaps failed: {e}")
+                st.warning(f"Ranking failed: {e}")
+
+        st.divider()
+
+        # =============================
+        # Row 3: Contextual Subgraph (network) | Heatmaps
+        # =============================
+
+        colN, colH = st.columns([1.1, 1])
+
+        with colN:
+            st.subheader("Network View — Contextual Subgraph")
+            try:
+                tau_subgraph = focus_to_tau(ctx_focus)
+                # Build a stable global color palette once
+                cmap = plt.cm.tab20
+                # global_color_map = {s: cmap(i / max(1, len(space.symbols)-1)) for i, s in enumerate(space.symbols)}
+                
+                # If Alchemist mode is on, p_sentence is None, so we provide a label
+                subgraph_label = p_sentence or ("(Alchemist Mix)" if enable_alchemist else "")
+                
+                fig_ctxnet = fig_from_callable(
+                    plot_contextual_subgraph_colored,
+                    space,
+                    context_sentence=subgraph_label,
+                    topk_symbols=ctx_topk_symbols,
+                    topk_desc=ctx_topk_desc,
+                    method=ctx_method,
+                    alpha=ctx_alpha,
+                    tau=tau_subgraph,
+                    normalize=ctx_normalize,
+                    global_color_map=color_map,
+                    figsize=(7, 5)
+                )
+                st.pyplot(fig_ctxnet, clear_figure=True)
+            except Exception as e:
+                st.warning(f"Contextual subgraph failed: {e}")
+
+        with colH:
+            st.subheader("Within-Symbol Associative Increase (Δ)")
+            
+            # Container for the plot to appear ABOVE the selectbox
+            plot_container = st.container()
+            
+            sym2 = st.selectbox("Symbol for heatmaps", list(space.symbols), key="heat_sym")
+            
+            if sym2:
+                try:
+                    simdict = space.descriptor_similarity_matrices(
+                        weights=p_weights,
+                        sentence=p_sentence,
+                        strategy=shift_mode,
+                        beta=beta,
+                        gate=gate,
+                        tau=(tau if tau is not None else 0.5),  # pick a default if not softmax
+                        within_symbol_softmax=within_symbol_softmax,
+                        gamma=gamma,
+                        pool_type=pool_type,
+                        pool_w=pool_w,
+                        order_by_attention=True,
+                        membership_alpha=membership_alpha,
+                    )
+
+
+                    # New Strategy: Interactive Altair Heatmap
+                    import pandas as pd
+                    import altair as alt
+
+                    data = simdict[sym2]
+                    matrix = data["S_delta"]
+                    labels = data["descriptors"]
+
+                    # Convert to long format for Altair
+                    df_heat = pd.DataFrame(matrix, index=labels, columns=labels)
+                    df_heat.index.name = "Row"
+                    df_heat.columns.name = "Col"
+                    df_long = df_heat.stack().reset_index(name="Delta")
+
+                    # Determine color domain excluding diagonal (self-correlations often skew the range)
+                    mask_nd = df_long['Row'] != df_long['Col']
+                    if mask_nd.any():
+                        min_d = df_long.loc[mask_nd, "Delta"].min()
+                        max_d = df_long.loc[mask_nd, "Delta"].max()
+                    else:
+                        min_d, max_d = df_long["Delta"].min(), df_long["Delta"].max()
+
+                    # Custom palette: Blue -> Green -> Yellow -> Orange -> Red
+                    if max_d - min_d < 1e-9:
+                        scale = alt.Scale(domain=[min_d, max_d], range=['#3498DB', '#3498DB'])
+                    else:
+                        step = (max_d - min_d) / 4.0
+                        dom = [min_d, min_d + step, min_d + 2*step, min_d + 3*step, max_d]
+                        # Colors: Blue, Green, Yellow, Orange, Red
+                        scale = alt.Scale(domain=dom, range=['#3498DB', '#2ECC71', '#FFD700', '#FF9F1C', '#E74C3C'])
+
+                    chart = alt.Chart(df_long).mark_rect().encode(
+                        x=alt.X('Col', sort=labels, title=None, axis=alt.Axis(labelAngle=-90, labelFontSize=10, labelColor='white', titleColor='white')),
+                        # Force all labels to appear by disabling overlap checks
+                        y=alt.Y('Row', sort=labels, title=None, axis=alt.Axis(labelFontSize=10, labelOverlap=False, labelColor='white', titleColor='white')),
+                        color=alt.Color('Delta', scale=scale, title="Δ", legend=alt.Legend(titleColor='white', labelColor='white')),
+                        tooltip=['Row', 'Col', alt.Tooltip('Delta', format='.4f')]
+                    ).properties(
+                        title=alt.TitleParams(text=f"Δ After-Before for {sym2}", color='white'),
+                        width=550,
+                        height=550
+                    ).configure_axis(
+                        grid=False,
+                        domainColor='white',
+                        tickColor='white'
+                    ).configure_view(
+                        strokeWidth=0
+                    ).configure(
+                        background='transparent'
+                    )
+
+                    with plot_container:
+                        st.altair_chart(chart, use_container_width=False)
+                except Exception as e:
+                    st.warning(f"Heatmaps failed: {e}")
+
+    # --- Alchemist Mixing Controls (Outside Fragment) ---
+    mix_t = 0.5
+    mix_mode = "Morph (A→B)"
+    fluid_mode = False
+    
+    if enable_alchemist:
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown("#### ⚗️ Mixing Desk")
+            mix_t = st.slider("Interpolation (t)", 0.0, 1.0, 0.5, 0.01, key="mix_t")
+            mix_mode = st.selectbox("Operation", ["Morph (A→B)", "Infuse (A+tB)", "Mask (A-tB)"], key="mix_mode")
+            fluid_mode = st.checkbox("Fluid Mode (Experimental)", False, help="Use Altair for 60fps client-side interpolation. May be slower to load initially.")
+
+    # --- Call the fragment ---
+    render_explorer_view(
+        space, 
+        ctx_weights, sentence, 
+        ctx_b_weights, ctx_b_sentence, enable_alchemist,
+        tau, lam, alpha, use_ppr,
+        show_arrow, with_hulls, include_centroids, normalize_centroids,
+        gate, beta, membership_alpha, within_symbol_softmax,
+        ctx_focus, ctx_topk_symbols, ctx_topk_desc, ctx_method, ctx_alpha, ctx_normalize,
+        shift_mode, pool_type, pool_w, gamma,
+        audio_vec if (backend in ("audioclip", "clap")) else None,
+        mix_t, mix_mode, fluid_mode
+    )
 
     st.divider()
 
@@ -2047,7 +2326,7 @@ with tab_mine:
                     st.session_state["mm_items"][idx]["text"] = c2.text_input("text", value=row.get("text",""), key=f"mm_tx_{idx}")
                     c3.write("image")
                     if p := row.get("image_path"):
-                        c3.image(p, use_column_width=True)
+                        c3.image(p, use_container_width=True)
                     c4.write("audio")
                     if p := row.get("audio_path"):
                         c4.audio(p)

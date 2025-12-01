@@ -493,9 +493,9 @@ class SymbolSpace:
             v /= (np.linalg.norm(v) + 1e-9)
             self.context_override = v
 
-    def _sent_vec(self, text: Optional[str]):
+    def _sent_vec(self, text: Optional[str], ignore_override=False):
         # <-- CHANGED: honor audio override first
-        if self.context_override is not None:
+        if not ignore_override and self.context_override is not None:
             return self.context_override.copy()
         if not text or not text.strip():
             return np.zeros(self.embedder.dim, np.float32)
@@ -513,8 +513,8 @@ class SymbolSpace:
         v = (np.stack(vecs) * np.array(ws)[:, None]).sum(0) / (sum(ws) + 1e-9)
         return v / (np.linalg.norm(v) + 1e-9)
 
-    def ctx_vec(self, weights=None, sentence=None):
-        v = self._weight_vec(weights) + self._sent_vec(sentence)
+    def ctx_vec(self, weights=None, sentence=None, ignore_override=False):
+        v = self._weight_vec(weights) + self._sent_vec(sentence, ignore_override=ignore_override)
         n = np.linalg.norm(v)
         return v if n == 0 else v / n
 
@@ -641,7 +641,7 @@ class SymbolSpace:
 
         
     def propose(self, weights=None, sentence=None,
-                topk=5, tau=0.3, lam=0.6, alpha=0.85, use_ppr=True):
+                topk=5, tau=0.3, lam=0.6, alpha=0.85, use_ppr=True, blind_spot=False):
         vctx = self.ctx_vec(weights, sentence)
         pr = {s: 0.0 for s in self.symbols}
         if use_ppr:
@@ -659,7 +659,9 @@ class SymbolSpace:
         coh_n = minmax_scale(coh)
         pr_n = minmax_scale(pr)
         score = {s: lam * coh_n[s] + (1 - lam) * pr_n.get(s, 0.0) for s in self.symbols}
-        ranked = sorted(self.symbols, key=lambda s: score[s], reverse=True)[:topk]
+        
+        # Sort by score (descending for normal, ascending for blind_spot)
+        ranked = sorted(self.symbols, key=lambda s: score[s], reverse=(not blind_spot))[:topk]
         return [(s, score[s], coh_n[s], pr_n.get(s, 0.0)) for s in ranked]
 
     def _get_descriptor_vectors(self, symbol, sentence=None):
@@ -810,9 +812,9 @@ class SymbolSpace:
             return recommend_symbols_with_softmax_attention(self, sentence, topk=topk_symbols, tau=tau, n_best=topk_desc)
 
     def recommend_symbols_with_ppr_descriptors(self, sentence, topk=2, alpha=0.85, tau=0.02, n_best=3):
-        # 1) Build descriptor personalization from sentence once
-        sent_vec = self.embedder.encode([sentence])[0]
-        sent_vec /= (np.linalg.norm(sent_vec) + 1e-9)
+        # 1) Build descriptor personalization from sentence (or override)
+        sent_vec = self.ctx_vec(sentence=sentence)
+        
         pers = {f"D:{d}": float(w) for d, w in zip(self.descriptors, softmax(self.D @ sent_vec, tau=tau))}
         # 2) Run a single PageRank over the whole graph
         pr_all = nx.pagerank(self.G, alpha=alpha, personalization=pers, weight="weight")
@@ -962,7 +964,7 @@ class SymbolSpace:
             D_before = self.D[idx]
             D_after  = D_ctx[idx]
 
-            if order_by_attention and (weights is not None or sentence):
+            if order_by_attention and (weights is not None or sentence or self.context_override is not None):
                 _, att = self.conditioned_symbol(s, weights=weights, sentence=sentence, tau=tau)
                 scores = [att.get(d, 0.0) for d in desc_names]
                 order = np.argsort(scores)[::-1]
@@ -1096,6 +1098,61 @@ class SymbolSpace:
 
     # --- in class SymbolSpace ---
 
+    def get_cached_reducer_and_projection(self, method="umap", n_neighbors=15, include_centroids=True, normalize_centroids=False):
+        """
+        Returns (reducer, Z_fit, X_fit, slices) for the BASE state.
+        Caches the result to avoid re-fitting UMAP/PCA.
+        """
+        if not hasattr(self, "_cached_projections"):
+            self._cached_projections = {}
+            
+        cache_key = (method, n_neighbors, include_centroids, normalize_centroids)
+        
+        if cache_key in self._cached_projections:
+            return self._cached_projections[cache_key]
+            
+        # --- Build X_fit ---
+        blocks, slices, cursor = [], {}, 0
+        for s in self.symbols:
+            idx = self.symbol_to_idx[s]
+            Xi = self.D[idx]
+            blocks.append(Xi)
+            slices[s] = (cursor, cursor + len(idx))
+            cursor += len(idx)
+            if include_centroids and len(idx) > 0:
+                c = self.D[idx].mean(0)
+                if normalize_centroids:
+                    c = c / (np.linalg.norm(c) + 1e-9)
+                blocks.append(c[None, :])
+                cursor += 1
+
+        X_fit = np.concatenate(blocks, axis=0)
+        
+        # --- Fit Reducer ---
+        if method == "umap" and _HAS_UMAP:
+            reducer = umap.UMAP(
+                n_neighbors=n_neighbors, min_dist=0.1,
+                metric="cosine", random_state=42
+            )
+        elif method == "tsne":
+            reducer = TSNE(n_components=2, random_state=42, perplexity=30, init="pca")
+        else:
+            reducer = PCA(n_components=2, random_state=42)
+            
+        if method == "tsne":
+            Z_fit = reducer.fit_transform(X_fit)
+        else:
+            reducer.fit(X_fit)
+            Z_fit = reducer.transform(X_fit)
+            
+        result = (reducer, Z_fit, X_fit, slices)
+        
+        # Only cache if reusable (t-SNE usually isn't for transform)
+        if method != "tsne":
+            self._cached_projections[cache_key] = result
+            
+        return result
+
     def plot_map_shift(
         self,
         *,
@@ -1195,43 +1252,43 @@ class SymbolSpace:
         D_ctx = l2_normalize(D_ctx, axis=1)
 
         # ---------- 5) Choose reducer (mirror plot_map) ----------
-        if method == "umap" and _HAS_UMAP:
-            reducer = umap.UMAP(
-                n_neighbors=n_neighbors, min_dist=0.1,
-                metric="cosine", random_state=42
-            )
+        reducer, Z_fit, X_fit, slices = self.get_cached_reducer_and_projection(
+            method=method, n_neighbors=n_neighbors,
+            include_centroids=include_centroids, normalize_centroids=normalize_centroids
+        )
+        
+        if method == "umap":
             xlbl, ylbl = "UMAP 1", "UMAP 2"
         elif method == "tsne":
-            reducer = TSNE(n_components=2, random_state=42, perplexity=30, init="pca")
             xlbl, ylbl = "t-SNE 1", "t-SNE 2"
         else:
-            reducer = PCA(n_components=2, random_state=42)
             xlbl, ylbl = "PCA 1", "PCA 2"
 
-        # ---------- 6) Fit on ORIGINAL in SAME order as plot_map ----------
-        blocks, slices, cursor = [], {}, 0
-        for s in self.symbols:
-            idx = self.symbol_to_idx[s]
-            Xi = D[idx]
-            blocks.append(Xi)
-            slices[s] = (cursor, cursor + len(idx))
-            cursor += len(idx)
-            if include_centroids and len(idx) > 0:
-                c = D[idx].mean(0)
-                if normalize_centroids:
-                    c = c / (np.linalg.norm(c) + 1e-9)
-                blocks.append(c[None, :])
-                cursor += 1
-
-        X_fit = np.concatenate(blocks, axis=0)
-        Z_fit = reducer.fit_transform(X_fit)
+        # ---------- 6) Transform Shifted Descriptors ----------
+        if method == "tsne":
+             # t-SNE fallback: we can't transform, so we just use Z_fit (no shift shown)
+             Z_ctx = np.zeros((len(self.descriptors), 2))
+             cursor = 0
+             for s in self.symbols:
+                 idx = self.symbol_to_idx[s]
+                 Z_ctx[idx] = Z_fit[cursor : cursor + len(idx)]
+                 cursor += len(idx)
+                 if include_centroids and len(idx) > 0:
+                     cursor += 1
+        else:
+            Z_ctx = reducer.transform(D_ctx)
 
         Z_orig = np.zeros((len(self.descriptors), 2), dtype=np.float32)
-        for s, (a, b) in slices.items():
+        # Re-build slices to map Z_fit back to Z_orig
+        cursor = 0
+        for s in self.symbols:
             idx = self.symbol_to_idx[s]
-            Z_orig[idx] = Z_fit[a:b]
-
-        Z_ctx = reducer.transform(D_ctx)
+            # descriptors
+            Z_orig[idx] = Z_fit[cursor : cursor + len(idx)]
+            cursor += len(idx)
+            # centroid
+            if include_centroids and len(idx) > 0:
+                cursor += 1
 
         Zc_orig, Zc_ctx = {}, {}
         if include_centroids:
@@ -1364,10 +1421,12 @@ class SymbolSpace:
     def plot_attention(self, symbol: str, *,
                         weights=None, sentence=None,
                         tau=0.3, top_n=6, figsize=(6, 4),
-                        title: Optional[str] = None, normalize=True):
+                        title: Optional[str] = None, normalize=True, blind_spot=False):
         """Horizontal bar plot of top-N descriptor attention weights (coolwarm style)."""
         _, w = self.conditioned_symbol(symbol, weights, sentence, tau)
-        top = sorted(w.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        
+        # Sort descending for normal, ascending for blind_spot
+        top = sorted(w.items(), key=lambda kv: kv[1], reverse=(not blind_spot))[:top_n]
         if not top:
             return
 
@@ -1388,7 +1447,9 @@ class SymbolSpace:
         else:
             plt.xlim(0, 1)
         plt.xlabel("Attention weight")
-        plt.title(title or f"{symbol} – descriptor attention")
+        
+        default_title = f"{symbol} – {'blind spots' if blind_spot else 'descriptor attention'}"
+        plt.title(title or default_title)
         # Add value labels and subtle shading
         for bar, v in zip(bars, vals[::-1]):
             plt.gca().add_patch(
