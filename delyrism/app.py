@@ -900,6 +900,104 @@ st.markdown("""
         text-transform: uppercase;
         margin-top: 0.2rem;
     }
+    
+    /* Sidebar Expander Styling with Markers */
+    
+    /* 1. Data */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-data) + div details > summary {
+        background-color: rgba(52, 152, 219, 0.15) !important;
+        border-left: 3px solid #3498db !important;
+        color: #3498db !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-data) + div details > summary:hover {
+        color: #3498db !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-data) + div details > summary svg {
+        fill: #3498db !important;
+    }
+
+    /* 2. Embeddings */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-embeddings) + div details > summary {
+        background-color: rgba(155, 89, 182, 0.15) !important;
+        border-left: 3px solid #9b59b6 !important;
+        color: #9b59b6 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-embeddings) + div details > summary:hover {
+        color: #9b59b6 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-embeddings) + div details > summary svg {
+        fill: #9b59b6 !important;
+    }
+
+    /* 3. Context */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-context) + div details > summary {
+        background-color: rgba(46, 204, 113, 0.15) !important;
+        border-left: 3px solid #2ecc71 !important;
+        color: #2ecc71 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-context) + div details > summary:hover {
+        color: #2ecc71 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-context) + div details > summary svg {
+        fill: #2ecc71 !important;
+    }
+
+    /* 4. Semantic Map */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-map) + div details > summary {
+        background-color: rgba(241, 196, 15, 0.15) !important;
+        border-left: 3px solid #f1c40f !important;
+        color: #f1c40f !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-map) + div details > summary:hover {
+        color: #f1c40f !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-map) + div details > summary svg {
+        fill: #f1c40f !important;
+    }
+
+    /* 5. Ranking */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-ranking) + div details > summary {
+        background-color: rgba(230, 126, 34, 0.15) !important;
+        border-left: 3px solid #e67e22 !important;
+        color: #e67e22 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-ranking) + div details > summary:hover {
+        color: #e67e22 !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-ranking) + div details > summary svg {
+        fill: #e67e22 !important;
+    }
+
+    /* 6. Contextual Subgraph */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-subgraph) + div details > summary {
+        background-color: rgba(231, 76, 60, 0.15) !important;
+        border-left: 3px solid #e74c3c !important;
+        color: #e74c3c !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-subgraph) + div details > summary:hover {
+        color: #e74c3c !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-subgraph) + div details > summary svg {
+        fill: #e74c3c !important;
+    }
+
+    /* 7. Delta Graph */
+    div[data-testid="stVerticalBlock"] > div:has(span#section-delta) + div details > summary {
+        background-color: rgba(26, 188, 156, 0.15) !important;
+        border-left: 3px solid #1abc9c !important;
+        color: #1abc9c !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-delta) + div details > summary:hover {
+        color: #1abc9c !important;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(span#section-delta) + div details > summary svg {
+        fill: #1abc9c !important;
+    }
+
+    /* Hide the marker containers to prevent layout spacing issues */
+    div[data-testid="stVerticalBlock"] > div:has(span[id^="section-"]) {
+        display: none;
+    }
     </style>
     <div class="delyrism-header">
         <div class="delyrism-title">DELYRISM</div>
@@ -914,8 +1012,8 @@ with st.sidebar:
 
     # --- Data ----------------------------------------------------
     # --- Data ----------------------------------------------------
-    # st.markdown('<div class="sb-one">', unsafe_allow_html=True)
-    with st.expander("Data", expanded=True):
+    st.markdown('<span id="section-data"></span>', unsafe_allow_html=True)
+    with st.expander("Data", expanded=False):
         # Scan for structure files
         structures_dir = pathlib.Path(__file__).parent / "structures"
         structure_files = sorted([f.name for f in structures_dir.glob("*.json")]) if structures_dir.exists() else []
@@ -975,84 +1073,9 @@ with st.sidebar:
         symbols_map = _load_symbols_map(symbols_txt)
     # st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- Embeddings ----------------------------------------------
-    # st.markdown('<div class="sb-two">', unsafe_allow_html=True)
-    # --- Embeddings (sidebar) ---
-    with st.expander("Embeddings", expanded=False):
-        # ADD (audio): include audioclip as a backend option
-        backend_help = (
-            "Which encoder turns your inputs into vectors.\n"
-            "- Sentence-Transformer: good general text embeddings (e.g., all-mpnet-base-v2).\n"
-            "- Qwen2/Qwen3 Embedding: strong multilingual; uses token pooling (EOS by default).\n"
-            "- AudioCLIP / CLAP: enable AUDIO → vector (and text, for AudioCLIP). Use only if you need audio.\n"
-            "Changing backend re-embeds descriptors and context; results, dims, and speed can change."
-        )
-        # backend = st.selectbox("Embedding backend", [...], help=backend_help)
-        backend = st.selectbox("Backend", ["qwen3", "qwen2", "sentence-transformer", "clap"], index=0, help=backend_help)
-        hf_model_help = (
-            "Hugging Face repo ID for the embedding model (e.g., 'sentence-transformers/all-mpnet-base-v2', "
-            "'Qwen/Qwen2-Embedding', 'Qwen/Qwen3-Embedding-0.6B').\n"
-            "Pick an *embedding* model (not a causal LM) to get fixed-size vectors.\n"
-            "Changing this will re-embed everything (dimension, quality, and speed can differ)."
-        )
-        model = st.text_input("HF model override (optional)", help=hf_model_help)
-        pooling_help = (
-            "How token embeddings are collapsed into one vector per text.\n"
-            "- eos (default): last *non-padding* token. Length-safe and works well for Qwen-style encoders.\n"
-            "- mean: mask-aware average over all real tokens. Very robust for sentence embeddings.\n"
-            "- cls: first token ([CLS]). Best when the model was trained to use CLS (e.g., BERT family).\n"
-            "- last: final position regardless of padding/truncation. Can be brittle—avoid unless you need it.\n"
-            "All pooled vectors are L2-normalized. Keep the same setting when comparing runs."
-        )
-        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help)
-        embedder = get_embedder(backend, model or None, pooling)
-
-        if backend == "qwen3":  # (use `in ("qwen2","qwen3")` if you want both)
-            st.markdown("**Qwen prompting (instruction + context)**")
-
-            instr_help = (
-                "A global instruction prepended to every encode. Keep it stable across runs to make embeddings comparable.\n"
-                "Example: 'Instruction: Encode archetypal descriptors for retrieval and clustering.'"
-            )
-            qwen_instruction = st.text_area(
-                "Instruction (applied to all encodes)", height=80, help=instr_help,
-                placeholder="Instruction: Encode archetypal descriptors for retrieval and clustering."
-            )
-
-            ctx_mode_help = (
-                "Choose how to provide `Context:` for Qwen:\n"
-                "• None — no context added\n"
-                "• Global string — one context string for all descriptors (good for dataset-wide framing)\n"
-                "• Per-descriptor owner — uses each descriptor's owning symbol as its context"
-            )
-            qwen_ctx_mode = st.radio(
-                "Context mode", ["None", "Global string", "Per-descriptor owner"],
-                index=0, horizontal=False, help=ctx_mode_help
-            )
-
-            qwen_ctx_global = ""
-            if qwen_ctx_mode == "Global string":
-                qwen_ctx_global = st.text_input(
-                    "Global context string",
-                    help="Will be used for every descriptor as `Context:`. Example: 'Domain=archetypes; Audience=practitioners.'",
-                    placeholder="Domain=archetypes; Audience=practitioners."
-                )
-
-            # Apply to the embedder (these affect how `encode()` templates inputs)
-            embedder.default_instruction = (qwen_instruction or None)
-            if   qwen_ctx_mode == "Global string" and qwen_ctx_global.strip():
-                embedder.default_context = qwen_ctx_global.strip()
-            elif qwen_ctx_mode == "Per-descriptor owner":
-                # sentinel used by your SymbolSpace.__post_init__ to pass per-descriptor contexts
-                embedder.default_context = "Distributed"
-            else:
-                embedder.default_context = None
-        # (optional) tiny hint when audioclip is selected
-        if backend == "clap":
-            st.caption("CLAP enabled. Upload or record short audio clip in the Context panel to drive the analysis.")
-
+    
     # --- Context (panel-colored sliders) --------------------------
-    # st.markdown('<div class="sb-three panel-context">', unsafe_allow_html=True)
+    st.markdown('<span id="section-context"></span>', unsafe_allow_html=True)
     with st.expander("Context", expanded=True):
         sentence = st.text_area(
             "Context prompt",
@@ -1172,9 +1195,84 @@ with st.sidebar:
                 key=f"w_{s}",
             )
     # st.markdown('</div>', unsafe_allow_html=True)
+    # --- Embeddings ----------------------------------------------
+    # --- Embeddings (sidebar) ---
+    st.markdown('<span id="section-embeddings"></span>', unsafe_allow_html=True)
+    with st.expander("Embeddings", expanded=False):
+        # ADD (audio): include audioclip as a backend option
+        backend_help = (
+            "Which encoder turns your inputs into vectors.\n"
+            "- Sentence-Transformer: good general text embeddings (e.g., all-mpnet-base-v2).\n"
+            "- Qwen2/Qwen3 Embedding: strong multilingual; uses token pooling (EOS by default).\n"
+            "- AudioCLIP / CLAP: enable AUDIO → vector (and text, for AudioCLIP). Use only if you need audio.\n"
+            "Changing backend re-embeds descriptors and context; results, dims, and speed can change."
+        )
+        # backend = st.selectbox("Embedding backend", [...], help=backend_help)
+        backend = st.selectbox("Backend", ["qwen3", "qwen2", "sentence-transformer", "clap"], index=0, help=backend_help)
+        hf_model_help = (
+            "Hugging Face repo ID for the embedding model (e.g., 'sentence-transformers/all-mpnet-base-v2', "
+            "'Qwen/Qwen2-Embedding', 'Qwen/Qwen3-Embedding-0.6B').\n"
+            "Pick an *embedding* model (not a causal LM) to get fixed-size vectors.\n"
+            "Changing this will re-embed everything (dimension, quality, and speed can differ)."
+        )
+        model = st.text_input("HF model override (optional)", help=hf_model_help)
+        pooling_help = (
+            "How token embeddings are collapsed into one vector per text.\n"
+            "- eos (default): last *non-padding* token. Length-safe and works well for Qwen-style encoders.\n"
+            "- mean: mask-aware average over all real tokens. Very robust for sentence embeddings.\n"
+            "- cls: first token ([CLS]). Best when the model was trained to use CLS (e.g., BERT family).\n"
+            "- last: final position regardless of padding/truncation. Can be brittle—avoid unless you need it.\n"
+            "All pooled vectors are L2-normalized. Keep the same setting when comparing runs."
+        )
+        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help)
+        embedder = get_embedder(backend, model or None, pooling)
+
+        if backend == "qwen3":  # (use `in ("qwen2","qwen3")` if you want both)
+            st.markdown("**Qwen prompting (instruction + context)**")
+
+            instr_help = (
+                "A global instruction prepended to every encode. Keep it stable across runs to make embeddings comparable.\n"
+                "Example: 'Instruction: Encode archetypal descriptors for retrieval and clustering.'"
+            )
+            qwen_instruction = st.text_area(
+                "Instruction (applied to all encodes)", height=80, help=instr_help,
+                placeholder="Instruction: Encode archetypal descriptors for retrieval and clustering."
+            )
+
+            ctx_mode_help = (
+                "Choose how to provide `Context:` for Qwen:\n"
+                "• None — no context added\n"
+                "• Global string — one context string for all descriptors (good for dataset-wide framing)\n"
+                "• Per-descriptor owner — uses each descriptor's owning symbol as its context"
+            )
+            qwen_ctx_mode = st.radio(
+                "Context mode", ["None", "Global string", "Per-descriptor owner"],
+                index=0, horizontal=False, help=ctx_mode_help
+            )
+
+            qwen_ctx_global = ""
+            if qwen_ctx_mode == "Global string":
+                qwen_ctx_global = st.text_input(
+                    "Global context string",
+                    help="Will be used for every descriptor as `Context:`. Example: 'Domain=archetypes; Audience=practitioners.'",
+                    placeholder="Domain=archetypes; Audience=practitioners."
+                )
+
+            # Apply to the embedder (these affect how `encode()` templates inputs)
+            embedder.default_instruction = (qwen_instruction or None)
+            if   qwen_ctx_mode == "Global string" and qwen_ctx_global.strip():
+                embedder.default_context = qwen_ctx_global.strip()
+            elif qwen_ctx_mode == "Per-descriptor owner":
+                # sentinel used by your SymbolSpace.__post_init__ to pass per-descriptor contexts
+                embedder.default_context = "Distributed"
+            else:
+                embedder.default_context = None
+        # (optional) tiny hint when audioclip is selected
+        if backend == "clap":
+            st.caption("CLAP enabled. Upload or record short audio clip in the Context panel to drive the analysis.")
 
     # --- Shift settings (panel-colored sliders) -------------------
-    # st.markdown('<div class="panel-shift">', unsafe_allow_html=True)
+    st.markdown('<span id="section-map"></span>', unsafe_allow_html=True)
     with st.expander("Semantic Map", expanded=False):
         st.markdown("**Map display**")
         with_hulls = st.checkbox("Draw convex hulls", True)
@@ -1194,7 +1292,7 @@ with st.sidebar:
     # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Ranking (panel-colored sliders) --------------------------
-    # st.markdown('<div class="panel-ranking">', unsafe_allow_html=True)
+    st.markdown('<span id="section-ranking"></span>', unsafe_allow_html=True)
     with st.expander("Ranking (proposal)", expanded=False):
         tau_help = "Lower τ = sharper attention; higher τ = broader attention."
         tau = st.slider("Softmax temperature (τ)", 0.01, 2.0, 0.3, 0.01, help=tau_help)
@@ -1222,7 +1320,7 @@ with st.sidebar:
     # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Contextual Subgraph (panel-colored sliders) --------------
-    # st.markdown('<div class="panel-subgraph">', unsafe_allow_html=True)
+    st.markdown('<span id="section-subgraph"></span>', unsafe_allow_html=True)
     with st.expander("Contextual Subgraph (network)", expanded=False):
         topk_symbols_help = "How many highest-scoring symbols to show for this context."
         ctx_topk_symbols = st.slider("Top symbols", 1, 12, 3, help=topk_symbols_help)
@@ -1247,7 +1345,7 @@ with st.sidebar:
     # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Δ Graph (panel-colored sliders) --------------------------
-    # st.markdown('<div class="panel-delta">', unsafe_allow_html=True)
+    st.markdown('<span id="section-delta"></span>', unsafe_allow_html=True)
     with st.expander("Δ Graph", expanded=False):
         st.markdown("**Shift settings**")
         # add "pooling" to the strategy list
