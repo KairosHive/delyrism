@@ -398,6 +398,85 @@ def build_gemma_prompt(
 
 
 import transformers as tf
+import requests
+
+# ===== Cloudflare Workers AI =====
+CLOUDFLARE_MODELS = {
+    "Llama 3.1 (8B-Instruct)": "@cf/meta/llama-3.1-8b-instruct",
+    "Llama 3.2 (3B-Instruct)": "@cf/meta/llama-3.2-3b-instruct",
+    "Llama 3.2 (1B-Instruct)": "@cf/meta/llama-3.2-1b-instruct",
+    "Mistral (7B-Instruct)": "@cf/mistral/mistral-7b-instruct-v0.1",
+    "Qwen 1.5 (7B-Chat)": "@cf/qwen/qwen1.5-7b-chat-awq",
+    "Qwen 1.5 (1.8B-Chat)": "@cf/qwen/qwen1.5-1.8b-chat",
+    "Qwen 1.5 (0.5B-Chat)": "@cf/qwen/qwen1.5-0.5b-chat",
+    "Gemma (7B-IT-LoRA)": "@cf/google/gemma-7b-it-lora",
+}
+
+def generate_with_cloudflare(
+    messages: list,
+    *,
+    model: str = "@cf/meta/llama-3.1-8b-instruct",
+    account_id: str = None,
+    api_token: str = None,
+    max_tokens: int = 256,
+    temperature: float = 0.8,
+    top_p: float = 0.9,
+) -> str:
+    """
+    Call Cloudflare Workers AI for text generation.
+    Requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars or Streamlit secrets.
+    """
+    # Get credentials from env or secrets
+    account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID") or st.secrets.get("CLOUDFLARE_ACCOUNT_ID", "")
+    api_token = api_token or os.environ.get("CLOUDFLARE_API_TOKEN") or st.secrets.get("CLOUDFLARE_API_TOKEN", "")
+    
+    if not account_id or not api_token:
+        raise ValueError(
+            "Cloudflare credentials not found. Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN "
+            "as environment variables or in Streamlit secrets."
+        )
+    
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
+    
+    # Convert messages to Cloudflare format (same as OpenAI style)
+    cf_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        # Cloudflare doesn't support system role for all models - merge into user
+        if role == "system":
+            cf_messages.append({"role": "system", "content": content})
+        else:
+            cf_messages.append({"role": role, "content": content})
+    
+    payload = {
+        "messages": cf_messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data.get("success", False):
+            errors = data.get("errors", [])
+            raise RuntimeError(f"Cloudflare API error: {errors}")
+        
+        return data.get("result", {}).get("response", "").strip()
+    
+    except requests.exceptions.Timeout:
+        raise RuntimeError("Cloudflare API timeout. Try a smaller model or shorter output.")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Cloudflare API request failed: {e}")
+
 
 @st.cache_resource(show_spinner=False)
 def load_gemma(model_id: str, use_8bit: bool=False, force_gpu: bool=False):
@@ -2269,28 +2348,51 @@ with tab_story:
         
         # --- Top: Model Settings (Hidden by default for ergonomics) ---
         with st.expander("🧠 Model Configuration", expanded=False):
-            c_mod1, c_mod2 = st.columns([3, 1])
-            GEMMA_MODEL_PRESETS = {
-                "Qwen2.5 (0.5B-Instruct)": "Qwen/Qwen2.5-0.5B-Instruct",
-                "Qwen2.5 (1.5B-Instruct)": "Qwen/Qwen2.5-1.5B-Instruct",
-                "TinyLlama (1.1B-Chat)": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                "SmolLM2 (360M-Instruct)": "HuggingFaceTB/SmolLM2-360M-Instruct",
-                "─── Gated (need HF login) ───": None,
-                "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
-                "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",
-                "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it",
-            }
-            with c_mod1:
-                preset = st.selectbox("Model preset", list(GEMMA_MODEL_PRESETS.keys()), index=0)
-            with c_mod2:
-                st.write("") # spacer
-                st.write("") 
-                use_8bit = st.checkbox("8-bit Quant.", False, help="Lowers VRAM usage.")
+            # Backend toggle: Local vs Cloudflare
+            inference_backend = st.radio(
+                "Inference Backend",
+                ["☁️ Cloudflare Workers AI (fast, free tier)", "💻 Local (HuggingFace models)"],
+                index=0,
+                horizontal=True,
+                help="Cloudflare: fast cloud inference, no GPU needed. Local: runs on your machine/server."
+            )
+            use_cloudflare = "Cloudflare" in inference_backend
             
-            default_model_id = GEMMA_MODEL_PRESETS[preset] or ""
-            if GEMMA_MODEL_PRESETS[preset] is None:
-                st.warning("⚠️ Select a model above — this is just a separator.")
-            model_id = st.text_input("Repo ID", value=default_model_id, help="Hugging Face repo ID")
+            if use_cloudflare:
+                st.info("💡 Cloudflare Workers AI provides free inference. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in environment or Streamlit secrets.")
+                c_cf1, c_cf2 = st.columns([3, 1])
+                with c_cf1:
+                    cf_preset = st.selectbox("Cloudflare Model", list(CLOUDFLARE_MODELS.keys()), index=0)
+                with c_cf2:
+                    st.write("")  # spacer
+                cf_model_id = CLOUDFLARE_MODELS[cf_preset]
+                st.caption(f"Model: `{cf_model_id}`")
+                # Cloudflare doesn't need 8-bit or local settings
+                use_8bit = False
+                model_id = cf_model_id
+            else:
+                c_mod1, c_mod2 = st.columns([3, 1])
+                GEMMA_MODEL_PRESETS = {
+                    "Qwen2.5 (0.5B-Instruct)": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "Qwen2.5 (1.5B-Instruct)": "Qwen/Qwen2.5-1.5B-Instruct",
+                    "TinyLlama (1.1B-Chat)": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                    "SmolLM2 (360M-Instruct)": "HuggingFaceTB/SmolLM2-360M-Instruct",
+                    "─── Gated (need HF login) ───": None,
+                    "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
+                    "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",
+                    "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it",
+                }
+                with c_mod1:
+                    preset = st.selectbox("Model preset", list(GEMMA_MODEL_PRESETS.keys()), index=0)
+                with c_mod2:
+                    st.write("") # spacer
+                    st.write("") 
+                    use_8bit = st.checkbox("8-bit Quant.", False, help="Lowers VRAM usage.")
+                
+                default_model_id = GEMMA_MODEL_PRESETS[preset] or ""
+                if GEMMA_MODEL_PRESETS[preset] is None:
+                    st.warning("⚠️ Select a model above — this is just a separator.")
+                model_id = st.text_input("Repo ID", value=default_model_id, help="Hugging Face repo ID")
 
         # --- Middle: Creative Controls ---
         c_left, c_right = st.columns(2)
@@ -2369,48 +2471,67 @@ with tab_story:
             
             motifs = top_motifs_from_delta_graph(G_story, k_nodes=12, positive_only=pos_only)
 
-            # Free VRAM from embedder, then lazy-load Gemma
-            import gc, torch as _torch
-            try:
-                getattr(space.embedder, "to", lambda *_: None)("cpu")
-            except Exception:
-                pass
-            gc.collect()
-            if _torch.cuda.is_available():
-                _torch.cuda.empty_cache()
-
-            force_gpu = st.checkbox("Force GPU (no offload)", False)
-            tok, mdl = load_gemma(model_id, use_8bit=use_8bit, force_gpu=force_gpu)  
-
-            with st.expander("⚙️ Inference device map (debug)"):
-                lines = [f"torch.cuda.is_available(): {torch.cuda.is_available()}"]
-                if torch.cuda.is_available():
-                    lines.append(f"CUDA device: {torch.cuda.get_device_name(0)}")
-                dm = getattr(mdl, "hf_device_map", None)
-                lines.append(f"hf_device_map: {dm if dm else '(none)'}")
-                try:
-                    first_param_dev = next(mdl.parameters()).device
-                    lines.append(f"first parameter device: {first_param_dev}")
-                except StopIteration:
-                    pass
-                st.code("\n".join(lines), language="text")
-   
+            # Build prompt (same for both backends)
             messages = build_gemma_prompt(
                 context_sentence=sentence or "",
                 motifs=motifs,
                 tone=tone, pov=pov, tense=tense,
                 target_words=(story_len_words-20, story_len_words+20),
-                language=language,   # NEW
+                language=language,
             )
             # Words → tokens: ~1.5 tokens per word on average, plus buffer for completion
             estimated_tokens = int(story_len_words * 1.6) + 80
-            story = generate_with_gemma(
-                tok, mdl, messages,
-                max_new_tokens=estimated_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                repetition_penalty=1.05
-            )
+
+            # === Cloudflare Workers AI ===
+            if use_cloudflare:
+                try:
+                    story = generate_with_cloudflare(
+                        messages,
+                        model=model_id,
+                        max_tokens=estimated_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                    )
+                    st.success(f"✅ Generated via Cloudflare (`{model_id}`)")
+                except Exception as e:
+                    st.error(f"Cloudflare API error: {e}")
+                    story = ""
+            
+            # === Local HuggingFace model ===
+            else:
+                # Free VRAM from embedder, then lazy-load model
+                import gc, torch as _torch
+                try:
+                    getattr(space.embedder, "to", lambda *_: None)("cpu")
+                except Exception:
+                    pass
+                gc.collect()
+                if _torch.cuda.is_available():
+                    _torch.cuda.empty_cache()
+
+                force_gpu = st.checkbox("Force GPU (no offload)", False)
+                tok, mdl = load_gemma(model_id, use_8bit=use_8bit, force_gpu=force_gpu)  
+
+                with st.expander("⚙️ Inference device map (debug)"):
+                    lines = [f"torch.cuda.is_available(): {torch.cuda.is_available()}"]
+                    if torch.cuda.is_available():
+                        lines.append(f"CUDA device: {torch.cuda.get_device_name(0)}")
+                    dm = getattr(mdl, "hf_device_map", None)
+                    lines.append(f"hf_device_map: {dm if dm else '(none)'}")
+                    try:
+                        first_param_dev = next(mdl.parameters()).device
+                        lines.append(f"first parameter device: {first_param_dev}")
+                    except StopIteration:
+                        pass
+                    st.code("\n".join(lines), language="text")
+       
+                story = generate_with_gemma(
+                    tok, mdl, messages,
+                    max_new_tokens=estimated_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    repetition_penalty=1.05
+                )
 
             # Persist for display on future reruns without regenerating
             st.session_state["story_text"] = story
