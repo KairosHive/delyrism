@@ -917,41 +917,59 @@ with st.sidebar:
         structures_dir = pathlib.Path(__file__).parent / "structures"
         structure_files = sorted([f.name for f in structures_dir.glob("*.json")]) if structures_dir.exists() else []
         
-        structure_options = ["Custom / Upload"] + structure_files
-        selected_structure = st.selectbox("Symbolic Structure", structure_options, index=0)
+        # Callback to load preset into session state
+        def on_structure_change():
+            sel = st.session_state.get("structure_select")
+            if sel and sel != "Custom":
+                p = structures_dir / sel
+                if p.exists():
+                    st.session_state["symbol_json_text"] = p.read_text(encoding="utf-8")
 
-        symbols_map: Dict[str, List[str]] = {}
-
-        if selected_structure == "Custom / Upload":
-            # 1) File upload (takes precedence if present)
-            uploaded = st.file_uploader("Upload symbols→descriptors JSON", type=["json"])
-
-            if uploaded is not None:
-                try:
-                    raw = uploaded.read().decode("utf-8")
-                    symbols_map = _load_symbols_map(raw)  # uses your str->dict helper
-                    st.success("Loaded JSON from file.")
-                except Exception as e:
-                    st.error(f"Failed to read uploaded file: {e}")
-                    symbols_map = _default_symbols_map()
+        # Initialize JSON text in session state if missing
+        if "symbol_json_text" not in st.session_state:
+            def_path = structures_dir / "elements.json"
+            if def_path.exists():
+                st.session_state["symbol_json_text"] = def_path.read_text(encoding="utf-8")
             else:
-                # 2) Text area fallback when no file uploaded
-                symbols_txt = st.text_area(
-                    "…or paste JSON here",
-                    value=json.dumps(_default_symbols_map(), ensure_ascii=False, indent=2),
-                    height=210,
-                    help="Format: {symbol: [descriptor, ...]}",
-                )
-                symbols_map = _load_symbols_map(symbols_txt)
-        else:
-            # Load selected preset
-            try:
-                file_path = structures_dir / selected_structure
-                symbols_map = _load_symbols_map(file_path.read_text(encoding="utf-8"))
-                st.success(f"Loaded {selected_structure}")
-            except Exception as e:
-                st.error(f"Failed to load {selected_structure}: {e}")
-                symbols_map = _default_symbols_map()
+                st.session_state["symbol_json_text"] = json.dumps(_default_symbols_map(), indent=2, ensure_ascii=False)
+
+        # Dropdown options
+        opts = ["Custom"] + structure_files
+        # Default to elements.json if present
+        try:
+            def_idx = opts.index("elements.json")
+        except ValueError:
+            def_idx = 0
+
+        st.selectbox(
+            "Symbolic Structure", 
+            opts, 
+            index=def_idx, 
+            key="structure_select", 
+            on_change=on_structure_change,
+            help="Select a preset to load its JSON. You can then edit it below."
+        )
+
+        # File uploader (always visible)
+        uploaded = st.file_uploader("Import JSON", type=["json"], key="json_uploader")
+        if uploaded is not None:
+            content = uploaded.getvalue().decode("utf-8")
+            u_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+            # Only update if this is a new upload (hash check)
+            if st.session_state.get("last_upload_hash") != u_hash:
+                st.session_state["symbol_json_text"] = content
+                st.session_state["last_upload_hash"] = u_hash
+                st.experimental_rerun()
+
+        # JSON Editor (always visible)
+        symbols_txt = st.text_area(
+            "JSON Editor",
+            key="symbol_json_text",
+            height=280,
+            help="Edit the structure here. Changes apply immediately."
+        )
+        
+        symbols_map = _load_symbols_map(symbols_txt)
     # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Embeddings ----------------------------------------------
