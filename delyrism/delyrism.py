@@ -278,7 +278,12 @@ class TextEmbedder:
         try:
             print(f"[Embedder] Loading Qwen model: {model_name}")
             self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self._backend = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(self.device)
+            # Use low_cpu_mem_usage=True to optimize loading
+            self._backend = AutoModel.from_pretrained(
+                model_name, 
+                trust_remote_code=True, 
+                low_cpu_mem_usage=True
+            ).to(self.device)
             self._backend.eval()
             # probe dim with EOS pooling
             with torch.no_grad():
@@ -363,19 +368,29 @@ class TextEmbedder:
         texts: List[str],
         instruction: Optional[str] = None,
         context: Optional[str] = None,
+        batch_size: int = 32  # Process in chunks to save RAM
     ):
-        # --- Qwen path (unchanged) ---
+        # --- Qwen path ---
         if self._backend is not None and self._tokenizer is not None and self.backend_type in ("qwen2","qwen3"):
             inputs = self._apply_prompt_template(texts, instruction, context)
-            with torch.no_grad():
-                toks = self._tokenizer(inputs, padding=True, truncation=True, return_tensors="pt").to(self.device)
-                out = self._backend(**toks)
-                pooled = self._pool(out.last_hidden_state, toks["attention_mask"])
-                return pooled.cpu().numpy().astype(np.float32)
+            all_embeddings = []
+            
+            # Batch processing loop
+            for i in range(0, len(inputs), batch_size):
+                batch_inputs = inputs[i : i + batch_size]
+                with torch.no_grad():
+                    toks = self._tokenizer(batch_inputs, padding=True, truncation=True, return_tensors="pt").to(self.device)
+                    out = self._backend(**toks)
+                    pooled = self._pool(out.last_hidden_state, toks["attention_mask"])
+                    all_embeddings.append(pooled.cpu().numpy().astype(np.float32))
+            
+            if not all_embeddings:
+                return np.array([], dtype=np.float32)
+            return np.concatenate(all_embeddings, axis=0)
 
-        # --- SentenceTransformer (unchanged) ---
+        # --- SentenceTransformer (handles batching internally usually, but we can force it if needed) ---
         if self.backend_type == "original" and self._backend is not None:
-            return np.asarray(self._backend.encode(texts, normalize_embeddings=True), dtype=np.float32)
+            return np.asarray(self._backend.encode(texts, normalize_embeddings=True, batch_size=batch_size), dtype=np.float32)
 
         # --- NEW: AudioCLIP text path (open_clip) ---
         if self.backend_type == "audioclip":

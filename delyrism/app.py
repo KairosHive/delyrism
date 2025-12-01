@@ -1263,8 +1263,25 @@ with st.sidebar:
             "- AudioCLIP / CLAP: enable AUDIO → vector (and text, for AudioCLIP). Use only if you need audio.\n"
             "Changing backend re-embeds descriptors and context; results, dims, and speed can change."
         )
-        # backend = st.selectbox("Embedding backend", [...], help=backend_help)
-        backend = st.selectbox("Backend", ["qwen3", "qwen2", "sentence-transformer", "clap"], index=0, help=backend_help, key="backend_selection")
+        
+        def on_backend_change():
+            # Auto-calibrate Beta (Shift Strength) based on model sensitivity
+            b = st.session_state.backend_selection
+            if b in ["sentence-transformer", "qwen2"]:
+                st.session_state["beta_slider"] = 0.5  # Lower beta for high-similarity models
+            else:
+                st.session_state["beta_slider"] = 1.2  # Higher beta for Qwen3/others
+
+        backend = st.selectbox(
+            "Backend", 
+            ["qwen3", "qwen2", "sentence-transformer", "clap"], 
+            index=0, 
+            help=backend_help, 
+            key="backend_selection",
+            on_change=on_backend_change
+        )
+        if backend in ["qwen3", "qwen2"]:
+            st.warning("⚠️ Qwen models require ~2.5GB RAM. If on a free/starter cloud instance, this may crash or run very slowly. Use 'sentence-transformer' for speed.")
         hf_model_help = (
             "Hugging Face repo ID for the embedding model (e.g., 'sentence-transformers/all-mpnet-base-v2', "
             "'Qwen/Qwen2-Embedding', 'Qwen/Qwen3-Embedding-0.6B').\n"
@@ -1486,7 +1503,7 @@ with st.sidebar:
         else:
             gamma = 0.5
 
-        beta = st.slider("Shift strength β", 0.0, 2.0, 1.2, 0.05, disabled=(shift_mode == "pooling"))  # β not used by pooling
+        beta = st.slider("Shift strength β", 0.0, 2.0, 1.2, 0.05, disabled=(shift_mode == "pooling"), key="beta_slider")  # β not used by pooling
         
         
         st.markdown("**Graph network settings**")
