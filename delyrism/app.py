@@ -20,10 +20,8 @@
 from __future__ import annotations
 import io
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
-from typing import Sequence
-from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
  
 import streamlit as st
@@ -1114,7 +1112,7 @@ with st.sidebar:
     with st.expander("Context", expanded=True):
         sentence = st.text_area(
             "Context prompt",
-            value="The history of the world encapsulated in a single cell",
+            value="Flooding spirits dancing around floating suns",
             placeholder="e.g., A ceremony by the river focusing on transformation and healing",
             height=90,
             key="ctx_sentence",
@@ -1307,9 +1305,20 @@ with st.sidebar:
             "- mean: mask-aware average over all real tokens. Very robust for sentence embeddings.\n"
             "- cls: first token ([CLS]). Best when the model was trained to use CLS (e.g., BERT family).\n"
             "- last: final position regardless of padding/truncation. Can be brittle—avoid unless you need it.\n"
-            "All pooled vectors are L2-normalized. Keep the same setting when comparing runs."
+            "All pooled vectors are L2-normalized. Keep the same setting when comparing runs.\n\n"
+            "⚠️ Pooling only applies to Qwen models. SentenceTransformer/CLAP use their own built-in pooling."
         )
-        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help, key="embedding_pooling")
+        pooling_disabled = backend in ["sentence-transformer", "clap"]
+        pooling_index = 1 if pooling_disabled else 0  # default to 'mean' label when disabled
+        pooling = st.selectbox(
+            "Pooling", ["eos", "mean", "cls", "last"], 
+            index=pooling_index, 
+            help=pooling_help, 
+            key="embedding_pooling",
+            disabled=pooling_disabled
+        )
+        if pooling_disabled:
+            st.caption(f"ℹ️ {backend} uses its own internal pooling — this setting is ignored.")
         embedder = get_embedder(backend, model or None, pooling)
 
         if backend == "qwen3":  # (use `in ("qwen2","qwen3")` if you want both)
@@ -1522,6 +1531,9 @@ with st.sidebar:
         within_symbol = st.checkbox("Within-symbol pairs only", False)
         sym_filter_sel = st.multiselect("Or restrict to symbols", sym_preview)
         top_abs_edges = st.slider("Top |Δ| edges", 2, 100, 10, 1)
+        min_abs_delta = st.slider("Min |Δ| threshold", 0.0001, 0.1, 0.01, 0.0005, 
+                                   format="%.4f",
+                                   help="Lower = more edges appear. Raise if graph too cluttered. Try 0.001 or lower if no graph appears.")
         connected_only = st.checkbox("Connected nodes only", True)
         
     # st.markdown('</div>', unsafe_allow_html=True)
@@ -2089,6 +2101,7 @@ with tab_explore:
                 pool_type=pool_type,
                 pool_w=pool_w,
                 top_abs_edges=top_abs_edges,
+                min_abs_delta=min_abs_delta,
                 sym_filter=sym_filter_arg,
                 within_symbol=within_symbol,
                 connected_only=connected_only,
@@ -2112,10 +2125,13 @@ with tab_explore:
                 figsize=(7.0, 2.0),        # ⬅️ smaller figure
                 node_size_base=130,        # ⬇️ shrink nodes
                 node_size_scale=700.0,
-                edge_width_min=0.4,        # ⬇️ thinner edges
+                edge_width_min=0.4,        # ⬅️ thinner edges
                 edge_width_max=3.0,
             )
-            st.pyplot(fig_delta, clear_figure=True, use_container_width=False)  # prevent auto-stretch
+            if G.number_of_edges() == 0:
+                st.info("📊 No edges in Δ graph. Try: lower 'Min |Δ| threshold', increase 'Shift strength β', add a context sentence, or uncheck 'Within-symbol pairs only'.")
+            else:
+                st.pyplot(fig_delta, clear_figure=True, use_container_width=False)  # prevent auto-stretch
         except Exception as e:
             st.warning(f"Δ graph failed: {e}")
 
@@ -2232,9 +2248,10 @@ with tab_story:
                     pool_type=pool_type,
                     pool_w=pool_w,
                     top_abs_edges=top_abs_edges,
+                    min_abs_delta=min_abs_delta,
                     sym_filter=sym_filter_sel if sym_filter_sel else None,
                     within_symbol=within_symbol,
-                    connected_only=connected_only,          # <-- same as Explorer now
+                    connected_only=connected_only,
                     membership_alpha=membership_alpha,
                 )
                 st.session_state["delta_graph"] = G_story

@@ -1,0 +1,62 @@
+{
+"IONIAN": [
+    "ionian", "major", "joy", "brightness", "triumph",
+    "clarity", "celebration", "confidence", "happiness", "resolution",
+    "completion", "home"
+],
+"DORIAN": [
+    "dorian", "melancholy", "minor", "introspection", "cool",
+    "jazz", "sophistication", "bittersweet", "contemplation", "nocturnal",
+    "wisdom", "stoic"
+],
+"PHRYGIAN": [
+    "phrygian", "tension", "exotic", "spanish", "darkness",
+    "flamenco", "intensity", "mystery", "danger", "ancient",
+    "descent", "severity"
+],
+"LYDIAN": [
+    "lydian", "wonder", "dreamy", "floating", "ethereal",
+    "magic", "expansion", "sci-fi", "ascension", "hope",
+    "shimmer", "transcendence"
+],
+"MIXOLYDIAN": [
+    "mixolydian", "swagger", "bluesy", "rock", "confident",
+    "unresolved", "funky", "earthy", "open", "adventure",
+    "wandering", "folk"
+],
+"AEOLIAN": [
+    "aeolian", "natural minor", "sorrow", "darkness", "sadness",
+    "depth", "emotional", "tragedy", "gothic", "autumn",
+    "longing", "reflection"
+],
+"LOCRIAN": [
+    "locrian", "dread", "unstable", "horror", "dissonance",
+    "diminished", "anxiety", "unease", "chaos", "void",
+    "dissolution", "nightmare"
+],
+"CHROMATIC": [
+    "chromatic", "all tones", "tension", "complexity", "ambiguity",
+    "modernism", "anxiety", "suspense", "movement", "instability",
+    "search", "wandering"
+],
+"PENTATONIC": [
+    "pentatonic", "folk", "ancient", "universal", "simplicity",
+    "eastern", "grounding", "timeless", "accessible", "primal",
+    "world music", "innocence"
+],
+"HARMONIC MINOR": [
+    "harmonic minor", "exotic", "middle eastern", "drama", "classical",
+    "augmented", "tension", "mystery", "desert", "ornate",
+    "passionate", "yearning"
+],
+"BLUES": [
+    "blues", "longing", "soul", "bent notes", "expression",
+    "suffering", "catharsis", "roots", "storytelling", "resilience",
+    "rawness", "truth"
+],
+"DRONE": [
+    "drone", "eternal", "meditation", "stillness", "foundation",
+    "ambient", "overtones", "sacred", "continuity", "hypnotic",
+    "infinite", "presence"
+]
+}

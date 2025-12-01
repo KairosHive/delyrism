@@ -1,0 +1,62 @@
+{
+"RAT": [
+    "rat", "cleverness", "resourcefulness", "adaptability", "ambition",
+    "opportunism", "survival", "cunning", "wealth", "midnight",
+    "intelligence", "industrious"
+],
+"OX": [
+    "ox", "diligence", "strength", "dependability", "determination",
+    "patience", "steadfastness", "perseverance", "earth", "stability",
+    "endurance", "fortitude"
+],
+"TIGER": [
+    "tiger", "bravery", "power", "passion", "daring",
+    "confidence", "leadership", "courage", "authority", "intensity",
+    "ferocity", "vitality"
+],
+"RABBIT": [
+    "rabbit", "gentleness", "elegance", "sensitivity", "compassion",
+    "grace", "diplomacy", "peace", "moon", "luck",
+    "intuition", "serenity"
+],
+"DRAGON": [
+    "dragon", "power", "nobility", "honor", "luck",
+    "success", "celestial", "transformation", "wisdom", "majesty",
+    "magic", "divine"
+],
+"SNAKE": [
+    "snake", "wisdom", "intuition", "mystery", "elegance",
+    "transformation", "rebirth", "cunning", "healing", "secrets",
+    "introspection", "renewal"
+],
+"HORSE": [
+    "horse", "freedom", "energy", "independence", "adventure",
+    "speed", "travel", "passion", "spirit", "movement",
+    "endurance", "wildness"
+],
+"GOAT": [
+    "goat", "gentleness", "creativity", "kindness", "peace",
+    "harmony", "artistry", "sensitivity", "empathy", "beauty",
+    "nurturing", "dreaminess"
+],
+"MONKEY": [
+    "monkey", "cleverness", "curiosity", "playfulness", "wit",
+    "innovation", "mischief", "intelligence", "versatility", "trickster",
+    "agility", "humor"
+],
+"ROOSTER": [
+    "rooster", "confidence", "punctuality", "honesty", "pride",
+    "dawn", "awakening", "courage", "vigilance", "precision",
+    "boldness", "diligence"
+],
+"DOG": [
+    "dog", "loyalty", "faithfulness", "honesty", "protection",
+    "friendship", "companionship", "justice", "courage", "devotion",
+    "guardianship", "integrity"
+],
+"PIG": [
+    "pig", "generosity", "abundance", "sincerity", "compassion",
+    "wealth", "fortune", "tolerance", "optimism", "prosperity",
+    "kindness", "contentment"
+]
+}

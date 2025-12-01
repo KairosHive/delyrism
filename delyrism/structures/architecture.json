@@ -1,0 +1,62 @@
+{
+"THE TEMPLE": [
+    "temple", "sacred", "devotion", "ritual", "worship",
+    "transcendence", "altar", "sanctuary", "pilgrimage", "divine",
+    "reverence", "ceremony"
+],
+"THE LABYRINTH": [
+    "labyrinth", "journey", "confusion", "initiation", "path",
+    "center", "maze", "wandering", "discovery", "mystery",
+    "transformation", "meditation"
+],
+"THE TOWER": [
+    "tower", "ambition", "isolation", "perspective", "height",
+    "pride", "vigilance", "ascent", "power", "observation",
+    "imprisonment", "aspiration"
+],
+"THE BRIDGE": [
+    "bridge", "connection", "crossing", "transition", "spanning",
+    "union", "passage", "overcoming", "link", "trust",
+    "vulnerability", "progress"
+],
+"THE RUIN": [
+    "ruin", "decay", "memory", "impermanence", "history",
+    "loss", "time", "remnant", "nostalgia", "entropy",
+    "ghost", "foundation"
+],
+"THE THRESHOLD": [
+    "threshold", "doorway", "liminal", "entry", "invitation",
+    "boundary", "permission", "transition", "guardian", "beginning",
+    "choice", "passage"
+],
+"THE GARDEN": [
+    "garden", "cultivation", "paradise", "growth", "tending",
+    "beauty", "nature", "abundance", "patience", "creation",
+    "refuge", "harmony"
+],
+"THE PRISON": [
+    "prison", "confinement", "limitation", "restriction", "captivity",
+    "shadow", "punishment", "walls", "isolation", "consequence",
+    "bondage", "reflection"
+],
+"THE LIBRARY": [
+    "library", "knowledge", "wisdom", "preservation", "silence",
+    "accumulation", "archives", "learning", "memory", "collection",
+    "secrets", "infinite"
+],
+"THE SANCTUARY": [
+    "sanctuary", "refuge", "safety", "asylum", "peace",
+    "protection", "healing", "respite", "sacred space", "shelter",
+    "quiet", "restoration"
+],
+"THE ARENA": [
+    "arena", "contest", "spectacle", "confrontation", "performance",
+    "judgment", "combat", "public", "trial", "competition",
+    "survival", "glory"
+],
+"THE CRYPT": [
+    "crypt", "underground", "burial", "ancestors", "secrets",
+    "preservation", "darkness", "hidden", "death", "memory",
+    "descent", "treasure"
+]
+}
