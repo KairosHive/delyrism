@@ -43,6 +43,11 @@ except Exception:
 import matplotlib
 matplotlib.use("Agg")  # render off-screen
 import matplotlib.pyplot as plt
+import threading
+
+# Global lock for pyplot to prevent race conditions between users
+_pyplot_lock = threading.Lock()
+
 plt.show = lambda *a, **k: None   # silence interactive popups
 plt.sci  = lambda *a, **k: None   # avoid sci() errors
 
@@ -746,46 +751,48 @@ def fig_from_callable(callable_fn, *args, **kwargs):
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-    # Avoid RuntimeWarning: More than 20 figures have been opened
-    plt.close('all')
+    # Acquire lock to ensure thread safety for global pyplot state
+    with _pyplot_lock:
+        # Avoid RuntimeWarning: More than 20 figures have been opened
+        plt.close('all')
 
-    # Keep original close; temporarily block closes inside callable_fn
-    _orig_close = plt.close
-    try:
-        plt.close = lambda *a, **k: None  # prevent premature figure teardown
+        # Keep original close; temporarily block closes inside callable_fn
+        _orig_close = plt.close
+        try:
+            plt.close = lambda *a, **k: None  # prevent premature figure teardown
 
-        # Ensure there is a current figure before drawing
-        _ = plt.figure()
-        callable_fn(*args, **kwargs)
+            # Ensure there is a current figure before drawing
+            _ = plt.figure()
+            callable_fn(*args, **kwargs)
 
-        fig = plt.gcf()
-        
-        # Apply dark theme styling (transparent background, white text)
-        fig.patch.set_alpha(0.0)
-        for ax in fig.axes:
-            ax.patch.set_alpha(0.0)
-            ax.xaxis.label.set_color('white')
-            ax.yaxis.label.set_color('white')
-            ax.title.set_color('white')
-            ax.tick_params(axis='x', colors='white')
-            ax.tick_params(axis='y', colors='white')
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-            if ax.get_legend():
-                legend = ax.get_legend()
-                legend.get_frame().set_alpha(0.0)
-                legend.get_frame().set_linewidth(0.0)
-                plt.setp(legend.get_texts(), color='white')
-                if legend.get_title():
-                    legend.get_title().set_color('white')
+            fig = plt.gcf()
+            
+            # Apply dark theme styling (transparent background, white text)
+            fig.patch.set_alpha(0.0)
+            for ax in fig.axes:
+                ax.patch.set_alpha(0.0)
+                ax.xaxis.label.set_color('white')
+                ax.yaxis.label.set_color('white')
+                ax.title.set_color('white')
+                ax.tick_params(axis='x', colors='white')
+                ax.tick_params(axis='y', colors='white')
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+                if ax.get_legend():
+                    legend = ax.get_legend()
+                    legend.get_frame().set_alpha(0.0)
+                    legend.get_frame().set_linewidth(0.0)
+                    plt.setp(legend.get_texts(), color='white')
+                    if legend.get_title():
+                        legend.get_title().set_color('white')
 
-        # Make sure the figure has a canvas so Streamlit can savefig
-        if fig.canvas is None:
-            FigureCanvasAgg(fig)
-        return fig
-    finally:
-        # Restore normal behavior
-        plt.close = _orig_close
+            # Make sure the figure has a canvas so Streamlit can savefig
+            if fig.canvas is None:
+                FigureCanvasAgg(fig)
+            return fig
+        finally:
+            # Restore normal behavior
+            plt.close = _orig_close
 
 
 def focus_to_tau(focus: float, tau_min: float = 0.01, tau_max: float = 0.2) -> float:

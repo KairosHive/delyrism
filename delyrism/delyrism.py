@@ -1026,42 +1026,24 @@ class SymbolSpace:
              title="Descriptor map"):
         """
         Minimal, original-style descriptor map.
-
-        - Points fed to reducer are ordered per symbol:
-        [descriptors of S] then [centroid of S] (if include_centroids), then next symbol.
-        - Centroids (if included) are NOT normalized, matching the original behavior.
+        Uses cached reducer to avoid re-fitting UMAP/PCA on every call.
         """
 
-        # --- choose reducer ---
-        if method == "umap" and _HAS_UMAP:
-            reducer = umap.UMAP(
-                n_neighbors=n_neighbors, min_dist=0.1,
-                metric="cosine", random_state=42
-            )
+        # --- Use cached reducer/projection ---
+        reducer, Z_fit, X_fit, slices = self.get_cached_reducer_and_projection(
+            method=method, n_neighbors=n_neighbors,
+            include_centroids=include_centroids, normalize_centroids=normalize_centroids
+        )
+
+        if method == "umap":
             xlbl, ylbl = "UMAP 1", "UMAP 2"
         elif method == "tsne":
-            reducer = TSNE(
-                n_components=2, metric="cosine",
-                random_state=42, init="random", perplexity=30
-            )
             xlbl, ylbl = "t-SNE 1", "t-SNE 2"
         else:
-            reducer = PCA(n_components=2, random_state=42)
             xlbl, ylbl = "PCA 1", "PCA 2"
 
-        # --- stack points in legacy order ---
-        all_points = []
-        for s in self.symbols:
-            idx = self.symbol_to_idx[s]
-            all_points.append(self.D[idx])  # descriptors
-            if include_centroids:
-                c = self.D[idx].mean(0)      # centroid (not L2-normalized)
-                if normalize_centroids:
-                    c = c / (np.linalg.norm(c) + 1e-9)
-                all_points.append(c[None, :])
-
-        X = np.concatenate(all_points, axis=0)
-        Z = reducer.fit_transform(X)
+        # Z is just the cached fit
+        Z = Z_fit
 
         # --- colors per symbol ---
         colors = plt.cm.tab20(np.linspace(0, 1, len(self.symbols)))
@@ -1069,19 +1051,28 @@ class SymbolSpace:
 
         # --- plot following the same indexing pattern ---
         plt.figure(figsize=figsize)
-        cidx = 0
+        
+        # Reconstruct plotting loop using slices from the cached projection
         for s in self.symbols:
+            if s not in slices: continue
+            start, end = slices[s]
+            
+            # The slice includes descriptors + centroid (if included)
+            # We need to separate them based on logic in get_cached_reducer_and_projection
+            
             idx = self.symbol_to_idx[s]
-            Zi = Z[cidx : cidx + len(idx)]            # descriptors
+            n_desc = len(idx)
+            
+            # Descriptors are at the start of the slice
+            Zi = Z[start : start + n_desc]
+            
             plt.scatter(Zi[:, 0], Zi[:, 1], s=40, alpha=0.85, color=color_dict[s], label=s)
-            cidx += len(idx)
 
-            # centroid marker (immediately after descriptors in Z)
-            if include_centroids:
-                cz = Z[cidx]
+            # Centroid is at the end (if included)
+            if include_centroids and n_desc > 0:
+                cz = Z[start + n_desc]
                 plt.scatter(cz[0], cz[1], s=220, color=color_dict[s],
                             edgecolor="black", marker="*", alpha=0.95, zorder=10)
-                cidx += 1
 
             # convex hull over descriptors
             if with_hulls and _HAS_SCI and len(idx) >= 3:
