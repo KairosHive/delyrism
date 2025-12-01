@@ -403,9 +403,10 @@ import transformers as tf
 def load_gemma(model_id: str, use_8bit: bool=False, force_gpu: bool=False):
     """
     Works with:
-      • Gemma 2 chat (e.g., google/gemma-2-2b-it)
-      • Gemma 3 1B chat (google/gemma-3-1b-it)
-      • Gemma 3n E2B chat (google/gemma-3n-e2b-it)  -> needs transformers >= 4.50.0
+      • Qwen2.5-Instruct models (ungated, recommended)
+      • TinyLlama-Chat (ungated)
+      • SmolLM2-Instruct (ungated)
+      • Gemma 2/3 chat (⚠️ gated - requires HF login)
     Returns (tok_or_proc, model).
     """
     kw = dict(low_cpu_mem_usage=True)
@@ -492,8 +493,15 @@ def generate_with_gemma(tok_or_proc, mdl, messages, *, max_new_tokens=180, tempe
     try:
         if is_processor(tok_or_proc):
             inputs = tok_or_proc.apply_chat_template(
-                normalized, add_generation_prompt=True, return_tensors="pt"
+                normalized, add_generation_prompt=True, return_tensors="pt", tokenize=True
             )
+            # Some processors return a string or tensor, not a dict
+            if isinstance(inputs, str):
+                # It returned a string prompt, tokenize it manually
+                inputs = tok_or_proc(text=inputs, return_tensors="pt")
+            elif isinstance(inputs, torch.Tensor):
+                # It returned just input_ids tensor
+                inputs = {"input_ids": inputs}
         else:
             prompt = tok_or_proc.apply_chat_template(normalized, tokenize=False, add_generation_prompt=True)
             inputs = tok_or_proc(prompt, return_tensors="pt")
@@ -508,9 +516,24 @@ def generate_with_gemma(tok_or_proc, mdl, messages, *, max_new_tokens=180, tempe
         else:
             raise
 
-    # move to model device
-    inputs = {k: v.to(mdl.device) for k, v in inputs.items()}
-    input_len = inputs["input_ids"].shape[1]
+    # move to model device - handle dict, BatchEncoding, and tensor inputs
+    if isinstance(inputs, torch.Tensor):
+        # Pure tensor case
+        inputs = inputs.to(mdl.device)
+        input_len = inputs.shape[1]
+        inputs = {"input_ids": inputs}
+    elif hasattr(inputs, "to") and hasattr(inputs, "input_ids"):
+        # BatchEncoding or similar dict-like with .to() method
+        inputs = inputs.to(mdl.device)
+        input_len = inputs["input_ids"].shape[1]
+        # Convert to plain dict for generate()
+        inputs = {k: v for k, v in inputs.items() if isinstance(v, torch.Tensor)}
+    elif isinstance(inputs, dict):
+        # Plain dict
+        inputs = {k: v.to(mdl.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+        input_len = inputs["input_ids"].shape[1]
+    else:
+        raise TypeError(f"Unexpected inputs type: {type(inputs)}")
 
     # eos/pad + decoder for text
     if is_processor(tok_or_proc):
@@ -2248,6 +2271,11 @@ with tab_story:
         with st.expander("🧠 Model Configuration", expanded=False):
             c_mod1, c_mod2 = st.columns([3, 1])
             GEMMA_MODEL_PRESETS = {
+                "Qwen2.5 (0.5B-Instruct)": "Qwen/Qwen2.5-0.5B-Instruct",
+                "Qwen2.5 (1.5B-Instruct)": "Qwen/Qwen2.5-1.5B-Instruct",
+                "TinyLlama (1.1B-Chat)": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                "SmolLM2 (360M-Instruct)": "HuggingFaceTB/SmolLM2-360M-Instruct",
+                "─── Gated (need HF login) ───": None,
                 "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
                 "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",
                 "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it",
@@ -2259,7 +2287,9 @@ with tab_story:
                 st.write("") 
                 use_8bit = st.checkbox("8-bit Quant.", False, help="Lowers VRAM usage.")
             
-            default_model_id = GEMMA_MODEL_PRESETS[preset]
+            default_model_id = GEMMA_MODEL_PRESETS[preset] or ""
+            if GEMMA_MODEL_PRESETS[preset] is None:
+                st.warning("⚠️ Select a model above — this is just a separator.")
             model_id = st.text_input("Repo ID", value=default_model_id, help="Hugging Face repo ID")
 
         # --- Middle: Creative Controls ---
@@ -2275,7 +2305,7 @@ with tab_story:
             with c_l2:
                 tense = st.selectbox("Tense", ["present", "past"], index=0)
             
-            story_len_words = st.slider("Length (words)", 60, 300, 140, 10)
+            story_len_words = st.slider("Length (words)", 80, 500, 180, 20)
 
         with c_right:
             st.markdown("#### 🎨 Atmosphere & Chaos")
@@ -2369,15 +2399,17 @@ with tab_story:
                 context_sentence=sentence or "",
                 motifs=motifs,
                 tone=tone, pov=pov, tense=tense,
-                target_words=(story_len_words-30, story_len_words+30),
+                target_words=(story_len_words-20, story_len_words+20),
                 language=language,   # NEW
             )
+            # Words → tokens: ~1.5 tokens per word on average, plus buffer for completion
+            estimated_tokens = int(story_len_words * 1.6) + 80
             story = generate_with_gemma(
                 tok, mdl, messages,
-                max_new_tokens=story_len_words + 60,
+                max_new_tokens=estimated_tokens,
                 temperature=temperature,
                 top_p=top_p,
-                repetition_penalty=1.07
+                repetition_penalty=1.05
             )
 
             # Persist for display on future reruns without regenerating
