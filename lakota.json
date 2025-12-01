@@ -1,0 +1,48 @@
+{
+"BAG": [
+    "bag", "movement", "storage", "transport", "physical medicine",
+    "spiritual medicine", "peace pipe", "healing", "necessity", "holding",
+    "physical travel", "container", "physical protection", "carrying", "journey", "food"
+],
+"CLOUDS": [
+    "clouds", "rain", "spiritual connection", "vision", "spiritual knowledge",
+    "spirit world", "portal", "transcendence", "wisdom", "openness of the plane", "vastness"
+],
+"DRAGONFLY": [
+    "dragonfly", "resilience", "ancient connection", "ancestral", "confirmation",
+    "message", "spiritual travel", "flight", "astral travel", "lightly", "blessing",
+    "patience", "survival"
+],
+"EARTH": [
+    "earth", "people", "animals", "living beings", "plants", "roots", "mother",
+    "geography", "mountain", "earthly", "mundane", "physical world", "harmony",
+    "life", "sustainability", "balance", "grounding", "anchor", "stability"
+],
+"FEATHER": [
+    "feather", "achievement", "honor", "bravery", "merit", "counting coup",
+    "courage", "knowledge", "eagle", "bird", "ceremony", "humbleness", "nobility",
+    "virtue", "valor", "strength"
+],
+"HORSE TRACK": [
+    "horse track", "wealth", "travelling", "movement", "path", "motion",
+    "riding", "hunting", "abundance", "dowry", "generosity", "west", "mobility"
+],
+"HOUSE": [
+    "house", "nurturing", "protection", "security", "home", "community",
+    "matriarchy", "camp", "family", "care", "council", "grandmother", "safety"
+],
+"LIGHTNING": [
+    "lightning", "power", "thunderbird", "sacred clown", "spirituality", "storm",
+    "spiritual connection", "electricity", "west", "fear", "grandfather", "danger",
+    "goes out of the eyes of the thunderbird"
+],
+"STAR": [
+    "star", "medicine wheel", "four directions", "north", "ancestral connection",
+    "stardust in our bones", "elemental", "extraterrestrial", "star people", "soul",
+    "source", "light", "outer space", "balance"
+],
+"THUNDER": [
+    "thunder", "storm", "sound", "cry", "rain", "alert", "spirits arrival",
+    "humility", "reminder of humanness", "fragility", "vulnerability", "out of the mouth of the thunderbird"
+]
+}
