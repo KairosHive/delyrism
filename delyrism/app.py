@@ -78,6 +78,11 @@ import os
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
+# CPU Optimization for Container/Cloud Environments
+if not torch.cuda.is_available():
+    # Limit PyTorch threads to avoid CPU contention/throttling in shared vCPUs
+    torch.set_num_threads(min(4, os.cpu_count() or 1))
+
 try:
     import torch._dynamo as _dynamo
     _dynamo.config.enabled = False

@@ -285,6 +285,18 @@ class TextEmbedder:
                 low_cpu_mem_usage=True
             ).to(self.device)
             self._backend.eval()
+
+            # CPU Optimization: Dynamic Quantization (Int8)
+            # Drastically reduces RAM (2.5GB -> ~700MB) and speeds up CPU inference
+            if self.device == "cpu":
+                try:
+                    print("[Embedder] Applying dynamic int8 quantization for CPU...")
+                    self._backend = torch.quantization.quantize_dynamic(
+                        self._backend, {torch.nn.Linear}, dtype=torch.qint8
+                    )
+                    print("[Embedder] Quantization complete.")
+                except Exception as e:
+                    print(f"[Embedder] Quantization skipped: {e}")
             # probe dim with EOS pooling
             with torch.no_grad():
                 toks = self._tokenizer("probe", return_tensors="pt").to(self.device)
