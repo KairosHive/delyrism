@@ -1730,6 +1730,9 @@ space = build_space(
     _embedder_key(embedder),  # ← includes instruction/context
     "v2_blind_spot"
 )
+# Store space in session state for fragments to access
+st.session_state["_current_space"] = space
+
 space.set_context_vec(audio_ctx_vec)  # None clears; vector overrides text everywhere
 # Clear stale audio when backend changes away from an audio-capable model
 if st.session_state.get("audio_backend") not in ("audioclip", "clap") and "audio_ctx_vec" in st.session_state:
@@ -2340,214 +2343,274 @@ with tab_explore:
     st.caption("Tip: steer the landscape with the prompt/weights; adjust β/τ/α/λ; use contextual subgraph + Δ graph to inspect structural changes.")
 
 with tab_story:
-    st.markdown("### ✨ Generative Storytelling Engine")
-    st.caption("Derive short story from the current context and Δ-graph motifs.")
-
-    # --- Controls live inside a FORM so nothing "executes" until submit ---
-    with st.form("story_form", clear_on_submit=False):
+    # =============================
+    # Story Generator Fragment
+    # =============================
+    # Store context params in session state so the fragment can access them
+    # without triggering a full app rerun
+    st.session_state["_story_ctx"] = {
+        "sentence": sentence,
+        "ctx_weights": ctx_weights,
+        "shift_mode": shift_mode,
+        "beta": beta,
+        "gate": gate,
+        "tau_gate": tau_gate,
+        "within_symbol_softmax": within_symbol_softmax,
+        "gamma": gamma,
+        "pool_type": pool_type,
+        "pool_w": pool_w,
+        "top_abs_edges": top_abs_edges,
+        "sym_filter_sel": sym_filter_sel,
+        "within_symbol": within_symbol,
+        "connected_only": connected_only,
+        "membership_alpha": membership_alpha,
+        "descriptor_threshold": descriptor_threshold,
+        "min_abs_delta": min_abs_delta,
+        "embedder_key": _embedder_key(embedder),
+        "symbols_key": _symbols_map_key(symbols_map),
+    }
+    
+    @fragment
+    def render_story_generator():
+        """Isolated fragment for story generation - won't trigger Explorer recomputation."""
+        # Pull context from session state (set by main app before fragment runs)
+        ctx = st.session_state.get("_story_ctx", {})
+        _sentence = ctx.get("sentence", "")
+        _ctx_weights = ctx.get("ctx_weights", {})
+        _shift_mode = ctx.get("shift_mode", "gate")
+        _beta = ctx.get("beta", 1.2)
+        _gate = ctx.get("gate", "relu")
+        _tau_gate = ctx.get("tau_gate", 0.5)
+        _within_symbol_softmax = ctx.get("within_symbol_softmax", True)
+        _gamma = ctx.get("gamma", 0.5)
+        _pool_type = ctx.get("pool_type", "avg")
+        _pool_w = ctx.get("pool_w", 0.7)
+        _top_abs_edges = ctx.get("top_abs_edges", 10)
+        _sym_filter_sel = ctx.get("sym_filter_sel", [])
+        _within_symbol = ctx.get("within_symbol", False)
+        _connected_only = ctx.get("connected_only", True)
+        _membership_alpha = ctx.get("membership_alpha", 0.0)
+        _descriptor_threshold = ctx.get("descriptor_threshold", 0.1)
+        _min_abs_delta = ctx.get("min_abs_delta", 0.01)
+        _embedder_key = ctx.get("embedder_key", "")
+        _symbols_key = ctx.get("symbols_key", "")
         
-        # --- Top: Model Settings (Hidden by default for ergonomics) ---
-        with st.expander("🧠 Model Configuration", expanded=False):
-            # Backend toggle: Local vs Cloudflare
-            inference_backend = st.radio(
-                "Inference Backend",
-                ["☁️ Cloudflare Workers AI (fast, free tier)", "💻 Local (HuggingFace models)"],
-                index=0,
-                horizontal=True,
-                help="Cloudflare: fast cloud inference, no GPU needed. Local: runs on your machine/server."
-            )
-            use_cloudflare = "Cloudflare" in inference_backend
-            
-            if use_cloudflare:
-                st.info("💡 Cloudflare Workers AI provides free inference. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in environment or Streamlit secrets.")
-                c_cf1, c_cf2 = st.columns([3, 1])
-                with c_cf1:
-                    cf_preset = st.selectbox("Cloudflare Model", list(CLOUDFLARE_MODELS.keys()), index=0)
-                with c_cf2:
-                    st.write("")  # spacer
-                cf_model_id = CLOUDFLARE_MODELS[cf_preset]
-                st.caption(f"Model: `{cf_model_id}`")
-                # Cloudflare doesn't need 8-bit or local settings
-                use_8bit = False
-                model_id = cf_model_id
-            else:
-                c_mod1, c_mod2 = st.columns([3, 1])
-                GEMMA_MODEL_PRESETS = {
-                    "Qwen2.5 (0.5B-Instruct)": "Qwen/Qwen2.5-0.5B-Instruct",
-                    "Qwen2.5 (1.5B-Instruct)": "Qwen/Qwen2.5-1.5B-Instruct",
-                    "TinyLlama (1.1B-Chat)": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                    "SmolLM2 (360M-Instruct)": "HuggingFaceTB/SmolLM2-360M-Instruct",
-                    "─── Gated (need HF login) ───": None,
-                    "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
-                    "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",
-                    "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it",
-                }
-                with c_mod1:
-                    preset = st.selectbox("Model preset", list(GEMMA_MODEL_PRESETS.keys()), index=0)
-                with c_mod2:
-                    st.write("") # spacer
-                    st.write("") 
-                    use_8bit = st.checkbox("8-bit Quant.", False, help="Lowers VRAM usage.")
-                
-                default_model_id = GEMMA_MODEL_PRESETS[preset] or ""
-                if GEMMA_MODEL_PRESETS[preset] is None:
-                    st.warning("⚠️ Select a model above — this is just a separator.")
-                model_id = st.text_input("Repo ID", value=default_model_id, help="Hugging Face repo ID")
-
-        # --- Middle: Creative Controls ---
-        c_left, c_right = st.columns(2)
+        # Get the space from session state
+        _space = st.session_state.get("_current_space")
+        if _space is None:
+            st.warning("Space not initialized. Please configure settings in the sidebar first.")
+            return
         
-        with c_left:
-            st.markdown("#### 📜 Narrative Structure")
-            language = st.selectbox("Language", ["English", "Français", "Español"], index=0)
+        st.markdown("### ✨ Generative Storytelling Engine")
+        st.caption("Derive short story from the current context and Δ-graph motifs.")
+
+        # --- Controls live inside a FORM so nothing "executes" until submit ---
+        with st.form("story_form", clear_on_submit=False):
             
-            c_l1, c_l2 = st.columns(2)
-            with c_l1:
-                pov = st.selectbox("POV", ["first", "third"], index=0)
-            with c_l2:
-                tense = st.selectbox("Tense", ["present", "past"], index=0)
-            
-            story_len_words = st.slider("Length (words)", 80, 500, 180, 20)
-
-        with c_right:
-            st.markdown("#### 🎨 Atmosphere & Chaos")
-            tone = st.selectbox(
-                "Tone Style",
-                ["dreamy", "eerie", "warm", "pynchon", "blake", "mystic-baroque", "gnostic-techno"],
-                index=0
-            )
-            
-            c_r1, c_r2 = st.columns(2)
-            with c_r1:
-                temperature = st.slider("Temp (Creativity)", 0.1, 1.8, 0.85, 0.05)
-            with c_r2:
-                top_p = st.slider("Top-p (Focus)", 0.1, 1.0, 0.9, 0.05)
-            
-            pos_only = st.checkbox("Positive Δ edges only", True, help="Only use strengthening connections as motifs.")
-
-        st.markdown("---")
-        submit = st.form_submit_button("🔮 Generate Story", type="primary", width='stretch')
-
-    # --- Only generate when the button was pressed ---
-    if submit:
-        with st.spinner("Generating..."):
-            # Build Δ graph only on demand
-            sym_filter_arg = sym_filter_sel if sym_filter_sel else None
-            tau_gate_eff = tau_gate if (gate == "softmax" and tau_gate is not None) else 0.5
-
-
-            key_story = _delta_key(
-                sentence, ctx_weights, shift_mode, beta, gate, tau_gate_eff,
-                within_symbol_softmax, gamma, pool_type, pool_w, top_abs_edges, sym_filter_sel,
-                within_symbol, connected_only, membership_alpha, descriptor_threshold,
-                _embedder_key(embedder), _symbols_map_key(symbols_map),
-            )
-
-            G_story = None
-            if st.session_state.get("delta_graph_key") == key_story and "delta_graph" in st.session_state:
-                G_story = st.session_state["delta_graph"]
-            else:
-                G_story = context_delta_graph(
-                    space,
-                    sentence=sentence or None,
-                    weights=ctx_weights or None,
-                    strategy=shift_mode,
-                    beta=beta,
-                    gate=gate,
-                    tau=tau_gate_eff,
-                    within_symbol_softmax=within_symbol_softmax,
-                    gamma=gamma,
-                    pool_type=pool_type,
-                    pool_w=pool_w,
-                    top_abs_edges=top_abs_edges,
-                    min_abs_delta=min_abs_delta,
-                    sym_filter=sym_filter_sel if sym_filter_sel else None,
-                    within_symbol=within_symbol,
-                    connected_only=connected_only,
-                    membership_alpha=membership_alpha,
+            # --- Top: Model Settings (Hidden by default for ergonomics) ---
+            with st.expander("🧠 Model Configuration", expanded=False):
+                # Backend toggle: Local vs Cloudflare
+                inference_backend = st.radio(
+                    "Inference Backend",
+                    ["☁️ Cloudflare Workers AI (fast, free tier)", "💻 Local (HuggingFace models)"],
+                    index=0,
+                    horizontal=True,
+                    help="Cloudflare: fast cloud inference, no GPU needed. Local: runs on your machine/server."
                 )
-                st.session_state["delta_graph"] = G_story
-                st.session_state["delta_graph_key"] = key_story
+                use_cloudflare = "Cloudflare" in inference_backend
+                
+                if use_cloudflare:
+                    st.info("💡 Cloudflare Workers AI provides free inference. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in environment or Streamlit secrets.")
+                    c_cf1, c_cf2 = st.columns([3, 1])
+                    with c_cf1:
+                        cf_preset = st.selectbox("Cloudflare Model", list(CLOUDFLARE_MODELS.keys()), index=0)
+                    with c_cf2:
+                        st.write("")  # spacer
+                    cf_model_id = CLOUDFLARE_MODELS[cf_preset]
+                    st.caption(f"Model: `{cf_model_id}`")
+                    # Cloudflare doesn't need 8-bit or local settings
+                    use_8bit = False
+                    model_id = cf_model_id
+                else:
+                    c_mod1, c_mod2 = st.columns([3, 1])
+                    GEMMA_MODEL_PRESETS = {
+                        "Qwen2.5 (0.5B-Instruct)": "Qwen/Qwen2.5-0.5B-Instruct",
+                        "Qwen2.5 (1.5B-Instruct)": "Qwen/Qwen2.5-1.5B-Instruct",
+                        "TinyLlama (1.1B-Chat)": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                        "SmolLM2 (360M-Instruct)": "HuggingFaceTB/SmolLM2-360M-Instruct",
+                        "─── Gated (need HF login) ───": None,
+                        "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
+                        "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",
+                        "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it",
+                    }
+                    with c_mod1:
+                        preset = st.selectbox("Model preset", list(GEMMA_MODEL_PRESETS.keys()), index=0)
+                    with c_mod2:
+                        st.write("") # spacer
+                        st.write("") 
+                        use_8bit = st.checkbox("8-bit Quant.", False, help="Lowers VRAM usage.")
+                    
+                    default_model_id = GEMMA_MODEL_PRESETS[preset] or ""
+                    if GEMMA_MODEL_PRESETS[preset] is None:
+                        st.warning("⚠️ Select a model above — this is just a separator.")
+                    model_id = st.text_input("Repo ID", value=default_model_id, help="Hugging Face repo ID")
+
+            # --- Middle: Creative Controls ---
+            c_left, c_right = st.columns(2)
             
-            motifs = top_motifs_from_delta_graph(G_story, k_nodes=12, positive_only=pos_only)
+            with c_left:
+                st.markdown("#### 📜 Narrative Structure")
+                language = st.selectbox("Language", ["English", "Français", "Español"], index=0)
+                
+                c_l1, c_l2 = st.columns(2)
+                with c_l1:
+                    pov = st.selectbox("POV", ["first", "third"], index=0)
+                with c_l2:
+                    tense = st.selectbox("Tense", ["present", "past"], index=0)
+                
+                story_len_words = st.slider("Length (words)", 80, 500, 180, 20)
 
-            # Build prompt (same for both backends)
-            messages = build_gemma_prompt(
-                context_sentence=sentence or "",
-                motifs=motifs,
-                tone=tone, pov=pov, tense=tense,
-                target_words=(story_len_words-20, story_len_words+20),
-                language=language,
-            )
-            # Words → tokens: ~1.5 tokens per word on average, plus buffer for completion
-            estimated_tokens = int(story_len_words * 1.6) + 80
+            with c_right:
+                st.markdown("#### 🎨 Atmosphere & Chaos")
+                tone = st.selectbox(
+                    "Tone Style",
+                    ["dreamy", "eerie", "warm", "pynchon", "blake", "mystic-baroque", "gnostic-techno"],
+                    index=0
+                )
+                
+                c_r1, c_r2 = st.columns(2)
+                with c_r1:
+                    temperature = st.slider("Temp (Creativity)", 0.1, 1.8, 0.85, 0.05)
+                with c_r2:
+                    top_p = st.slider("Top-p (Focus)", 0.1, 1.0, 0.9, 0.05)
+                
+                pos_only = st.checkbox("Positive Δ edges only", True, help="Only use strengthening connections as motifs.")
 
-            # === Cloudflare Workers AI ===
-            if use_cloudflare:
-                try:
-                    story = generate_with_cloudflare(
-                        messages,
-                        model=model_id,
-                        max_tokens=estimated_tokens,
+            st.markdown("---")
+            submit = st.form_submit_button("🔮 Generate Story", type="primary", width='stretch')
+
+        # --- Only generate when the button was pressed ---
+        if submit:
+            with st.spinner("Generating..."):
+                # Build Δ graph only on demand using fragment-local variables
+                _sym_filter_arg = _sym_filter_sel if _sym_filter_sel else None
+                _tau_gate_eff = _tau_gate if (_gate == "softmax" and _tau_gate is not None) else 0.5
+
+                key_story = _delta_key(
+                    _sentence, _ctx_weights, _shift_mode, _beta, _gate, _tau_gate_eff,
+                    _within_symbol_softmax, _gamma, _pool_type, _pool_w, _top_abs_edges, _sym_filter_sel,
+                    _within_symbol, _connected_only, _membership_alpha, _descriptor_threshold,
+                    _embedder_key, _symbols_key,
+                )
+
+                G_story = None
+                if st.session_state.get("delta_graph_key") == key_story and "delta_graph" in st.session_state:
+                    G_story = st.session_state["delta_graph"]
+                else:
+                    G_story = context_delta_graph(
+                        _space,
+                        sentence=_sentence or None,
+                        weights=_ctx_weights or None,
+                        strategy=_shift_mode,
+                        beta=_beta,
+                        gate=_gate,
+                        tau=_tau_gate_eff,
+                        within_symbol_softmax=_within_symbol_softmax,
+                        gamma=_gamma,
+                        pool_type=_pool_type,
+                        pool_w=_pool_w,
+                        top_abs_edges=_top_abs_edges,
+                        min_abs_delta=_min_abs_delta,
+                        sym_filter=_sym_filter_sel if _sym_filter_sel else None,
+                        within_symbol=_within_symbol,
+                        connected_only=_connected_only,
+                        membership_alpha=_membership_alpha,
+                    )
+                    st.session_state["delta_graph"] = G_story
+                    st.session_state["delta_graph_key"] = key_story
+                
+                motifs = top_motifs_from_delta_graph(G_story, k_nodes=12, positive_only=pos_only)
+
+                # Build prompt (same for both backends)
+                messages = build_gemma_prompt(
+                    context_sentence=_sentence or "",
+                    motifs=motifs,
+                    tone=tone, pov=pov, tense=tense,
+                    target_words=(story_len_words-20, story_len_words+20),
+                    language=language,
+                )
+                # Words → tokens: ~1.5 tokens per word on average, plus buffer for completion
+                estimated_tokens = int(story_len_words * 1.6) + 80
+
+                # === Cloudflare Workers AI ===
+                if use_cloudflare:
+                    try:
+                        story = generate_with_cloudflare(
+                            messages,
+                            model=model_id,
+                            max_tokens=estimated_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                        )
+                        st.success(f"✅ Generated via Cloudflare (`{model_id}`)")
+                    except Exception as e:
+                        st.error(f"Cloudflare API error: {e}")
+                        story = ""
+                
+                # === Local HuggingFace model ===
+                else:
+                    # Free VRAM from embedder, then lazy-load model
+                    import gc, torch as _torch
+                    try:
+                        getattr(_space.embedder, "to", lambda *_: None)("cpu")
+                    except Exception:
+                        pass
+                    gc.collect()
+                    if _torch.cuda.is_available():
+                        _torch.cuda.empty_cache()
+
+                    force_gpu = st.checkbox("Force GPU (no offload)", False)
+                    tok, mdl = load_gemma(model_id, use_8bit=use_8bit, force_gpu=force_gpu)  
+
+                    with st.expander("⚙️ Inference device map (debug)"):
+                        lines = [f"torch.cuda.is_available(): {torch.cuda.is_available()}"]
+                        if torch.cuda.is_available():
+                            lines.append(f"CUDA device: {torch.cuda.get_device_name(0)}")
+                        dm = getattr(mdl, "hf_device_map", None)
+                        lines.append(f"hf_device_map: {dm if dm else '(none)'}")
+                        try:
+                            first_param_dev = next(mdl.parameters()).device
+                            lines.append(f"first parameter device: {first_param_dev}")
+                        except StopIteration:
+                            pass
+                        st.code("\n".join(lines), language="text")
+           
+                    story = generate_with_gemma(
+                        tok, mdl, messages,
+                        max_new_tokens=estimated_tokens,
                         temperature=temperature,
                         top_p=top_p,
+                        repetition_penalty=1.05
                     )
-                    st.success(f"✅ Generated via Cloudflare (`{model_id}`)")
-                except Exception as e:
-                    st.error(f"Cloudflare API error: {e}")
-                    story = ""
-            
-            # === Local HuggingFace model ===
-            else:
-                # Free VRAM from embedder, then lazy-load model
-                import gc, torch as _torch
-                try:
-                    getattr(space.embedder, "to", lambda *_: None)("cpu")
-                except Exception:
-                    pass
-                gc.collect()
-                if _torch.cuda.is_available():
-                    _torch.cuda.empty_cache()
 
-                force_gpu = st.checkbox("Force GPU (no offload)", False)
-                tok, mdl = load_gemma(model_id, use_8bit=use_8bit, force_gpu=force_gpu)  
+                # Persist for display on future reruns without regenerating
+                st.session_state["story_text"] = story
+                st.session_state["story_motifs"] = motifs
 
-                with st.expander("⚙️ Inference device map (debug)"):
-                    lines = [f"torch.cuda.is_available(): {torch.cuda.is_available()}"]
-                    if torch.cuda.is_available():
-                        lines.append(f"CUDA device: {torch.cuda.get_device_name(0)}")
-                    dm = getattr(mdl, "hf_device_map", None)
-                    lines.append(f"hf_device_map: {dm if dm else '(none)'}")
-                    try:
-                        first_param_dev = next(mdl.parameters()).device
-                        lines.append(f"first parameter device: {first_param_dev}")
-                    except StopIteration:
-                        pass
-                    st.code("\n".join(lines), language="text")
-       
-                story = generate_with_gemma(
-                    tok, mdl, messages,
-                    max_new_tokens=estimated_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    repetition_penalty=1.05
-                )
-
-            # Persist for display on future reruns without regenerating
-            st.session_state["story_text"] = story
-            st.session_state["story_motifs"] = motifs
-
-    # --- Display last generated story (or a hint) ---
-    if st.session_state.get("story_text"):
-        st.text_area("Story", st.session_state["story_text"], height=260)
-        st.download_button("Download story.txt", st.session_state["story_text"], file_name="story.txt")
-        m = st.session_state.get("story_motifs") or []
-        st.caption("Motifs used: " + (", ".join(m) if m else "—"))
-        if st.button("🧹 Clear story"):
-            st.session_state.pop("story_text", None)
-            st.session_state.pop("story_motifs", None)
-    else:
-        st.info("Set your context and parameters, then click **Generate story**.")
+        # --- Display last generated story (or a hint) ---
+        if st.session_state.get("story_text"):
+            st.text_area("Story", st.session_state["story_text"], height=260)
+            st.download_button("Download story.txt", st.session_state["story_text"], file_name="story.txt")
+            m = st.session_state.get("story_motifs") or []
+            st.caption("Motifs used: " + (", ".join(m) if m else "—"))
+            if st.button("🧹 Clear story"):
+                st.session_state.pop("story_text", None)
+                st.session_state.pop("story_motifs", None)
+        else:
+            st.info("Set your context and parameters, then click **Generate story**.")
+    
+    # Call the fragment
+    render_story_generator()
 
 with tab_mine:
     st.subheader("🧪 Corpus Miner — build symbols & descriptors from multimodal items")
