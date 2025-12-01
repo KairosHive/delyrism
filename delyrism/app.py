@@ -1075,6 +1075,12 @@ with st.sidebar:
 
     
     # --- Context (panel-colored sliders) --------------------------
+    # Ensure backend/embedder are defined for audio checks (they are selected in Embeddings below)
+    backend = st.session_state.get("backend_selection", "qwen3")
+    model_val = st.session_state.get("embedding_model", "")
+    pooling_val = st.session_state.get("embedding_pooling", "eos")
+    embedder = get_embedder(backend, model_val or None, pooling_val)
+
     st.markdown('<span id="section-context"></span>', unsafe_allow_html=True)
     with st.expander("Context", expanded=True):
         sentence = st.text_area(
@@ -1126,7 +1132,7 @@ with st.sidebar:
                         start_prompt="🎙️ Start recording",
                         stop_prompt="⏹ Stop",
                         just_once=False,            # allow recording again
-                        width='stretch',
+                        use_container_width='stretch',
                         format="wav",
                         key="mic_widget",          # stable key
                     )
@@ -1208,14 +1214,14 @@ with st.sidebar:
             "Changing backend re-embeds descriptors and context; results, dims, and speed can change."
         )
         # backend = st.selectbox("Embedding backend", [...], help=backend_help)
-        backend = st.selectbox("Backend", ["qwen3", "qwen2", "sentence-transformer", "clap"], index=0, help=backend_help)
+        backend = st.selectbox("Backend", ["qwen3", "qwen2", "sentence-transformer", "clap"], index=0, help=backend_help, key="backend_selection")
         hf_model_help = (
             "Hugging Face repo ID for the embedding model (e.g., 'sentence-transformers/all-mpnet-base-v2', "
             "'Qwen/Qwen2-Embedding', 'Qwen/Qwen3-Embedding-0.6B').\n"
             "Pick an *embedding* model (not a causal LM) to get fixed-size vectors.\n"
             "Changing this will re-embed everything (dimension, quality, and speed can differ)."
         )
-        model = st.text_input("HF model override (optional)", help=hf_model_help)
+        model = st.text_input("HF model override (optional)", help=hf_model_help, key="embedding_model")
         pooling_help = (
             "How token embeddings are collapsed into one vector per text.\n"
             "- eos (default): last *non-padding* token. Length-safe and works well for Qwen-style encoders.\n"
@@ -1224,7 +1230,7 @@ with st.sidebar:
             "- last: final position regardless of padding/truncation. Can be brittle—avoid unless you need it.\n"
             "All pooled vectors are L2-normalized. Keep the same setting when comparing runs."
         )
-        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help)
+        pooling = st.selectbox("Pooling", ["eos", "mean", "cls", "last"], index=0, help=pooling_help, key="embedding_pooling")
         embedder = get_embedder(backend, model or None, pooling)
 
         if backend == "qwen3":  # (use `in ("qwen2","qwen3")` if you want both)
