@@ -724,6 +724,9 @@ def fig_from_callable(callable_fn, *args, **kwargs):
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
+    # Avoid RuntimeWarning: More than 20 figures have been opened
+    plt.close('all')
+
     # Keep original close; temporarily block closes inside callable_fn
     _orig_close = plt.close
     try:
@@ -965,7 +968,7 @@ with st.sidebar:
         symbols_txt = st.text_area(
             "JSON Editor",
             key="symbol_json_text",
-            height=280,
+            height=100,
             help="Edit the structure here. Changes apply immediately."
         )
         
@@ -975,7 +978,7 @@ with st.sidebar:
     # --- Embeddings ----------------------------------------------
     # st.markdown('<div class="sb-two">', unsafe_allow_html=True)
     # --- Embeddings (sidebar) ---
-    with st.expander("Embeddings", expanded=True):
+    with st.expander("Embeddings", expanded=False):
         # ADD (audio): include audioclip as a backend option
         backend_help = (
             "Which encoder turns your inputs into vectors.\n"
@@ -1053,6 +1056,7 @@ with st.sidebar:
     with st.expander("Context", expanded=True):
         sentence = st.text_area(
             "Context prompt",
+            value="The history of the world encapsulated in a single cell",
             placeholder="e.g., A ceremony by the river focusing on transformation and healing",
             height=90,
             key="ctx_sentence",
@@ -1099,7 +1103,7 @@ with st.sidebar:
                         start_prompt="🎙️ Start recording",
                         stop_prompt="⏹ Stop",
                         just_once=False,            # allow recording again
-                        use_container_width=True,
+                        width='stretch',
                         format="wav",
                         key="mic_widget",          # stable key
                     )
@@ -1135,7 +1139,7 @@ with st.sidebar:
         sym_preview = list(symbols_map.keys())
 
         # selection
-        default_ctx = st.session_state.get("ctx_chosen", sym_preview[:2])
+        default_ctx = st.session_state.get("ctx_chosen", [])
         context_symbols_help = (
             "Optional symbol priors to steer the context.\n\n"
             "What it feeds: we build v_ctx = normalize(  Σᵢ wᵢ·centroid(symbolᵢ)  +  sentence_vector ).\n"
@@ -1171,7 +1175,7 @@ with st.sidebar:
 
     # --- Shift settings (panel-colored sliders) -------------------
     # st.markdown('<div class="panel-shift">', unsafe_allow_html=True)
-    with st.expander("Semantic Map", expanded=True):
+    with st.expander("Semantic Map", expanded=False):
         st.markdown("**Map display**")
         with_hulls = st.checkbox("Draw convex hulls", True)
         inc_cent_help = "Show one star per symbol at its mean descriptor position."
@@ -1191,7 +1195,7 @@ with st.sidebar:
 
     # --- Ranking (panel-colored sliders) --------------------------
     # st.markdown('<div class="panel-ranking">', unsafe_allow_html=True)
-    with st.expander("Ranking (proposal)", expanded=True):
+    with st.expander("Ranking (proposal)", expanded=False):
         tau_help = "Lower τ = sharper attention; higher τ = broader attention."
         tau = st.slider("Softmax temperature (τ)", 0.01, 2.0, 0.3, 0.01, help=tau_help)
 
@@ -1219,7 +1223,7 @@ with st.sidebar:
 
     # --- Contextual Subgraph (panel-colored sliders) --------------
     # st.markdown('<div class="panel-subgraph">', unsafe_allow_html=True)
-    with st.expander("Contextual Subgraph (network)", expanded=True):
+    with st.expander("Contextual Subgraph (network)", expanded=False):
         topk_symbols_help = "How many highest-scoring symbols to show for this context."
         ctx_topk_symbols = st.slider("Top symbols", 1, 12, 3, help=topk_symbols_help)
 
@@ -1244,7 +1248,7 @@ with st.sidebar:
 
     # --- Δ Graph (panel-colored sliders) --------------------------
     # st.markdown('<div class="panel-delta">', unsafe_allow_html=True)
-    with st.expander("Δ Graph", expanded=True):
+    with st.expander("Δ Graph", expanded=False):
         st.markdown("**Shift settings**")
         # add "pooling" to the strategy list
         strategy_help = """
@@ -1425,6 +1429,7 @@ with tab_explore:
                     legend.get_title().set_color('white')
                 
         st.pyplot(fig_amb, clear_figure=True)
+        plt.close(fig_amb)
 
     st.divider()
 
@@ -1522,6 +1527,7 @@ with tab_explore:
 
                     fig_rank.tight_layout()
                     st.pyplot(fig_rank, clear_figure=True)
+                    plt.close(fig_rank)
             else:
                 st.info("No predictions yet.")
         except Exception as e:
@@ -1780,7 +1786,7 @@ with tab_story:
             pos_only = st.checkbox("Positive Δ edges only", True, help="Only use strengthening connections as motifs.")
 
         st.markdown("---")
-        submit = st.form_submit_button("🔮 Generate Story", type="primary", use_container_width=True)
+        submit = st.form_submit_button("🔮 Generate Story", type="primary", width='stretch')
 
     # --- Only generate when the button was pressed ---
     if submit:
@@ -1963,7 +1969,7 @@ with tab_mine:
     img_model = st.selectbox("OpenCLIP image encoder", ["ViT-B-32","ViT-L-14"], index=0, disabled=not img_ok)
     img_pretrained = st.text_input("OpenCLIP weights", "laion2b_s34b_b79k", disabled=not img_ok)
 
-    if st.button("⚙️ Run miner", type="primary", use_container_width=True, disabled=not st.session_state["mm_items"]):
+    if st.button("⚙️ Run miner", type="primary", width='stretch', disabled=not st.session_state["mm_items"]):
         with st.spinner("Mining symbols & descriptors…"):
             # Build miner items
             mm_items = []
@@ -2006,7 +2012,7 @@ with tab_mine:
             colA, colB = st.columns(2)
             with colA:
                 # Use in Explorer right away
-                if st.button("👉 Use these in Explorer", type="primary", use_container_width=True):
+                if st.button("👉 Use these in Explorer", type="primary", width='stretch'):
                     st.session_state["_current_symbols_map"] = symbols_json
                     # rebuild state & rerun
                     st.experimental_rerun()
@@ -2016,7 +2022,7 @@ with tab_mine:
                     data=json.dumps(symbols_json, ensure_ascii=False, indent=2).encode("utf-8"),
                     file_name="symbols.json",
                     mime="application/json",
-                    use_container_width=True
+                    width='stretch'
                 )
         else:
             st.info("No symbols discovered. Try lowering min cluster size or adding more items / paired examples.")
