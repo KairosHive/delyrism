@@ -905,21 +905,87 @@ class _TextAdapter:
 st.set_page_config(page_title="Archetype Explorer", layout="wide")
 st.markdown("""
     <style>
+    @keyframes glow-pulse {
+        0%, 100% {
+            text-shadow: 
+                0 0 5px rgba(161, 196, 253, 0.15),
+                0 0 10px rgba(161, 196, 253, 0.1);
+        }
+        50% {
+            text-shadow: 
+                0 0 8px rgba(161, 196, 253, 0.25),
+                0 0 15px rgba(161, 196, 253, 0.15),
+                0 0 25px rgba(194, 166, 254, 0.1);
+        }
+    }
+    @keyframes gradient-shift {
+        0%, 100% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+    }
+    @keyframes drip-fall {
+        0% { transform: translateY(0); opacity: 0.7; }
+        100% { transform: translateY(60px); opacity: 0; }
+    }
+    @keyframes drip-spawn {
+        0%, 100% { opacity: 0; }
+        10%, 40% { opacity: 0.6; }
+    }
     .delyrism-header {
         text-align: center;
         padding: 1rem 0 2rem 0;
         margin-bottom: 1rem;
+        position: relative;
+        overflow: visible;
+    }
+    .delyrism-title-container {
+        position: relative;
+        display: inline-block;
     }
     .delyrism-title {
         font-size: 4.5rem;
         font-weight: 200;
         letter-spacing: 0.15em;
-        background: linear-gradient(120deg, #ffffff 0%, #a1c4fd 100%);
+        background: linear-gradient(120deg, #ffffff 0%, #a1c4fd 50%, #c2a6fe 100%);
+        background-size: 200% 200%;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        background-clip: text;
         margin: 0;
         line-height: 1.1;
+        animation: glow-pulse 4s ease-in-out infinite, gradient-shift 8s ease infinite;
+        filter: drop-shadow(0 0 4px rgba(161, 196, 253, 0.15));
+        position: relative;
     }
+    .drip-container {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        height: 60px;
+        pointer-events: none;
+        overflow: hidden;
+    }
+    .drip {
+        position: absolute;
+        font-size: 1.2rem;
+        font-weight: 200;
+        background: linear-gradient(180deg, #a1c4fd 0%, transparent 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: drip-fall 3s ease-in infinite, drip-spawn 3s ease-in-out infinite;
+        opacity: 0;
+    }
+    .drip:nth-child(1) { left: 8%; animation-delay: 0s; }
+    .drip:nth-child(2) { left: 22%; animation-delay: 0.7s; }
+    .drip:nth-child(3) { left: 35%; animation-delay: 1.4s; }
+    .drip:nth-child(4) { left: 48%; animation-delay: 2.1s; }
+    .drip:nth-child(5) { left: 62%; animation-delay: 0.3s; }
+    .drip:nth-child(6) { left: 75%; animation-delay: 1.8s; }
+    .drip:nth-child(7) { left: 88%; animation-delay: 1.1s; }
+    .drip:nth-child(8) { left: 15%; animation-delay: 2.5s; }
+    .drip:nth-child(9) { left: 55%; animation-delay: 0.9s; }
+    .drip:nth-child(10) { left: 82%; animation-delay: 2.3s; }
     .delyrism-subtitle {
         font-size: 1.1rem;
         color: #8899a6;
@@ -1027,7 +1093,21 @@ st.markdown("""
     }
     </style>
     <div class="delyrism-header">
-        <div class="delyrism-title">DELYRISM</div>
+        <div class="delyrism-title-container">
+            <div class="delyrism-title">DELYRISM</div>
+            <div class="drip-container">
+                <span class="drip">ᛞ</span>
+                <span class="drip">ᛖ</span>
+                <span class="drip">ᛚ</span>
+                <span class="drip">ʏ</span>
+                <span class="drip">ᚱ</span>
+                <span class="drip">ɪ</span>
+                <span class="drip">ꜱ</span>
+                <span class="drip">ᛗ</span>
+                <span class="drip">◌</span>
+                <span class="drip">∿</span>
+            </div>
+        </div>
         <div class="delyrism-subtitle">🧭 Archetype Explorer</div>
     </div>
 """, unsafe_allow_html=True)
