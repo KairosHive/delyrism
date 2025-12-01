@@ -1,0 +1,32 @@
+{
+  "SELF": [
+    "wholeness", "center", "unification", "mandala", "god-image", "integration", "totality", "balance", "order", "transcendence"
+  ],
+  "SHADOW": [
+    "repressed", "dark side", "unconscious", "projection", "hidden", "instinct", "shame", "potential", "primitive", "denial"
+  ],
+  "ANIMA": [
+    "feminine", "soul", "feeling", "eros", "muse", "relating", "mood", "intuition", "guide", "interiority"
+  ],
+  "ANIMUS": [
+    "masculine", "spirit", "logos", "reason", "opinion", "conviction", "authority", "focus", "action", "meaning"
+  ],
+  "PERSONA": [
+    "mask", "social role", "adaptation", "facade", "public face", "conformity", "shield", "appearance", "outer shell", "performance"
+  ],
+  "HERO": [
+    "courage", "quest", "overcoming", "ego-strength", "savior", "struggle", "victory", "journey", "champion", "sacrifice"
+  ],
+  "WISE OLD MAN": [
+    "wisdom", "guidance", "spirit", "meaning", "authority", "insight", "mentor", "knowledge", "tradition", "reflection"
+  ],
+  "GREAT MOTHER": [
+    "nurturing", "fertility", "devouring", "nature", "containment", "abyss", "creation", "destruction", "earth", "womb"
+  ],
+  "TRICKSTER": [
+    "chaos", "disruption", "humor", "boundary-crosser", "change", "creativity", "folly", "paradox", "catalyst", "mischief"
+  ],
+  "CHILD": [
+    "innocence", "potential", "beginning", "play", "vulnerability", "growth", "future", "spontaneity", "wonder", "divine"
+  ]
+}

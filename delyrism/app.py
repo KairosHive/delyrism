@@ -734,6 +734,26 @@ def fig_from_callable(callable_fn, *args, **kwargs):
         callable_fn(*args, **kwargs)
 
         fig = plt.gcf()
+        
+        # Apply dark theme styling (transparent background, white text)
+        fig.patch.set_alpha(0.0)
+        for ax in fig.axes:
+            ax.patch.set_alpha(0.0)
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+            ax.tick_params(axis='x', colors='white')
+            ax.tick_params(axis='y', colors='white')
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            if ax.get_legend():
+                legend = ax.get_legend()
+                legend.get_frame().set_alpha(0.0)
+                legend.get_frame().set_linewidth(0.0)
+                plt.setp(legend.get_texts(), color='white')
+                if legend.get_title():
+                    legend.get_title().set_color('white')
+
         # Make sure the figure has a canvas so Streamlit can savefig
         if fig.canvas is None:
             FigureCanvasAgg(fig)
@@ -853,7 +873,36 @@ class _TextAdapter:
 # =============================
 
 st.set_page_config(page_title="Archetype Explorer", layout="wide")
-st.title("🧭 DELYRISM - Archetype Explorer ")
+st.markdown("""
+    <style>
+    .delyrism-header {
+        text-align: center;
+        padding: 1rem 0 2rem 0;
+        margin-bottom: 1rem;
+    }
+    .delyrism-title {
+        font-size: 4.5rem;
+        font-weight: 200;
+        letter-spacing: 0.15em;
+        background: linear-gradient(120deg, #ffffff 0%, #a1c4fd 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 0;
+        line-height: 1.1;
+    }
+    .delyrism-subtitle {
+        font-size: 1.1rem;
+        color: #8899a6;
+        letter-spacing: 0.4em;
+        text-transform: uppercase;
+        margin-top: 0.2rem;
+    }
+    </style>
+    <div class="delyrism-header">
+        <div class="delyrism-title">DELYRISM</div>
+        <div class="delyrism-subtitle">🧭 Archetype Explorer</div>
+    </div>
+""", unsafe_allow_html=True)
 st.session_state.setdefault("mm_items", [])  # list[MMItem-like dicts]
 
 with st.sidebar:
@@ -862,33 +911,51 @@ with st.sidebar:
 
     # --- Data ----------------------------------------------------
     # --- Data ----------------------------------------------------
-    st.markdown('<div class="sb-one">', unsafe_allow_html=True)
+    # st.markdown('<div class="sb-one">', unsafe_allow_html=True)
     with st.expander("Data", expanded=True):
-        # 1) File upload (takes precedence if present)
-        uploaded = st.file_uploader("Upload symbols→descriptors JSON", type=["json"])
-        symbols_map: Dict[str, List[str]]
+        # Scan for structure files
+        structures_dir = pathlib.Path(__file__).parent / "structures"
+        structure_files = sorted([f.name for f in structures_dir.glob("*.json")]) if structures_dir.exists() else []
+        
+        structure_options = ["Custom / Upload"] + structure_files
+        selected_structure = st.selectbox("Symbolic Structure", structure_options, index=0)
 
-        if uploaded is not None:
-            try:
-                raw = uploaded.read().decode("utf-8")
-                symbols_map = _load_symbols_map(raw)  # uses your str->dict helper
-                st.success("Loaded JSON from file.")
-            except Exception as e:
-                st.error(f"Failed to read uploaded file: {e}")
-                symbols_map = _default_symbols_map()
+        symbols_map: Dict[str, List[str]] = {}
+
+        if selected_structure == "Custom / Upload":
+            # 1) File upload (takes precedence if present)
+            uploaded = st.file_uploader("Upload symbols→descriptors JSON", type=["json"])
+
+            if uploaded is not None:
+                try:
+                    raw = uploaded.read().decode("utf-8")
+                    symbols_map = _load_symbols_map(raw)  # uses your str->dict helper
+                    st.success("Loaded JSON from file.")
+                except Exception as e:
+                    st.error(f"Failed to read uploaded file: {e}")
+                    symbols_map = _default_symbols_map()
+            else:
+                # 2) Text area fallback when no file uploaded
+                symbols_txt = st.text_area(
+                    "…or paste JSON here",
+                    value=json.dumps(_default_symbols_map(), ensure_ascii=False, indent=2),
+                    height=210,
+                    help="Format: {symbol: [descriptor, ...]}",
+                )
+                symbols_map = _load_symbols_map(symbols_txt)
         else:
-            # 2) Text area fallback when no file uploaded
-            symbols_txt = st.text_area(
-                "…or paste JSON here",
-                value=json.dumps(_default_symbols_map(), ensure_ascii=False, indent=2),
-                height=210,
-                help="Format: {symbol: [descriptor, ...]}",
-            )
-            symbols_map = _load_symbols_map(symbols_txt)
-    st.markdown('</div>', unsafe_allow_html=True)
+            # Load selected preset
+            try:
+                file_path = structures_dir / selected_structure
+                symbols_map = _load_symbols_map(file_path.read_text(encoding="utf-8"))
+                st.success(f"Loaded {selected_structure}")
+            except Exception as e:
+                st.error(f"Failed to load {selected_structure}: {e}")
+                symbols_map = _default_symbols_map()
+    # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Embeddings ----------------------------------------------
-    st.markdown('<div class="sb-two">', unsafe_allow_html=True)
+    # st.markdown('<div class="sb-two">', unsafe_allow_html=True)
     # --- Embeddings (sidebar) ---
     with st.expander("Embeddings", expanded=True):
         # ADD (audio): include audioclip as a backend option
@@ -964,7 +1031,7 @@ with st.sidebar:
             st.caption("CLAP enabled. Upload or record short audio clip in the Context panel to drive the analysis.")
 
     # --- Context (panel-colored sliders) --------------------------
-    st.markdown('<div class="sb-three panel-context">', unsafe_allow_html=True)
+    # st.markdown('<div class="sb-three panel-context">', unsafe_allow_html=True)
     with st.expander("Context", expanded=True):
         sentence = st.text_area(
             "Context prompt",
@@ -1082,10 +1149,10 @@ with st.sidebar:
                 step=0.05,
                 key=f"w_{s}",
             )
-    st.markdown('</div>', unsafe_allow_html=True)
+    # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Shift settings (panel-colored sliders) -------------------
-    st.markdown('<div class="panel-shift">', unsafe_allow_html=True)
+    # st.markdown('<div class="panel-shift">', unsafe_allow_html=True)
     with st.expander("Semantic Map", expanded=True):
         st.markdown("**Map display**")
         with_hulls = st.checkbox("Draw convex hulls", True)
@@ -1102,10 +1169,10 @@ with st.sidebar:
         
         show_arrow = st.checkbox("Show arrows", True)
         
-    st.markdown('</div>', unsafe_allow_html=True)
+    # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Ranking (panel-colored sliders) --------------------------
-    st.markdown('<div class="panel-ranking">', unsafe_allow_html=True)
+    # st.markdown('<div class="panel-ranking">', unsafe_allow_html=True)
     with st.expander("Ranking (proposal)", expanded=True):
         tau_help = "Lower τ = sharper attention; higher τ = broader attention."
         tau = st.slider("Softmax temperature (τ)", 0.01, 2.0, 0.3, 0.01, help=tau_help)
@@ -1130,10 +1197,10 @@ with st.sidebar:
         ppr_help = "Include graph-aware Personalized PageRank in the score blend."
         use_ppr = st.checkbox("Use Personalized PageRank", True, help=ppr_help)
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Contextual Subgraph (panel-colored sliders) --------------
-    st.markdown('<div class="panel-subgraph">', unsafe_allow_html=True)
+    # st.markdown('<div class="panel-subgraph">', unsafe_allow_html=True)
     with st.expander("Contextual Subgraph (network)", expanded=True):
         topk_symbols_help = "How many highest-scoring symbols to show for this context."
         ctx_topk_symbols = st.slider("Top symbols", 1, 12, 3, help=topk_symbols_help)
@@ -1155,10 +1222,10 @@ with st.sidebar:
 
         thr_help = "Cosine cutoff for descriptor–descriptor edges. Higher = sparser/cleaner; lower = denser/noisier."
         descriptor_threshold = st.slider("Descriptor edge threshold (cosine)", 0.0, 0.9, 0.1, 0.02, help=thr_help)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Δ Graph (panel-colored sliders) --------------------------
-    st.markdown('<div class="panel-delta">', unsafe_allow_html=True)
+    # st.markdown('<div class="panel-delta">', unsafe_allow_html=True)
     with st.expander("Δ Graph", expanded=True):
         st.markdown("**Shift settings**")
         # add "pooling" to the strategy list
@@ -1252,7 +1319,7 @@ with st.sidebar:
         top_abs_edges = st.slider("Top |Δ| edges", 2, 100, 10, 1)
         connected_only = st.checkbox("Connected nodes only", True)
         
-    st.markdown('</div>', unsafe_allow_html=True)
+    # st.markdown('</div>', unsafe_allow_html=True)
 
 # after you compute 'symbols_map' and 'embedder'
 st.session_state["_current_symbols_map"] = symbols_map
@@ -1280,12 +1347,14 @@ else:
 tab_explore, tab_story, tab_mine = st.tabs(["Explorer", "Story Generator", "Corpus Miner"])
 
 with tab_explore:
-    # =============================
-    # Row 1: Meaning Space (left) | Rankings & Attention (right)
-    # =============================
-    colL, colR = st.columns([1.15, 1])
     color_map = space.get_symbol_color_dict("AuroraPop")
-    with colL:
+
+    # =============================
+    # Row 1: Meaning Space | Ambiguity Metrics
+    # =============================
+    c1, c2 = st.columns(2)
+
+    with c1:
         st.subheader("Meaning Space (2D)")
         reducer = st.selectbox("Reducer", ["umap", "tsne","pca"], index=0)
         if show_arrow is True:
@@ -1300,7 +1369,7 @@ with tab_explore:
             with_hulls=with_hulls,
             include_centroids=include_centroids,
             normalize_centroids=normalize_centroids,
-            figsize=(6.8, 5.4),
+            figsize=(6.8, 4.5),
             title="Context shift on descriptor map",
             arrow_scale=arrow_scale,
             arrow_alpha=0.65,
@@ -1313,21 +1382,43 @@ with tab_explore:
         )
         st.pyplot(fig_ms, clear_figure=True)
 
-        st.divider()
+    with c2:
         st.subheader("Ambiguity Metrics")
-
         sort_opt = st.selectbox("Sort by", ["dispersion", "leakage", "entropy", "none"], index=0)
-        # color_map = getattr(space, "get_symbol_color_dict", lambda: None)()
+        fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4.0))
         
-        
-        fig_amb = plot_ambiguity_metrics(space, sort_by=sort_opt, color_dict=color_map, figsize=(7.5, 4))
+        # Apply dark theme styling manually
+        fig_amb.patch.set_alpha(0.0)
+        for ax in fig_amb.axes:
+            ax.patch.set_alpha(0.0)
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+            ax.tick_params(axis='x', colors='white')
+            ax.tick_params(axis='y', colors='white')
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            if ax.get_legend():
+                legend = ax.get_legend()
+                legend.get_frame().set_alpha(0.0)
+                legend.get_frame().set_linewidth(0.0)
+                plt.setp(legend.get_texts(), color='white')
+                if legend.get_title():
+                    legend.get_title().set_color('white')
+                
         st.pyplot(fig_amb, clear_figure=True)
 
+    st.divider()
 
-    with colR:
+    # =============================
+    # Row 2: Descriptor Attention | Top Symbols
+    # =============================
+    c3, c4 = st.columns(2)
 
-        
+    with c3:
         st.subheader("Descriptor Attention")
+        # Container for the plot to appear ABOVE the selectbox
+        att_container = st.container()
         sym = st.selectbox("Symbol", list(space.symbols))
         if sym:
             try:
@@ -1338,17 +1429,19 @@ with tab_explore:
                     sentence=sentence if sentence else None,
                     tau=tau,
                     top_n=8,
-                    figsize=(6, 3.6),
+                    figsize=(6, 4.0),
                 )
-                st.pyplot(fig_att, clear_figure=True)
+                with att_container:
+                    st.pyplot(fig_att, clear_figure=True)
             except Exception as e:
                 st.warning(f"Attention plot failed: {e}")
-        
+
+    with c4:
         st.subheader("Top Symbols for Context")
         try:
-            print('-----------------------------------')
-            print(ctx_weights, sentence)
-            print('-----------------------------------')
+            # print('-----------------------------------')
+            # print(ctx_weights, sentence)
+            # print('-----------------------------------')
             preds = space.propose(
                 weights=ctx_weights if ctx_weights else None,
                 sentence=sentence if sentence else None,
@@ -1377,7 +1470,18 @@ with tab_explore:
                     cmap = plt.cm.coolwarm
                     colors = [cmap(n) for n in norm]
 
-                    fig_rank, ax = plt.subplots(figsize=(6, 4))
+                    fig_rank, ax = plt.subplots(figsize=(6, 4.0))
+                    # Apply dark theme styling manually since we don't use fig_from_callable here
+                    fig_rank.patch.set_alpha(0.0)
+                    ax.patch.set_alpha(0.0)
+                    ax.xaxis.label.set_color('white')
+                    ax.yaxis.label.set_color('white')
+                    ax.title.set_color('white')
+                    ax.tick_params(axis='x', colors='white')
+                    ax.tick_params(axis='y', colors='white')
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+
                     bars = ax.barh(
                         range(len(scores))[::-1],
                         scores[::-1],
@@ -1431,7 +1535,8 @@ with tab_explore:
                 alpha=ctx_alpha,
                 tau=tau_subgraph,
                 normalize=ctx_normalize,
-                global_color_map=color_map
+                global_color_map=color_map,
+                figsize=(7, 5)
             )
             st.pyplot(fig_ctxnet, clear_figure=True)
         except Exception as e:
@@ -1439,7 +1544,12 @@ with tab_explore:
 
     with colH:
         st.subheader("Within-Symbol Associative Increase (Δ)")
+        
+        # Container for the plot to appear ABOVE the selectbox
+        plot_container = st.container()
+        
         sym2 = st.selectbox("Symbol for heatmaps", list(space.symbols), key="heat_sym")
+        
         if sym2:
             try:
                 simdict = space.descriptor_similarity_matrices(
@@ -1458,15 +1568,59 @@ with tab_explore:
                 )
 
 
-                from functools import partial
-                fig_heat = fig_from_callable(
-                    space.plot_symbol_similarity_heatmaps,
-                    simdict,
-                    sym2,
-                    vmax=1.0,
-                    figsize=(12, 3.8),
+                # New Strategy: Interactive Altair Heatmap
+                import pandas as pd
+                import altair as alt
+
+                data = simdict[sym2]
+                matrix = data["S_delta"]
+                labels = data["descriptors"]
+
+                # Convert to long format for Altair
+                df_heat = pd.DataFrame(matrix, index=labels, columns=labels)
+                df_heat.index.name = "Row"
+                df_heat.columns.name = "Col"
+                df_long = df_heat.stack().reset_index(name="Delta")
+
+                # Determine color domain excluding diagonal (self-correlations often skew the range)
+                mask_nd = df_long['Row'] != df_long['Col']
+                if mask_nd.any():
+                    min_d = df_long.loc[mask_nd, "Delta"].min()
+                    max_d = df_long.loc[mask_nd, "Delta"].max()
+                else:
+                    min_d, max_d = df_long["Delta"].min(), df_long["Delta"].max()
+
+                # Custom palette: Blue -> Green -> Yellow -> Orange -> Red
+                if max_d - min_d < 1e-9:
+                    scale = alt.Scale(domain=[min_d, max_d], range=['#3498DB', '#3498DB'])
+                else:
+                    step = (max_d - min_d) / 4.0
+                    dom = [min_d, min_d + step, min_d + 2*step, min_d + 3*step, max_d]
+                    # Colors: Blue, Green, Yellow, Orange, Red
+                    scale = alt.Scale(domain=dom, range=['#3498DB', '#2ECC71', '#FFD700', '#FF9F1C', '#E74C3C'])
+
+                chart = alt.Chart(df_long).mark_rect().encode(
+                    x=alt.X('Col', sort=labels, title=None, axis=alt.Axis(labelAngle=-90, labelFontSize=10, labelColor='white', titleColor='white')),
+                    # Force all labels to appear by disabling overlap checks
+                    y=alt.Y('Row', sort=labels, title=None, axis=alt.Axis(labelFontSize=10, labelOverlap=False, labelColor='white', titleColor='white')),
+                    color=alt.Color('Delta', scale=scale, title="Δ", legend=alt.Legend(titleColor='white', labelColor='white')),
+                    tooltip=['Row', 'Col', alt.Tooltip('Delta', format='.4f')]
+                ).properties(
+                    title=alt.TitleParams(text=f"Δ After-Before for {sym2}", color='white'),
+                    width=550,
+                    height=550
+                ).configure_axis(
+                    grid=False,
+                    domainColor='white',
+                    tickColor='white'
+                ).configure_view(
+                    strokeWidth=0
+                ).configure(
+                    background='transparent'
                 )
-                st.pyplot(fig_heat, clear_figure=True)
+
+                with plot_container:
+                    st.altair_chart(chart, use_container_width=False)
             except Exception as e:
                 st.warning(f"Heatmaps failed: {e}")
 
@@ -1519,7 +1673,7 @@ with tab_explore:
                 G,
                 title="Context Δ graph",
                 color_dict=color_map,
-                figsize=(8.0, 3.0),        # ⬅️ smaller figure
+                figsize=(7.0, 2.0),        # ⬅️ smaller figure
                 node_size_base=130,        # ⬇️ shrink nodes
                 node_size_scale=700.0,
                 edge_width_min=0.4,        # ⬇️ thinner edges
@@ -1552,48 +1706,63 @@ with tab_explore:
     st.caption("Tip: steer the landscape with the prompt/weights; adjust β/τ/α/λ; use contextual subgraph + Δ graph to inspect structural changes.")
 
 with tab_story:
-    st.subheader("Dream-like Story (Gemma)")
+    st.markdown("### ✨ Generative Storytelling Engine")
+    st.caption("Derive short story from the current context and Δ-graph motifs.")
 
     # --- Controls live inside a FORM so nothing "executes" until submit ---
     with st.form("story_form", clear_on_submit=False):
-        # Model controls
-        GEMMA_MODEL_PRESETS = {
-            "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
-            "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",   # text-only chat
-            "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it", # multimodal (we use text-only here)
-        }
-
-        # ... inside the story_form() block, replace the single text_input with:
-        preset = st.selectbox(
-            "Model preset",
-            list(GEMMA_MODEL_PRESETS.keys()),
-            index=0,
-            help="Quick-switch between Gemma 2, Gemma 3 1B, and Gemma 3n."
-        )
         
-        default_model_id = GEMMA_MODEL_PRESETS[preset]
-        model_id = st.text_input(
-            "Hugging Face repo (override if you want)",
-            value=default_model_id,
-            help="Use a chat-tuned repo ID. You must accept the model license on Hugging Face first."
-        )
-        use_8bit = st.checkbox("Load in 8-bit (less VRAM, slightly lower quality)", False)
+        # --- Top: Model Settings (Hidden by default for ergonomics) ---
+        with st.expander("🧠 Model Configuration", expanded=False):
+            c_mod1, c_mod2 = st.columns([3, 1])
+            GEMMA_MODEL_PRESETS = {
+                "Gemma 2 (2B-IT)":  "google/gemma-2-2b-it",
+                "Gemma 3 (1B-IT)":  "google/gemma-3-1b-it",
+                "Gemma 3n (E2B-IT)": "google/gemma-3n-e2b-it",
+            }
+            with c_mod1:
+                preset = st.selectbox("Model preset", list(GEMMA_MODEL_PRESETS.keys()), index=0)
+            with c_mod2:
+                st.write("") # spacer
+                st.write("") 
+                use_8bit = st.checkbox("8-bit Quant.", False, help="Lowers VRAM usage.")
+            
+            default_model_id = GEMMA_MODEL_PRESETS[preset]
+            model_id = st.text_input("Repo ID", value=default_model_id, help="Hugging Face repo ID")
 
-        # Narrative controls
-        story_len_words = st.slider("Target length (words)", 60, 300, 140, 10)
-        language = st.selectbox("Language", ["English", "Français", "Español"], index=0)  # NEW
-        temperature = st.slider("Temperature", 0.1, 1.8, 0.85, 0.05)
-        top_p = st.slider("Top-p", 0.1, 1.0, 0.9, 0.05)
-        pos_only = st.checkbox("Use only strengthening (Δ > 0) edges", True)
-        pov = st.selectbox("POV", ["first","third"], index=0)
-        tense = st.selectbox("Tense", ["present","past"], index=0)
-        tone = st.selectbox(
-            "Tone",
-            ["dreamy","eerie","warm","pynchon","blake","mystic-baroque","gnostic-techno"],
-            index=0
-        )
+        # --- Middle: Creative Controls ---
+        c_left, c_right = st.columns(2)
+        
+        with c_left:
+            st.markdown("#### 📜 Narrative Structure")
+            language = st.selectbox("Language", ["English", "Français", "Español"], index=0)
+            
+            c_l1, c_l2 = st.columns(2)
+            with c_l1:
+                pov = st.selectbox("POV", ["first", "third"], index=0)
+            with c_l2:
+                tense = st.selectbox("Tense", ["present", "past"], index=0)
+            
+            story_len_words = st.slider("Length (words)", 60, 300, 140, 10)
 
-        submit = st.form_submit_button("🚀 Generate story", type="primary", use_container_width=True)
+        with c_right:
+            st.markdown("#### 🎨 Atmosphere & Chaos")
+            tone = st.selectbox(
+                "Tone Style",
+                ["dreamy", "eerie", "warm", "pynchon", "blake", "mystic-baroque", "gnostic-techno"],
+                index=0
+            )
+            
+            c_r1, c_r2 = st.columns(2)
+            with c_r1:
+                temperature = st.slider("Temp (Creativity)", 0.1, 1.8, 0.85, 0.05)
+            with c_r2:
+                top_p = st.slider("Top-p (Focus)", 0.1, 1.0, 0.9, 0.05)
+            
+            pos_only = st.checkbox("Positive Δ edges only", True, help="Only use strengthening connections as motifs.")
+
+        st.markdown("---")
+        submit = st.form_submit_button("🔮 Generate Story", type="primary", use_container_width=True)
 
     # --- Only generate when the button was pressed ---
     if submit:

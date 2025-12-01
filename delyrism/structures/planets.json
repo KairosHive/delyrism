@@ -1,0 +1,32 @@
+{
+  "SUN": [
+    "vitality", "ego", "self", "radiance", "leadership", "purpose", "consciousness", "father", "gold", "heart"
+  ],
+  "MOON": [
+    "emotion", "intuition", "mother", "subconscious", "cycles", "reflection", "silver", "memory", "tides", "nurturing"
+  ],
+  "MERCURY": [
+    "communication", "intellect", "speed", "messenger", "adaptability", "logic", "travel", "commerce", "trickster", "analysis"
+  ],
+  "VENUS": [
+    "love", "beauty", "harmony", "attraction", "pleasure", "art", "values", "relationships", "copper", "desire"
+  ],
+  "MARS": [
+    "action", "aggression", "drive", "courage", "conflict", "energy", "passion", "war", "iron", "assertion"
+  ],
+  "JUPITER": [
+    "expansion", "growth", "luck", "wisdom", "abundance", "optimism", "philosophy", "law", "generosity", "excess"
+  ],
+  "SATURN": [
+    "structure", "limitation", "discipline", "time", "responsibility", "karma", "authority", "boundaries", "lead", "endurance"
+  ],
+  "URANUS": [
+    "innovation", "rebellion", "sudden change", "freedom", "originality", "technology", "awakening", "disruption", "electricity", "future"
+  ],
+  "NEPTUNE": [
+    "dreams", "illusion", "spirituality", "compassion", "confusion", "idealism", "mysticism", "sacrifice", "ocean", "dissolution"
+  ],
+  "PLUTO": [
+    "transformation", "power", "death", "rebirth", "regeneration", "intensity", "secrets", "underworld", "crisis", "evolution"
+  ]
+}

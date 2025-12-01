@@ -1339,19 +1339,25 @@ class SymbolSpace:
 
         if only_delta is True:
             # divide by three the figure width
-            figsize = (int(figsize[0] / 3), figsize[1])
+            # figsize = (int(figsize[0] / 3), figsize[1])
             fig, ax = plt.subplots(figsize=figsize)
             sd_min_without_diagonal = Sd[np.triu_indices(len(Sd), 1)].min()
             if use_sns:
                 import seaborn as sns
-                im = sns.heatmap(Sd, vmin=sd_min_without_diagonal, vmax=Sd.max(), cmap="coolwarm", xticklabels=labels, yticklabels=labels, ax=ax)
+                # square=True ensures cells are square, cbar_kws shrinks the colorbar to fit better
+                im = sns.heatmap(Sd, vmin=sd_min_without_diagonal, vmax=Sd.max(), cmap="coolwarm", 
+                                 xticklabels=labels, yticklabels=labels, ax=ax, square=True, cbar_kws={"shrink": 0.7})
+                # Much smaller font size for ticks
+                ax.tick_params(axis='both', which='major', labelsize=4)
+                plt.xticks(rotation=90, fontsize=4)
+                plt.yticks(rotation=0, fontsize=4)
             else:
                 im = ax.imshow(Sd, vmin=sd_min_without_diagonal, vmax=Sd.max(), cmap="coolwarm")
                 ax.set_xticks(range(len(labels)))
-                ax.set_xticklabels(labels, rotation=90)
+                ax.set_xticklabels(labels, rotation=90, fontsize=4)
                 ax.set_yticks(range(len(labels)))
-                ax.set_yticklabels(labels)
-            ax.set_title(f"Δ After-Before for {symbol}")
+                ax.set_yticklabels(labels, fontsize=4)
+            ax.set_title(f"Δ After-Before for {symbol}", fontsize=9)
         plt.tight_layout()
         plt.show()
 
@@ -2047,7 +2053,7 @@ def plot_delta_graph(
     nx.draw_networkx_edges(G, pos, edgelist=up, edge_color="darkred",  width=w_up, alpha=0.75)
     nx.draw_networkx_edges(G, pos, edgelist=dn, edge_color="tab:blue", width=w_dn, alpha=0.55)
 
-    nx.draw_networkx_labels(G, pos, font_size=8)
+    nx.draw_networkx_labels(G, pos, font_size=8, font_color="white")
 
     handles = [Patch(facecolor=cdict[s], edgecolor='black', label=s) for s in syms_present]
     if handles:
@@ -2068,7 +2074,8 @@ def plot_contextual_subgraph_colored(
     alpha=0.85,
     tau=0.1,
     normalize=False,
-    global_color_map=None  # pass global palette here
+    global_color_map=None,  # pass global palette here
+    figsize=(8, 6)
 ):
     """
     Plot contextual subgraph for a given sentence using a fixed global color palette.
@@ -2132,7 +2139,7 @@ def plot_contextual_subgraph_colored(
     subG = space.G.subgraph(nodes).copy()
     pos = nx.spring_layout(subG, seed=42)
 
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=figsize)
 
     # Symbol nodes
     for s in symbols:
@@ -2155,7 +2162,7 @@ def plot_contextual_subgraph_colored(
 
 
     labels = {n: n[2:] for n in subG}
-    nx.draw_networkx_labels(subG, pos, labels, font_size=13, font_weight="bold")
+    nx.draw_networkx_labels(subG, pos, labels, font_size=13, font_weight="bold", font_color="white")
 
     plt.title(f"Contextual Subgraph for: '{context_sentence[:60]}...'")
     plt.axis("off")
