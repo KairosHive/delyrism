@@ -1004,7 +1004,38 @@ class _TextAdapter:
 # UI
 # =============================
 
-st.set_page_config(page_title="Archetype Explorer", layout="wide")
+st.set_page_config(
+    page_title="Archetype Explorer", 
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'About': "Delyrism - Archetype Explorer"
+    }
+)
+
+# Force dark theme via CSS (for users without dark mode set)
+st.markdown("""
+    <style>
+    /* Force dark background for light mode users */
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+        background-color: #0e1117 !important;
+    }
+    [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+        background-color: #262730 !important;
+    }
+    /* Ensure text is readable */
+    .stApp, .stApp p, .stApp span, .stApp label, .stApp div {
+        color: #fafafa !important;
+    }
+    /* Fix selectbox and input backgrounds */
+    [data-testid="stSelectbox"] > div > div,
+    .stTextArea textarea,
+    .stTextInput input {
+        background-color: #262730 !important;
+        color: #fafafa !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 st.markdown("""
     <style>
     @keyframes glow-pulse {
@@ -1193,6 +1224,46 @@ st.markdown("""
     div[data-testid="stVerticalBlock"] > div:has(span[id^="section-"]) {
         display: none;
     }
+    
+    /* ========== Main Console Container Styling ========== */
+    /* Style for the bordered containers in the main console area */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type div[data-testid="stContainer"] {
+        background: linear-gradient(135deg, rgba(20, 25, 35, 0.8) 0%, rgba(15, 18, 28, 0.9) 100%);
+        border: 1px solid rgba(161, 196, 253, 0.15) !important;
+        border-radius: 12px !important;
+        backdrop-filter: blur(8px);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type div[data-testid="stContainer"]::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(161, 196, 253, 0.25), transparent);
+        pointer-events: none;
+    }
+    
+    .console-label {
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: rgba(161, 196, 253, 0.6);
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+    }
+    
+    .console-label {
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: rgba(161, 196, 253, 0.6);
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+    }
     </style>
     <div class="delyrism-header">
         <div class="delyrism-title-container">
@@ -1213,54 +1284,108 @@ st.markdown("""
         <div class="delyrism-subtitle">🧭 Archetype Explorer</div>
     </div>
 """, unsafe_allow_html=True)
+
+# ========== MAIN CONSOLE: Symbolic Structure & Context ==========
+# Scan for structure files
+structures_dir = pathlib.Path(__file__).parent / "structures"
+structure_files = sorted([f.name for f in structures_dir.glob("*.json")]) if structures_dir.exists() else []
+
+# Nice display names for structure files
+STRUCTURE_DISPLAY_NAMES = {
+    "elements.json": "🜂 Four Elements",
+    "planets.json": "☉ Celestial Planets",
+    "jungian.json": "🜏 Jungian Archetypes",
+    "lakota.json": "🪶 Lakota Spirits",
+    "chakras.json": "◉ Chakra System",
+    "chinese_zodiac.json": "🐉 Chinese Zodiac",
+    "mayan.json": "𐊗 Mayan Calendar",
+    "musical.json": "♪ Musical Modes",
+    "architecture.json": "🏛 Sacred Architecture",
+    "seasons_life.json": "🌱 Seasons of Life",
+}
+
+def get_display_name(filename: str) -> str:
+    """Convert filename to nice display name."""
+    if filename in STRUCTURE_DISPLAY_NAMES:
+        return STRUCTURE_DISPLAY_NAMES[filename]
+    # Fallback: convert filename to title case
+    name = filename.replace(".json", "").replace("_", " ").title()
+    return f"📄 {name}"
+
+def get_filename_from_display(display_name: str) -> str:
+    """Convert display name back to filename."""
+    for fname, dname in STRUCTURE_DISPLAY_NAMES.items():
+        if dname == display_name:
+            return fname
+    # Fallback: try to reconstruct filename
+    name = display_name.lstrip("📄 ").lower().replace(" ", "_") + ".json"
+    return name
+
+# Build options with nice names
+structure_display_opts = ["✦ Custom"] + [get_display_name(f) for f in structure_files]
+
+# Callback to load preset into session state
+def on_structure_change():
+    sel = st.session_state.get("structure_select")
+    if sel and sel != "✦ Custom":
+        filename = get_filename_from_display(sel)
+        p = structures_dir / filename
+        if p.exists():
+            st.session_state["symbol_json_text"] = p.read_text(encoding="utf-8")
+
+# Initialize JSON text in session state if missing
+if "symbol_json_text" not in st.session_state:
+    def_path = structures_dir / "elements.json"
+    if def_path.exists():
+        st.session_state["symbol_json_text"] = def_path.read_text(encoding="utf-8")
+    else:
+        st.session_state["symbol_json_text"] = json.dumps(_default_symbols_map(), indent=2, ensure_ascii=False)
+
+# Main console layout with styled containers
+console_col1, console_col2 = st.columns([1, 2])
+
+with console_col1:
+    with st.container(border=True):
+        st.markdown('<div class="console-label">⬡ SYMBOLIC STRUCTURE</div>', unsafe_allow_html=True)
+        try:
+            def_idx = structure_display_opts.index(get_display_name("elements.json"))
+        except ValueError:
+            def_idx = 0
+        
+        st.selectbox(
+            "Structure",
+            structure_display_opts,
+            index=def_idx,
+            key="structure_select",
+            on_change=on_structure_change,
+            label_visibility="collapsed"
+        )
+
+with console_col2:
+    with st.container(border=True):
+        st.markdown('<div class="console-label">◈ CONTEXT PROMPT</div>', unsafe_allow_html=True)
+        sentence = st.text_area(
+            "Context",
+            value="Flooding spirits dancing around floating suns",
+            placeholder="e.g., A ceremony by the river focusing on transformation and healing",
+            height=68,
+            key="ctx_sentence",
+            label_visibility="collapsed"
+        )
+
+# Load symbols map
+symbols_map = _load_symbols_map(st.session_state.get("symbol_json_text", "{}"))
+
 st.session_state.setdefault("mm_items", [])  # list[MMItem-like dicts]
 
 with st.sidebar:
     
-    
-
-    # --- Data ----------------------------------------------------
     # --- Data ----------------------------------------------------
     st.markdown('<span id="section-data"></span>', unsafe_allow_html=True)
     with st.expander("Data", expanded=False):
-        # Scan for structure files
-        structures_dir = pathlib.Path(__file__).parent / "structures"
-        structure_files = sorted([f.name for f in structures_dir.glob("*.json")]) if structures_dir.exists() else []
+        st.caption("Import/export & edit archetype structures")
         
-        # Callback to load preset into session state
-        def on_structure_change():
-            sel = st.session_state.get("structure_select")
-            if sel and sel != "Custom":
-                p = structures_dir / sel
-                if p.exists():
-                    st.session_state["symbol_json_text"] = p.read_text(encoding="utf-8")
-
-        # Initialize JSON text in session state if missing
-        if "symbol_json_text" not in st.session_state:
-            def_path = structures_dir / "elements.json"
-            if def_path.exists():
-                st.session_state["symbol_json_text"] = def_path.read_text(encoding="utf-8")
-            else:
-                st.session_state["symbol_json_text"] = json.dumps(_default_symbols_map(), indent=2, ensure_ascii=False)
-
-        # Dropdown options
-        opts = ["Custom"] + structure_files
-        # Default to elements.json if present
-        try:
-            def_idx = opts.index("elements.json")
-        except ValueError:
-            def_idx = 0
-
-        st.selectbox(
-            "Symbolic Structure", 
-            opts, 
-            index=def_idx, 
-            key="structure_select", 
-            on_change=on_structure_change,
-            help="Select a preset to load its JSON. You can then edit it below."
-        )
-
-        # File uploader (always visible)
+        # File uploader
         uploaded = st.file_uploader("Import JSON", type=["json"], key="json_uploader")
         if uploaded is not None:
             content = uploaded.getvalue().decode("utf-8")
@@ -1269,21 +1394,26 @@ with st.sidebar:
             if st.session_state.get("last_upload_hash") != u_hash:
                 st.session_state["symbol_json_text"] = content
                 st.session_state["last_upload_hash"] = u_hash
-                st.experimental_rerun()
-
-        # JSON Editor (always visible)
-        symbols_txt = st.text_area(
+                st.rerun()
+        
+        # JSON Editor
+        st.text_area(
             "JSON Editor",
             key="symbol_json_text",
-            height=100,
-            help="Edit the structure here. Changes apply immediately."
+            height=150,
+            help="Edit the archetype structure directly"
         )
         
-        symbols_map = _load_symbols_map(symbols_txt)
-    # st.markdown('</div>', unsafe_allow_html=True)
+        # Export button
+        st.download_button(
+            "📥 Export JSON",
+            data=st.session_state.get("symbol_json_text", "{}"),
+            file_name="archetypes.json",
+            mime="application/json",
+            use_container_width=True
+        )
 
-    
-    # --- Context (panel-colored sliders) --------------------------
+    # --- Context Options --------------------------
     # Ensure backend/embedder are defined for audio checks (they are selected in Embeddings below)
     backend = st.session_state.get("backend_selection", "qwen3")
     model_val = st.session_state.get("embedding_model", "")
@@ -1291,19 +1421,12 @@ with st.sidebar:
     embedder = get_embedder(backend, model_val or None, pooling_val)
 
     st.markdown('<span id="section-context"></span>', unsafe_allow_html=True)
-    with st.expander("Context", expanded=True):
-        sentence = st.text_area(
-            "Context prompt",
-            value="Flooding spirits dancing around floating suns",
-            placeholder="e.g., A ceremony by the river focusing on transformation and healing",
-            height=90,
-            key="ctx_sentence",
-        )
-
-        # ADD (audio): optional audio context
+    with st.expander("Context Options", expanded=False):
+        st.caption("Audio context & advanced options")
+        
         # ADD (audio): optional audio context (upload or record)
         audio_ctx_vec = None
-        with st.popover("Or use an audio context"):
+        with st.popover("🎤 Audio Context"):
             src = st.radio("Source", ["Upload", "Record"], horizontal=True)
 
             max_secs = st.slider("Use up to (seconds)", 2, 30, 12, key="audio_secs")
