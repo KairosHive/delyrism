@@ -1225,28 +1225,6 @@ st.markdown("""
         display: none;
     }
     
-    /* ========== Main Console Container Styling ========== */
-    /* Style for the bordered containers in the main console area */
-    div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type div[data-testid="stContainer"] {
-        background: linear-gradient(135deg, rgba(20, 25, 35, 0.8) 0%, rgba(15, 18, 28, 0.9) 100%);
-        border: 1px solid rgba(161, 196, 253, 0.15) !important;
-        border-radius: 12px !important;
-        backdrop-filter: blur(8px);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-        position: relative;
-        overflow: hidden;
-    }
-    div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type div[data-testid="stContainer"]::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(161, 196, 253, 0.25), transparent);
-        pointer-events: none;
-    }
-    
     .console-label {
         font-size: 0.65rem;
         letter-spacing: 0.15em;
@@ -1256,13 +1234,12 @@ st.markdown("""
         font-weight: 500;
     }
     
-    .console-label {
-        font-size: 0.65rem;
-        letter-spacing: 0.15em;
-        text-transform: uppercase;
-        color: rgba(161, 196, 253, 0.6);
-        margin-bottom: 0.5rem;
-        font-weight: 500;
+    .console-label.blue {
+        color: #3498db !important;
+    }
+    
+    .console-label.green {
+        color: #2ecc71 !important;
     }
     </style>
     <div class="delyrism-header">
@@ -1346,7 +1323,15 @@ console_col1, console_col2 = st.columns([1, 2])
 
 with console_col1:
     with st.container(border=True):
-        st.markdown('<div class="console-label">⬡ SYMBOLIC STRUCTURE</div>', unsafe_allow_html=True)
+        st.markdown('''
+            <style>
+            [data-testid="stVerticalBlockBorderWrapper"]:has(.console-label.blue) {
+                border-color: rgba(52, 152, 219, 0.5) !important;
+                background: linear-gradient(135deg, rgba(52, 152, 219, 0.1) 0%, rgba(15, 18, 28, 0.95) 100%) !important;
+            }
+            </style>
+            <div class="console-label blue">⬡ SYMBOLIC STRUCTURE</div>
+        ''', unsafe_allow_html=True)
         try:
             def_idx = structure_display_opts.index(get_display_name("elements.json"))
         except ValueError:
@@ -1363,7 +1348,15 @@ with console_col1:
 
 with console_col2:
     with st.container(border=True):
-        st.markdown('<div class="console-label">◈ CONTEXT PROMPT</div>', unsafe_allow_html=True)
+        st.markdown('''
+            <style>
+            [data-testid="stVerticalBlockBorderWrapper"]:has(.console-label.green) {
+                border-color: rgba(46, 204, 113, 0.5) !important;
+                background: linear-gradient(135deg, rgba(46, 204, 113, 0.1) 0%, rgba(15, 18, 28, 0.95) 100%) !important;
+            }
+            </style>
+            <div class="console-label green">◈ CONTEXT PROMPT</div>
+        ''', unsafe_allow_html=True)
         sentence = st.text_area(
             "Context",
             value="Flooding spirits dancing around floating suns",
@@ -1380,9 +1373,9 @@ st.session_state.setdefault("mm_items", [])  # list[MMItem-like dicts]
 
 with st.sidebar:
     
-    # --- Data ----------------------------------------------------
+    # --- Symbolic Structure ----------------------------------------------------
     st.markdown('<span id="section-data"></span>', unsafe_allow_html=True)
-    with st.expander("Data", expanded=False):
+    with st.expander("Symbolic Structure", expanded=False):
         st.caption("Import/export & edit archetype structures")
         
         # File uploader
@@ -1567,9 +1560,9 @@ with st.sidebar:
                 )
     # st.markdown('</div>', unsafe_allow_html=True)
     # --- Embeddings ----------------------------------------------
-    # --- Embeddings (sidebar) ---
+    # --- Embedding Model (sidebar) ---
     st.markdown('<span id="section-embeddings"></span>', unsafe_allow_html=True)
-    with st.expander("Embeddings", expanded=False):
+    with st.expander("Embedding Model", expanded=False):
         # ADD (audio): include audioclip as a backend option
         backend_help = (
             "Which encoder turns your inputs into vectors.\n"
@@ -2066,35 +2059,426 @@ with tab_explore:
                     st.caption("💡 Drag the slider **below the chart** (or use the sidebar) to morph.")
 
             else:
-                # --- STANDARD MODE (Matplotlib) ---
+                # --- STANDARD MODE ---
+                # Visualization style options
+                with st.expander("🎨 Visualization Style", expanded=False):
+                    viz_style = st.radio(
+                        "Render Engine",
+                        ["Modern (Plotly)", "Classic (Matplotlib)"],
+                        horizontal=True,
+                        key="viz_style_map"
+                    )
+                    
+                    vcol1, vcol2, vcol3 = st.columns(3)
+                    with vcol1:
+                        point_size = st.slider("Point Size", 4, 20, 8, key="viz_point_size")
+                        show_labels = st.checkbox("Show Labels", False, key="viz_show_labels")
+                    with vcol2:
+                        line_width = st.slider("Line Width", 0.5, 3.0, 1.0, 0.5, key="viz_line_width")
+                        smooth_arrows = st.checkbox("Smooth Arrows", True, key="viz_smooth_arrows")
+                    with vcol3:
+                        region_style = st.selectbox(
+                            "Region Style",
+                            ["None", "Density Glow", "Soft Contours", "Gradient Fields"],
+                            index=3,
+                            key="viz_region_style"
+                        )
+                        region_opacity = st.slider("Region Opacity", 0.1, 0.6, 0.2, 0.05, key="viz_region_opacity")
+                
                 if show_arrow is True:
                     arrow_scale = 0.5
                 if show_arrow is False:
                     arrow_scale = 0
                 
-                try:
-                    fig_ms = fig_from_callable(
-                        space.plot_map_shift,
-                        weights=p_weights,
-                        sentence=p_sentence,
-                        method=reducer,
-                        with_hulls=with_hulls,
-                        include_centroids=include_centroids,
-                        normalize_centroids=normalize_centroids,
-                        figsize=(6.8, 4.5),
-                        title="Context shift on descriptor map",
-                        arrow_scale=arrow_scale,
-                        arrow_alpha=0.65,
-                        gate=gate,
-                        tau=tau,
-                        beta=beta,
-                        membership_alpha=membership_alpha,
-                        within_symbol_softmax=within_symbol_softmax,
-                        color_dict=color_map
-                    )
-                    st.pyplot(fig_ms, clear_figure=True)
-                except Exception as e:
-                    st.error(f"Map plot error: {e}")
+                if viz_style == "Modern (Plotly)":
+                    # --- MODERN PLOTLY MODE ---
+                    try:
+                        import plotly.graph_objects as go
+                        import pandas as pd
+                        from scipy.stats import gaussian_kde
+                        from scipy.ndimage import gaussian_filter
+                        
+                        # Get projections from space
+                        reducer_obj, Z_fit, X_fit, slices = space.get_cached_reducer_and_projection(
+                            method=reducer, n_neighbors=15,
+                            include_centroids=include_centroids, normalize_centroids=normalize_centroids
+                        )
+                        
+                        # Compute shifted matrix
+                        D_ctx = space.make_shifted_matrix(
+                            weights=p_weights, sentence=p_sentence,
+                            strategy=shift_mode, beta=beta, gate=gate, tau=tau,
+                            within_symbol_softmax=within_symbol_softmax, gamma=gamma,
+                            pool_type=pool_type, pool_w=pool_w, membership_alpha=membership_alpha
+                        )
+                        
+                        # Transform shifted descriptors
+                        if reducer != "tsne":
+                            Z_ctx = reducer_obj.transform(D_ctx)
+                        else:
+                            Z_ctx = Z_fit[:len(space.descriptors)]  # fallback
+                        
+                        # Build original positions using slices from get_cached_reducer_and_projection
+                        # slices maps symbol -> (start, end) in the DESCRIPTOR part of Z_fit
+                        # Z_fit layout: [sym1_descs, (sym1_centroid), sym2_descs, (sym2_centroid), ...]
+                        # We need to map from slices indices to Z_fit indices, accounting for centroids
+                        
+                        # First, build a mapping from global descriptor index to Z_fit position
+                        Z_orig = np.zeros((len(space.descriptors), 2), dtype=np.float32)
+                        centroid_positions = {}  # symbol -> (x, y) position of centroid in Z_fit
+                        
+                        z_cursor = 0
+                        for s in space.symbols:
+                            idx = space.symbol_to_idx[s]
+                            n_desc = len(idx)
+                            if n_desc > 0:
+                                # Extract positions from Z_fit
+                                Z_sym = Z_fit[z_cursor:z_cursor + n_desc]
+                                # Assign to global positions
+                                Z_orig[idx] = Z_sym
+                                z_cursor += n_desc
+                                
+                                if include_centroids:
+                                    # The centroid position is right after the descriptors
+                                    centroid_positions[s] = Z_fit[z_cursor]
+                                    z_cursor += 1
+                        
+                        # Create Plotly figure
+                        fig = go.Figure()
+                        
+                        # Compute tight bounds from ALL visible data
+                        # Get only the actually-used descriptor positions (non-zero check as safety)
+                        used_mask = np.any(Z_orig != 0, axis=1) | (Z_orig.sum(axis=1) != 0)  # True if row has any non-zero
+                        # Actually safer: use the positions we know are filled
+                        all_positions = []
+                        for s in space.symbols:
+                            idx = space.symbol_to_idx[s]
+                            if len(idx) > 0:
+                                all_positions.append(Z_orig[idx])
+                                if include_centroids and s in centroid_positions:
+                                    all_positions.append(centroid_positions[s].reshape(1, 2))
+                        
+                        if all_positions:
+                            all_pos = np.vstack(all_positions)
+                            x_data_min, x_data_max = float(all_pos[:, 0].min()), float(all_pos[:, 0].max())
+                            y_data_min, y_data_max = float(all_pos[:, 1].min()), float(all_pos[:, 1].max())
+                        else:
+                            x_data_min, x_data_max = 0.0, 1.0
+                            y_data_min, y_data_max = 0.0, 1.0
+                        
+                        # Also include shifted positions if arrows are shown
+                        if arrow_scale > 0 and all_positions:
+                            all_ctx_positions = []
+                            for s in space.symbols:
+                                idx = space.symbol_to_idx[s]
+                                if len(idx) > 0:
+                                    all_ctx_positions.append(Z_ctx[idx])
+                            if all_ctx_positions:
+                                all_ctx = np.vstack(all_ctx_positions)
+                                x_data_min = min(x_data_min, float(all_ctx[:, 0].min()))
+                                x_data_max = max(x_data_max, float(all_ctx[:, 0].max()))
+                                y_data_min = min(y_data_min, float(all_ctx[:, 1].min()))
+                                y_data_max = max(y_data_max, float(all_ctx[:, 1].max()))
+                        
+                        # Add padding (5% for tighter zoom)
+                        x_range = x_data_max - x_data_min
+                        y_range = y_data_max - y_data_min
+                        x_pad = x_range * 0.05 if x_range > 1e-6 else 0.5
+                        y_pad = y_range * 0.05 if y_range > 1e-6 else 0.5
+                        
+                        x_plot_min = float(x_data_min - x_pad)
+                        x_plot_max = float(x_data_max + x_pad)
+                        y_plot_min = float(y_data_min - y_pad)
+                        y_plot_max = float(y_data_max + y_pad)
+                        
+                        # Add region visualization FIRST (so it's behind points)
+                        if region_style != "None":
+                            # Create grid for density estimation - USE CENTERED BOUNDS
+                            grid_size = 60
+                            xx = np.linspace(x_plot_min, x_plot_max, grid_size)
+                            yy = np.linspace(y_plot_min, y_plot_max, grid_size)
+                            XX, YY = np.meshgrid(xx, yy)
+                            grid_points = np.vstack([XX.ravel(), YY.ravel()])
+                            
+                            for s in space.symbols:
+                                idx = space.symbol_to_idx[s]
+                                if len(idx) < 3:
+                                    continue
+                                
+                                color = color_map.get(s, "#888888")
+                                points = Z_orig[idx]
+                                
+                                try:
+                                    # Compute kernel density
+                                    kde = gaussian_kde(points.T, bw_method=0.3)
+                                    Z_density = kde(grid_points).reshape(XX.shape)
+                                    
+                                    # Smooth and normalize
+                                    Z_density = gaussian_filter(Z_density, sigma=1.5)
+                                    Z_density = Z_density / Z_density.max() if Z_density.max() > 0 else Z_density
+                                    
+                                    if region_style == "Density Glow":
+                                        # Single filled contour with glow effect
+                                        fig.add_trace(go.Contour(
+                                            x=xx, y=yy, z=Z_density,
+                                            showscale=False,
+                                            contours=dict(
+                                                start=0.15,
+                                                end=0.9,
+                                                size=0.25,
+                                                coloring='fill'
+                                            ),
+                                            colorscale=[
+                                                [0, f'rgba(0,0,0,0)'],
+                                                [0.3, color.replace(')', f',{region_opacity * 0.3})').replace('rgb', 'rgba') if 'rgb' in color else f'rgba(128,128,128,{region_opacity * 0.3})'],
+                                                [0.6, color.replace(')', f',{region_opacity * 0.6})').replace('rgb', 'rgba') if 'rgb' in color else f'rgba(128,128,128,{region_opacity * 0.6})'],
+                                                [1, color.replace(')', f',{region_opacity})').replace('rgb', 'rgba') if 'rgb' in color else f'rgba(128,128,128,{region_opacity})']
+                                            ],
+                                            line=dict(width=0),
+                                            hoverinfo='skip',
+                                            showlegend=False
+                                        ))
+                                    
+                                    elif region_style == "Soft Contours":
+                                        # Line contours only
+                                        fig.add_trace(go.Contour(
+                                            x=xx, y=yy, z=Z_density,
+                                            showscale=False,
+                                            contours=dict(
+                                                start=0.2,
+                                                end=0.8,
+                                                size=0.3,
+                                                coloring='lines'
+                                            ),
+                                            line=dict(width=1.5, color=color),
+                                            opacity=region_opacity * 2,
+                                            hoverinfo='skip',
+                                            showlegend=False
+                                        ))
+                                    
+                                    elif region_style == "Gradient Fields":
+                                        # Heatmap style with transparency
+                                        # Convert hex to rgba
+                                        import matplotlib.colors as mcolors
+                                        try:
+                                            rgb = mcolors.to_rgb(color)
+                                        except:
+                                            rgb = (0.5, 0.5, 0.5)
+                                        
+                                        # Create custom colorscale
+                                        colorscale = [
+                                            [0, 'rgba(0,0,0,0)'],
+                                            [0.5, f'rgba({int(rgb[0]*255)},{int(rgb[1]*255)},{int(rgb[2]*255)},{region_opacity * 0.5})'],
+                                            [1, f'rgba({int(rgb[0]*255)},{int(rgb[1]*255)},{int(rgb[2]*255)},{region_opacity})']
+                                        ]
+                                        
+                                        fig.add_trace(go.Heatmap(
+                                            x=xx, y=yy, z=Z_density,
+                                            showscale=False,
+                                            colorscale=colorscale,
+                                            hoverinfo='skip',
+                                            showlegend=False,
+                                            zmin=0.1,
+                                            zmax=1.0
+                                        ))
+                                        
+                                except Exception:
+                                    pass  # Skip density if KDE fails
+                        
+                        # Add traces per symbol (points on top)
+                        for s in space.symbols:
+                            idx = space.symbol_to_idx[s]
+                            if not idx:
+                                continue
+                            
+                            color = color_map.get(s, "#888888")
+                            descs = [space.descriptors[i] for i in idx]
+                            
+                            # Original points
+                            fig.add_trace(go.Scatter(
+                                x=Z_orig[idx, 0],
+                                y=Z_orig[idx, 1],
+                                mode='markers+text' if show_labels else 'markers',
+                                marker=dict(
+                                    size=point_size,
+                                    color=color,
+                                    opacity=0.85,
+                                    line=dict(width=0.5, color='rgba(255,255,255,0.3)')
+                                ),
+                                text=descs if show_labels else None,
+                                textposition='top center',
+                                textfont=dict(size=8, color='rgba(255,255,255,0.7)'),
+                                name=s,
+                                legendgroup=s,
+                                hovertemplate=f'<b>{s}</b><br>%{{text}}<extra></extra>' if show_labels else f'<b>{s}</b><extra></extra>',
+                            ))
+                            
+                            # Arrows showing shift
+                            if arrow_scale > 0:
+                                for i, desc_idx in enumerate(idx):
+                                    x0, y0 = Z_orig[desc_idx]
+                                    x1, y1 = Z_ctx[desc_idx]
+                                    dx = (x1 - x0) * arrow_scale
+                                    dy = (y1 - y0) * arrow_scale
+                                    
+                                    if smooth_arrows:
+                                        # Smooth bezier-like arrow using line with gradient
+                                        fig.add_trace(go.Scatter(
+                                            x=[x0, x0 + dx],
+                                            y=[y0, y0 + dy],
+                                            mode='lines',
+                                            line=dict(
+                                                width=line_width,
+                                                color=color,
+                                            ),
+                                            opacity=0.5,
+                                            showlegend=False,
+                                            hoverinfo='skip'
+                                        ))
+                                    else:
+                                        # Arrow annotation
+                                        fig.add_annotation(
+                                            x=x0 + dx, y=y0 + dy,
+                                            ax=x0, ay=y0,
+                                            xref='x', yref='y',
+                                            axref='x', ayref='y',
+                                            showarrow=True,
+                                            arrowhead=2,
+                                            arrowsize=0.8,
+                                            arrowwidth=line_width,
+                                            arrowcolor=color,
+                                            opacity=0.5
+                                        )
+                            
+                            # Centroid star
+                            if include_centroids and s in centroid_positions:
+                                c_orig = centroid_positions[s]
+                                c_ctx = Z_ctx[idx].mean(0)
+                                fig.add_trace(go.Scatter(
+                                    x=[float(c_orig[0])],
+                                    y=[float(c_orig[1])],
+                                    mode='markers',
+                                    marker=dict(
+                                        size=14,
+                                        symbol='star',
+                                        color=color,
+                                        line=dict(width=1, color='white')
+                                    ),
+                                    showlegend=False,
+                                    legendgroup=s,
+                                    hovertemplate=f'<b>{s} centroid</b><extra></extra>'
+                                ))
+                                if arrow_scale > 0:
+                                    fig.add_trace(go.Scatter(
+                                        x=[float(c_orig[0]), float(c_ctx[0])],
+                                        y=[float(c_orig[1]), float(c_ctx[1])],
+                                        mode='lines',
+                                        line=dict(width=2, color=color, dash='dot'),
+                                        opacity=0.6,
+                                        showlegend=False,
+                                        hoverinfo='skip'
+                                    ))
+                        
+                        # Layout styling
+                        axis_labels = {
+                            "umap": ("UMAP 1", "UMAP 2"),
+                            "tsne": ("t-SNE 1", "t-SNE 2"),
+                            "pca": ("PCA 1", "PCA 2")
+                        }
+                        xl, yl = axis_labels.get(reducer, ("Dim 1", "Dim 2"))
+                        
+                        fig.update_layout(
+                            xaxis=dict(
+                                title=xl,
+                                showgrid=True,
+                                gridcolor='rgba(255,255,255,0.06)',
+                                gridwidth=1,
+                                zeroline=False,
+                                color='rgba(255,255,255,0.5)',
+                                tickfont=dict(color='rgba(255,255,255,0.4)', size=10),
+                                range=[x_plot_min, x_plot_max],
+                                autorange=False,
+                            ),
+                            yaxis=dict(
+                                title=yl,
+                                showgrid=True,
+                                gridcolor='rgba(255,255,255,0.06)',
+                                gridwidth=1,
+                                zeroline=False,
+                                color='rgba(255,255,255,0.5)',
+                                tickfont=dict(color='rgba(255,255,255,0.4)', size=10),
+                                range=[y_plot_min, y_plot_max],
+                                autorange=False,
+                            ),
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            legend=dict(
+                                orientation='h',
+                                yanchor='bottom',
+                                y=1.02,
+                                xanchor='left',
+                                x=0,
+                                font=dict(size=13, color='rgba(255,255,255,0.95)'),
+                                bgcolor='rgba(0,0,0,0)'
+                            ),
+                            margin=dict(l=50, r=20, t=40, b=50),
+                            height=480,
+                            hovermode='closest'
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True, config={
+                            'displayModeBar': True,
+                            'displaylogo': False,
+                            'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+                        })
+                        
+                    except Exception as e:
+                        st.error(f"Plotly visualization error: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+                
+                else:
+                    # --- CLASSIC MATPLOTLIB MODE ---
+                    try:
+                        fig_ms = fig_from_callable(
+                            space.plot_map_shift,
+                            weights=p_weights,
+                            sentence=p_sentence,
+                            method=reducer,
+                            with_hulls=with_hulls,
+                            include_centroids=include_centroids,
+                            normalize_centroids=normalize_centroids,
+                            figsize=(6.8, 4.5),
+                            title="Context shift on descriptor map",
+                            arrow_scale=arrow_scale,
+                            arrow_alpha=0.65,
+                            gate=gate,
+                            tau=tau,
+                            beta=beta,
+                            membership_alpha=membership_alpha,
+                            within_symbol_softmax=within_symbol_softmax,
+                            color_dict=color_map
+                        )
+                        
+                        # Apply dark theme
+                        fig_ms.patch.set_alpha(0.0)
+                        for ax in fig_ms.axes:
+                            ax.patch.set_alpha(0.0)
+                            ax.xaxis.label.set_color('white')
+                            ax.yaxis.label.set_color('white')
+                            ax.title.set_color('white')
+                            ax.tick_params(axis='x', colors='white')
+                            ax.tick_params(axis='y', colors='white')
+                            for spine in ax.spines.values():
+                                spine.set_color((1, 1, 1, 0.2))
+                            if ax.get_legend():
+                                leg = ax.get_legend()
+                                leg.get_frame().set_alpha(0.0)
+                                plt.setp(leg.get_texts(), color='white')
+                        
+                        st.pyplot(fig_ms, clear_figure=True)
+                    except Exception as e:
+                        st.error(f"Map plot error: {e}")
 
         with c2:
             st.subheader("Ambiguity Metrics")
