@@ -1318,6 +1318,11 @@ if "symbol_json_text" not in st.session_state:
     else:
         st.session_state["symbol_json_text"] = json.dumps(_default_symbols_map(), indent=2, ensure_ascii=False)
 
+# Check for pending archetypes from Corpus Miner "Use in Explorer" button
+if "_pending_archetypes" in st.session_state:
+    st.session_state["symbol_json_text"] = st.session_state.pop("_pending_archetypes")
+    st.toast("✅ Archetypes loaded into Explorer!", icon="🎯")
+
 # Main console layout with styled containers
 console_col1, console_col2 = st.columns([1, 2])
 
@@ -3131,7 +3136,7 @@ with tab_mine:
     try:
         from enhanced_miner import (
             EnhancedArchetypeMiner, LLMArchetypeRefiner, PDFExtractor, 
-            TextChunker, FolderScanner, MinerCorpus
+            TextChunker, FolderScanner, MinerCorpus, VisionDescriber
         )
         _HAS_ENHANCED_MINER = True
     except ImportError as e:
@@ -3277,6 +3282,14 @@ with tab_mine:
             recursive = c1.checkbox("Scan subfolders", True, key="img_recursive")
             max_images = c2.number_input("Max images", 10, 2000, 500, key="img_max")
             
+            # Vision description option
+            describe_images = st.checkbox(
+                "🔮 Describe images with Vision LLM",
+                False,
+                key="img_describe",
+                help="Use Cloudflare Vision LLM to generate symbolic descriptions for each image. This enables better concept extraction from image-only clusters."
+            )
+            
             if img_folder and st.button("🖼️ Scan Folder", key="btn_scan_folder"):
                 folder_path = pathlib.Path(img_folder)
                 if not folder_path.exists():
@@ -3286,13 +3299,39 @@ with tab_mine:
                         try:
                             images = FolderScanner.scan_images(folder_path, recursive=recursive, max_files=max_images)
                             
+                            # If vision description enabled, describe images
+                            descriptions = {}
+                            if describe_images and images:
+                                try:
+                                    vision = VisionDescriber(
+                                        cloudflare_account_id=CLOUDFLARE_ACCOUNT_ID,
+                                        cloudflare_api_token=CLOUDFLARE_API_TOKEN
+                                    )
+                                    
+                                    progress_bar = st.progress(0, text="Describing images with Vision LLM...")
+                                    
+                                    def update_progress(current, total):
+                                        progress_bar.progress(current / total, text=f"Describing image {current}/{total}...")
+                                    
+                                    descriptions = vision.describe_batch(images, progress_callback=update_progress)
+                                    progress_bar.empty()
+                                    st.success(f"Generated {len(descriptions)} image descriptions")
+                                    
+                                except Exception as e:
+                                    st.warning(f"Vision description failed: {e}. Continuing without descriptions.")
+                            
                             for img in images:
-                                st.session_state["enhanced_miner_corpus"]["images"].append({
+                                img_data = {
                                     "id": img.id,
                                     "path": img.path,
                                     "filename": img.filename,
                                     "source": str(folder_path)
-                                })
+                                }
+                                # Include description if available
+                                if img.path in descriptions:
+                                    img_data["description"] = descriptions[img.path]
+                                    
+                                st.session_state["enhanced_miner_corpus"]["images"].append(img_data)
                             
                             st.session_state["enhanced_miner_corpus"]["folders"].append({
                                 "path": str(folder_path),
@@ -3387,12 +3426,22 @@ with tab_mine:
                     st.caption(f"... and {n_texts - 20} more")
             
             with st.expander(f"🖼️ Images Preview ({n_images})", expanded=False):
+                # Show how many have descriptions
+                n_described = sum(1 for img in corpus["images"] if img.get("description"))
+                if n_described > 0:
+                    st.caption(f"🔮 {n_described}/{n_images} images have vision descriptions")
+                
                 # Show thumbnail grid
                 cols = st.columns(5)
                 for i, img in enumerate(corpus["images"][:15]):
                     with cols[i % 5]:
                         try:
-                            st.image(img["path"], caption=img["filename"][:15], use_container_width=True)
+                            caption = img["filename"][:15]
+                            if img.get("description"):
+                                caption += " 🔮"  # Indicate has description
+                            st.image(img["path"], caption=caption, use_container_width=True)
+                            if img.get("description"):
+                                st.caption(img["description"][:80] + "..." if len(img.get("description", "")) > 80 else img.get("description", ""))
                         except:
                             st.caption(img["filename"][:20])
                 if n_images > 15:
@@ -3492,11 +3541,18 @@ with tab_mine:
                             'path': img['path'],
                             'source_folder': img.get('source', ''),
                             'filename': img['filename'],
+                            'description': img.get('description'),  # Include vision LLM description
                             'meta': {}
                         })())
                         img_count += 1
                     
                     st.info(f"📊 Corpus: {text_count} text chunks, {img_count} images")
+                    
+                    # Progress bar for mining
+                    progress_bar = st.progress(0, text="Starting mining...")
+                    
+                    def mining_progress(stage: str, progress: float):
+                        progress_bar.progress(progress, text=f"🔄 {stage}...")
                     
                     # Capture debug output
                     import io
@@ -3505,18 +3561,21 @@ with tab_mine:
                     old_stdout = sys.stdout
                     sys.stdout = debug_buffer
                     
-                    # Run mining with debug enabled
+                    # Run mining with debug and progress enabled
                     archetypes = miner.run(
                         k_neighbors=k_neighbors,
                         min_cluster_size=min_cluster,
                         resolution=resolution,
                         use_llm=use_llm,
-                        debug=True
+                        debug=True,
+                        progress_callback=mining_progress
                     )
                     
                     # Restore stdout and get debug output
                     sys.stdout = old_stdout
                     debug_output = debug_buffer.getvalue()
+                    
+                    progress_bar.progress(1.0, text="✅ Mining complete!")
                     
                     # Store debug output in session for display after rerun
                     st.session_state["miner_debug_log"] = debug_output
@@ -3584,8 +3643,9 @@ with tab_mine:
         
         with col_a:
             if st.button("👉 Use in Explorer", type="primary", use_container_width=True):
-                st.session_state["symbol_json_text"] = json.dumps(archetypes, indent=2, ensure_ascii=False)
-                st.success("Loaded into Explorer! Switch to the Explorer tab.")
+                # Store the archetypes to be loaded on next rerun (before widget renders)
+                st.session_state["_pending_archetypes"] = json.dumps(archetypes, indent=2, ensure_ascii=False)
+                st.rerun()
         
         with col_b:
             st.download_button(
