@@ -2613,141 +2613,610 @@ with tab_story:
     render_story_generator()
 
 with tab_mine:
-    st.subheader("🧪 Corpus Miner — build symbols & descriptors from multimodal items")
+    st.subheader("🧪 Corpus Miner — build symbols & descriptors from multimodal corpora")
+    
+    # Initialize enhanced miner state
+    st.session_state.setdefault("enhanced_miner_corpus", {"pdfs": [], "folders": [], "texts": [], "images": []})
+    st.session_state.setdefault("miner_embeddings", None)
+    st.session_state.setdefault("miner_results", None)
+    
+    # Import enhanced miner
+    try:
+        from enhanced_miner import (
+            EnhancedArchetypeMiner, LLMArchetypeRefiner, PDFExtractor, 
+            TextChunker, FolderScanner, MinerCorpus
+        )
+        _HAS_ENHANCED_MINER = True
+    except ImportError as e:
+        _HAS_ENHANCED_MINER = False
+        st.warning(f"Enhanced miner not available: {e}")
+    
+    # Check for PDF support
+    try:
+        import fitz
+        _HAS_PYMUPDF = True
+    except ImportError:
+        _HAS_PYMUPDF = False
+    try:
+        import pdfplumber
+        _HAS_PDFPLUMBER = True
+    except ImportError:
+        _HAS_PDFPLUMBER = False
+    
+    _HAS_PDF = _HAS_PYMUPDF or _HAS_PDFPLUMBER
 
-    st.markdown("Add **text**, **images**, and/or **audio** items. Then mine clusters → propose **symbols** with **descriptors**.")
-
-    # --- Left: Add items | Right: Preview queue ---
-    cL, cR = st.columns([1, 1])
-
-    with cL:
-        st.markdown("### Add items")
-        with st.expander("➕ Text items"):
-            txts = st.text_area("One item per line (use `id:::text` to set a custom id)", height=120, placeholder="ritual:::river stones and lanterns at dusk\ncrow:::wings cut the wind…")
-            if st.button("Add text"):
+    st.markdown("""
+    **Ingest corpora** from PDFs, image folders, or raw text → **cluster by embedding similarity** → 
+    **derive archetypes** with LLM refinement.
+    """)
+    
+    # ========== LEFT: Data Ingestion ==========
+    col_ingest, col_preview = st.columns([1, 1])
+    
+    with col_ingest:
+        st.markdown("### 📥 Add Data Sources")
+        
+        # --- PDF Upload ---
+        with st.expander("📄 PDF Documents", expanded=True):
+            if not _HAS_PDF:
+                st.warning("PDF support requires `pip install pymupdf` or `pip install pdfplumber`")
+            else:
+                pdf_files = st.file_uploader(
+                    "Upload PDFs", 
+                    type=["pdf"], 
+                    accept_multiple_files=True,
+                    key="pdf_uploader"
+                )
+                
+                st.markdown("**Chunking Strategy**")
+                chunk_strategy = st.selectbox(
+                    "How to split text",
+                    ["paragraph", "sentence", "sliding", "semantic"],
+                    index=0,
+                    help=(
+                        "• **Paragraph**: Split on double newlines, merge small chunks\n"
+                        "• **Sentence**: Group N sentences with optional overlap\n"
+                        "• **Sliding**: Fixed character window with stride\n"
+                        "• **Semantic**: Merge while embedding similarity is high (uses your embedder)"
+                    )
+                )
+                
+                # Strategy-specific params
+                if chunk_strategy == "paragraph":
+                    c1, c2 = st.columns(2)
+                    chunk_min = c1.number_input("Min chars", 30, 500, 50, key="p_min")
+                    chunk_max = c2.number_input("Max chars", 200, 3000, 1000, key="p_max")
+                    chunk_kwargs = {"min_length": chunk_min, "max_length": chunk_max}
+                    
+                elif chunk_strategy == "sentence":
+                    c1, c2, c3 = st.columns(3)
+                    sents_per = c1.number_input("Sentences/chunk", 2, 20, 5, key="s_per")
+                    overlap = c2.number_input("Overlap sentences", 0, 5, 1, key="s_overlap")
+                    min_len = c3.number_input("Min chars", 30, 300, 50, key="s_min")
+                    chunk_kwargs = {"sentences_per_chunk": sents_per, "overlap_sentences": overlap, "min_length": min_len}
+                    
+                elif chunk_strategy == "sliding":
+                    c1, c2, c3 = st.columns(3)
+                    window = c1.number_input("Window size", 128, 2048, 512, key="sl_win")
+                    stride = c2.number_input("Stride", 64, 1024, 256, key="sl_stride")
+                    min_len = c3.number_input("Min chars", 30, 300, 50, key="sl_min")
+                    chunk_kwargs = {"window_size": window, "stride": stride, "min_length": min_len}
+                    
+                else:  # semantic
+                    c1, c2, c3 = st.columns(3)
+                    sim_thresh = c1.slider("Similarity threshold", 0.3, 0.95, 0.7, 0.05, key="sem_thresh")
+                    min_len = c2.number_input("Min chars", 30, 300, 50, key="sem_min")
+                    max_len = c3.number_input("Max chars", 500, 3000, 1500, key="sem_max")
+                    chunk_kwargs = {"similarity_threshold": sim_thresh, "min_length": min_len, "max_length": max_len}
+                
+                if pdf_files and st.button("📄 Process PDFs", key="btn_process_pdf"):
+                    with st.spinner("Extracting and chunking PDFs..."):
+                        for pdf_file in pdf_files:
+                            # Save to temp
+                            pdf_path = _save_upload(pdf_file, "pdf")
+                            
+                            try:
+                                pages = PDFExtractor.extract_text(pdf_path)
+                                total_chunks = 0
+                                
+                                for page_data in pages:
+                                    text = page_data["text"]
+                                    
+                                    if chunk_strategy == "paragraph":
+                                        chunks = TextChunker.chunk_paragraphs(text, **chunk_kwargs)
+                                    elif chunk_strategy == "sentence":
+                                        chunks = TextChunker.chunk_sentences(text, **chunk_kwargs)
+                                    elif chunk_strategy == "sliding":
+                                        chunks = TextChunker.chunk_sliding_window(text, **chunk_kwargs)
+                                    else:
+                                        # Semantic requires embedder
+                                        def _embed_fn(texts):
+                                            return embedder.encode(texts)
+                                        chunks = TextChunker.chunk_semantic(text, embedder=_embed_fn, **chunk_kwargs)
+                                    
+                                    for i, chunk_text in enumerate(chunks):
+                                        st.session_state["enhanced_miner_corpus"]["texts"].append({
+                                            "id": f"{pdf_file.name}_p{page_data['page']}_c{i}",
+                                            "text": chunk_text,
+                                            "source": pdf_file.name,
+                                            "page": page_data["page"],
+                                            "strategy": chunk_strategy
+                                        })
+                                        total_chunks += 1
+                                
+                                st.session_state["enhanced_miner_corpus"]["pdfs"].append({
+                                    "name": pdf_file.name,
+                                    "chunks": total_chunks,
+                                    "pages": len(pages)
+                                })
+                                
+                            except Exception as e:
+                                st.error(f"Failed to process {pdf_file.name}: {e}")
+                    
+                    st.success(f"Processed {len(pdf_files)} PDF(s)")
+                    st.rerun()
+        
+        # --- Image Folder ---
+        with st.expander("🖼️ Image Folder", expanded=False):
+            st.caption("Enter a local folder path containing images")
+            
+            img_folder = st.text_input(
+                "Folder path",
+                placeholder="C:/path/to/images or /home/user/images",
+                key="img_folder_path"
+            )
+            
+            c1, c2 = st.columns(2)
+            recursive = c1.checkbox("Scan subfolders", True, key="img_recursive")
+            max_images = c2.number_input("Max images", 10, 2000, 500, key="img_max")
+            
+            if img_folder and st.button("🖼️ Scan Folder", key="btn_scan_folder"):
+                folder_path = pathlib.Path(img_folder)
+                if not folder_path.exists():
+                    st.error(f"Folder not found: {img_folder}")
+                else:
+                    with st.spinner("Scanning for images..."):
+                        try:
+                            images = FolderScanner.scan_images(folder_path, recursive=recursive, max_files=max_images)
+                            
+                            for img in images:
+                                st.session_state["enhanced_miner_corpus"]["images"].append({
+                                    "id": img.id,
+                                    "path": img.path,
+                                    "filename": img.filename,
+                                    "source": str(folder_path)
+                                })
+                            
+                            st.session_state["enhanced_miner_corpus"]["folders"].append({
+                                "path": str(folder_path),
+                                "count": len(images)
+                            })
+                            
+                            st.success(f"Found {len(images)} images")
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"Scan failed: {e}")
+        
+        # --- Raw Text ---
+        with st.expander("📝 Raw Text", expanded=False):
+            raw_text = st.text_area(
+                "Paste text content",
+                height=150,
+                placeholder="Paste articles, notes, or any text corpus here...",
+                key="raw_text_input"
+            )
+            
+            text_source = st.text_input("Source label", "manual_input", key="text_source")
+            auto_chunk = st.checkbox("Auto-chunk (paragraphs)", True, key="text_auto_chunk")
+            
+            if raw_text and st.button("📝 Add Text", key="btn_add_text"):
+                if auto_chunk:
+                    chunks = TextChunker.chunk_paragraphs(raw_text, min_length=50, max_length=1000)
+                else:
+                    chunks = [raw_text]
+                
+                for i, chunk in enumerate(chunks):
+                    st.session_state["enhanced_miner_corpus"]["texts"].append({
+                        "id": f"{text_source}_{i}",
+                        "text": chunk,
+                        "source": text_source,
+                        "strategy": "paragraph" if auto_chunk else "full"
+                    })
+                
+                st.success(f"Added {len(chunks)} text chunk(s)")
+                st.rerun()
+        
+        # --- Legacy item upload (keep for backwards compat) ---
+        with st.expander("📦 Legacy Item Upload", expanded=False):
+            st.caption("Original item-by-item upload (for pairing modalities)")
+            
+            txts = st.text_area("Text items (id:::text per line)", height=80, key="legacy_txt")
+            if st.button("Add legacy text", key="btn_legacy_txt"):
                 for line in [l.strip() for l in txts.splitlines() if l.strip()]:
                     if ":::" in line:
                         i, t = line.split(":::", 1)
-                        item_id = i.strip()
-                        text = t.strip()
+                        item_id, text = i.strip(), t.strip()
                     else:
                         item_id = uuid.uuid4().hex[:8]
                         text = line
                     st.session_state["mm_items"].append({"id": item_id, "text": text})
-
-        with st.expander("🖼️ Image items"):
-            imgs = st.file_uploader("Upload images", type=["png","jpg","jpeg","webp"], accept_multiple_files=True)
-            if imgs and st.button("Add images"):
-                for f in imgs:
-                    path = _save_upload(f, "img")
-                    item_id = pathlib.Path(f.name).stem + "-" + uuid.uuid4().hex[:6]
-                    st.session_state["mm_items"].append({"id": item_id, "image_path": path})
-
-        with st.expander("🎧 Audio items"):
-            auds = st.file_uploader("Upload audio", type=["wav","mp3","m4a"], accept_multiple_files=True)
-            if auds and st.button("Add audio"):
-                for f in auds:
-                    path = _save_upload(f, "aud")
-                    item_id = pathlib.Path(f.name).stem + "-" + uuid.uuid4().hex[:6]
-                    st.session_state["mm_items"].append({"id": item_id, "audio_path": path})
-
-        with st.expander("🧩 Pair modalities (optional)"):
-            st.caption("If you want to **pair** text ↔ image ↔ audio for the same concept, give them the **same id**. Edit below.")
-            st.caption("At least ~8 paired items help the alignment learn a good projection.")
-
-    with cR:
-        st.markdown("### Queue")
-        if not st.session_state["mm_items"]:
-            st.info("No items yet. Add some on the left.")
+                st.rerun()
+    
+    # ========== RIGHT: Corpus Preview ==========
+    with col_preview:
+        st.markdown("### 📊 Corpus Summary")
+        
+        corpus = st.session_state["enhanced_miner_corpus"]
+        n_texts = len(corpus["texts"])
+        n_images = len(corpus["images"])
+        n_pdfs = len(corpus["pdfs"])
+        n_folders = len(corpus["folders"])
+        
+        # Stats cards
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Text Chunks", n_texts)
+        c2.metric("Images", n_images)
+        c3.metric("PDFs", n_pdfs)
+        c4.metric("Folders", n_folders)
+        
+        if n_texts + n_images == 0:
+            st.info("No data added yet. Use the panels on the left to add PDFs, images, or text.")
         else:
-            # Small editable table-like view
-            for idx, row in enumerate(list(st.session_state["mm_items"])):
-                with st.container(border=True):
-                    c1, c2, c3, c4, c5 = st.columns([0.8, 2.2, 2.2, 2.2, 0.6])
-                    st.session_state["mm_items"][idx]["id"] = c1.text_input("id", value=row.get("id",""), key=f"mm_id_{idx}")
-                    st.session_state["mm_items"][idx]["text"] = c2.text_input("text", value=row.get("text",""), key=f"mm_tx_{idx}")
-                    c3.write("image")
-                    if p := row.get("image_path"):
-                        c3.image(p, use_container_width=True)
-                    c4.write("audio")
-                    if p := row.get("audio_path"):
-                        c4.audio(p)
-                    if c5.button("🗑️", key=f"mm_del_{idx}"):
-                        st.session_state["mm_items"].pop(idx)
-                        st.experimental_rerun()
-
+            # Show sources
+            with st.expander(f"📄 PDF Sources ({n_pdfs})", expanded=False):
+                for pdf in corpus["pdfs"]:
+                    st.write(f"• **{pdf['name']}** — {pdf['pages']} pages, {pdf['chunks']} chunks")
+            
+            with st.expander(f"🖼️ Image Folders ({n_folders})", expanded=False):
+                for folder in corpus["folders"]:
+                    st.write(f"• **{folder['path']}** — {folder['count']} images")
+            
+            with st.expander(f"📝 Text Chunks Preview ({n_texts})", expanded=False):
+                for i, txt in enumerate(corpus["texts"][:20]):
+                    preview = txt["text"][:100] + "..." if len(txt["text"]) > 100 else txt["text"]
+                    st.caption(f"**{txt['id']}** ({txt.get('source', '?')}): {preview}")
+                if n_texts > 20:
+                    st.caption(f"... and {n_texts - 20} more")
+            
+            with st.expander(f"🖼️ Images Preview ({n_images})", expanded=False):
+                # Show thumbnail grid
+                cols = st.columns(5)
+                for i, img in enumerate(corpus["images"][:15]):
+                    with cols[i % 5]:
+                        try:
+                            st.image(img["path"], caption=img["filename"][:15], use_container_width=True)
+                        except:
+                            st.caption(img["filename"][:20])
+                if n_images > 15:
+                    st.caption(f"... and {n_images - 15} more")
+            
+            # Clear button
+            if st.button("🗑️ Clear All Data", key="btn_clear_corpus"):
+                st.session_state["enhanced_miner_corpus"] = {"pdfs": [], "folders": [], "texts": [], "images": []}
+                st.session_state["miner_embeddings"] = None
+                st.session_state["miner_results"] = None
+                st.rerun()
+    
     st.divider()
-
-    # --- Mining hyperparams ---
-    st.markdown("### Mining settings")
-    c1, c2, c3 = st.columns(3)
-    k = c1.slider("k-NN (per item)", 4, 32, 12)
-    min_cluster = c2.slider("Min cluster size", 4, 64, 8)
-    top_desc = c3.slider("Top descriptors / symbol", 4, 24, 12)
-    canon = st.selectbox("Canonical space (for alignment)", ["text","image","audio"], index=0)
-    ridge_lambda = st.slider("Ridge λ (alignment)", 1e-5, 1e-1, 1e-3, step=1e-5, format="%.0e")
-
-    # --- Build adapters ---
-    st.markdown("### Encoders")
-    img_ok = Image is not None and open_clip is not None
-    aud_ok = True  # we have a fallback pipeline inside adapter
-    img_model = st.selectbox("OpenCLIP image encoder", ["ViT-B-32","ViT-L-14"], index=0, disabled=not img_ok)
-    img_pretrained = st.text_input("OpenCLIP weights", "laion2b_s34b_b79k", disabled=not img_ok)
-
-    if st.button("⚙️ Run miner", type="primary", width='stretch', disabled=not st.session_state["mm_items"]):
-        with st.spinner("Mining symbols & descriptors…"):
-            # Build miner items
-            mm_items = []
-            for row in st.session_state["mm_items"]:
-                mm_items.append(MMItem(
-                    id=row.get("id") or uuid.uuid4().hex[:8],
-                    text=(row.get("text") or None),
-                    image_path=(row.get("image_path") or None),
-                    audio_path=(row.get("audio_path") or None),
-                    meta=None
-                ))
-
-            # Adapters: reuse your current text embedder; load image/audio adapters lazily
-            text_adapter = _TextAdapter(embedder)
-            image_adapter = _ImageAdapter(model_name=img_model, pretrained=img_pretrained) if img_ok else None
-            audio_adapter = _AudioAdapter(embedder)
-
-            # Miner
-            miner = ArchetypeMiner(
-                text_encoder=text_adapter,
-                image_encoder=image_adapter if image_adapter is not None else _ImageAdapter,  # placeholder if none
-                audio_encoder=audio_adapter,
-                canon=canon,
-                ridge_lambda=float(ridge_lambda)
+    
+    # ========== Mining Configuration ==========
+    st.markdown("### ⚙️ Mining Configuration")
+    
+    col_algo, col_llm = st.columns(2)
+    
+    with col_algo:
+        st.markdown("**Clustering Parameters**")
+        c1, c2, c3 = st.columns(3)
+        k_neighbors = c1.slider("k-NN neighbors", 3, 50, 10, key="mine_k")
+        min_cluster = c2.slider("Min cluster size", 2, 30, 3, key="mine_min")
+        resolution = c3.slider("Resolution", 0.1, 3.0, 1.0, 0.1, key="mine_res", 
+                               help="Higher = more clusters")
+    
+    with col_llm:
+        st.markdown("**LLM Refinement**")
+        use_llm = st.checkbox("Use LLM for archetype naming", True, key="mine_use_llm",
+                              help="Uses Cloudflare Workers AI to generate proper archetype names and descriptors")
+        
+        if use_llm:
+            llm_model = st.selectbox(
+                "LLM Model",
+                list(CLOUDFLARE_MODELS.keys()),
+                index=0,
+                key="mine_llm_model"
             )
-            for it in mm_items: miner.add(it)
+            st.caption(f"Model: `{CLOUDFLARE_MODELS[llm_model]}`")
+    
+    # ========== Run Mining ==========
+    st.markdown("---")
+    
+    corpus = st.session_state["enhanced_miner_corpus"]
+    can_mine = len(corpus["texts"]) + len(corpus["images"]) >= 5
+    
+    if not can_mine:
+        st.warning("Add at least 5 items (text chunks or images) to start mining.")
+    
+    col_run, col_viz = st.columns([2, 1])
+    
+    with col_run:
+        if st.button("🔬 Run Archetype Mining", type="primary", disabled=not can_mine, use_container_width=True):
+            with st.spinner("Mining archetypes from corpus..."):
+                try:
+                    # Build text adapter
+                    class _MinerTextAdapter:
+                        def __init__(self, emb):
+                            self.emb = emb
+                        def encode(self, texts):
+                            return self.emb.encode(texts)
+                    
+                    text_adapter = _MinerTextAdapter(embedder)
+                    
+                    # Build image adapter if we have images
+                    image_adapter = None
+                    if corpus["images"] and Image is not None and open_clip is not None:
+                        image_adapter = _ImageAdapter(model_name="ViT-B-32", pretrained="laion2b_s34b_b79k")
+                    
+                    # Build LLM refiner
+                    llm_refiner = None
+                    if use_llm:
+                        llm_refiner = LLMArchetypeRefiner(
+                            backend="cloudflare",
+                            model=CLOUDFLARE_MODELS[llm_model]
+                        )
+                    
+                    # Create enhanced miner
+                    miner = EnhancedArchetypeMiner(
+                        text_encoder=text_adapter,
+                        image_encoder=image_adapter,
+                        llm_refiner=llm_refiner
+                    )
+                    
+                    # Add text chunks - track count
+                    text_count = 0
+                    for txt in corpus["texts"]:
+                        added = miner.add_text(txt["text"], source=txt.get("source", "unknown"), chunk=False)
+                        text_count += added
+                    
+                    # Add images (they're already scanned)
+                    img_count = 0
+                    for img in corpus["images"]:
+                        miner.corpus.images.append(type('ImageItem', (), {
+                            'id': img['id'],
+                            'path': img['path'],
+                            'source_folder': img.get('source', ''),
+                            'filename': img['filename'],
+                            'meta': {}
+                        })())
+                        img_count += 1
+                    
+                    st.info(f"📊 Corpus: {text_count} text chunks, {img_count} images")
+                    
+                    # Capture debug output
+                    import io
+                    import sys
+                    debug_buffer = io.StringIO()
+                    old_stdout = sys.stdout
+                    sys.stdout = debug_buffer
+                    
+                    # Run mining with debug enabled
+                    archetypes = miner.run(
+                        k_neighbors=k_neighbors,
+                        min_cluster_size=min_cluster,
+                        resolution=resolution,
+                        use_llm=use_llm,
+                        debug=True
+                    )
+                    
+                    # Restore stdout and get debug output
+                    sys.stdout = old_stdout
+                    debug_output = debug_buffer.getvalue()
+                    
+                    # Store debug output in session for display after rerun
+                    st.session_state["miner_debug_log"] = debug_output
+                    
+                    # Check if we got results
+                    if not archetypes:
+                        st.warning("No archetypes discovered. Try:\n- Lowering 'Min cluster size'\n- Adding more text/images\n- Increasing 'Resolution'")
+                    else:
+                        # Store results
+                        st.session_state["miner_results"] = archetypes
+                        
+                        # Get embeddings for visualization
+                        ids, embs, types = miner.get_embeddings_for_viz()
+                        st.session_state["miner_embeddings"] = {
+                            "ids": ids,
+                            "embeddings": embs,
+                            "types": types
+                        }
+                        
+                        st.success(f"✅ Discovered {len(archetypes)} archetypes!")
+                        
+                        # Force rerun to show results
+                        st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Mining failed: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    
+    with col_viz:
+        if st.button("📈 Visualize Embeddings", disabled=st.session_state.get("miner_embeddings") is None):
+            st.session_state["show_miner_viz"] = True
+    
+    # ========== Results Display ==========
+    # Show debug log from last mining run
+    if st.session_state.get("miner_debug_log"):
+        with st.expander("🔍 Mining Debug Log", expanded=False):
+            st.code(st.session_state["miner_debug_log"], language="text")
+    
+    if st.session_state.get("miner_results"):
+        st.markdown("### 🏛️ Discovered Archetypes")
+        
+        archetypes = st.session_state["miner_results"]
+        st.success(f"Discovered **{len(archetypes)}** archetypes from your corpus!")
+        
+        # Raw JSON preview
+        with st.expander("📋 Raw JSON Result", expanded=False):
+            st.json(archetypes)
+        
+        # Display archetypes in a nice grid
+        cols = st.columns(2)
+        for i, (name, descriptors) in enumerate(archetypes.items()):
+            with cols[i % 2]:
+                with st.container(border=True):
+                    st.markdown(f"### {name}")
+                    st.caption(f"{len(descriptors)} descriptors")
+                    st.write(", ".join(descriptors[:12]))
+                    if len(descriptors) > 12:
+                        with st.expander("See all"):
+                            st.write(", ".join(descriptors))
+        
+        # Actions
+        st.markdown("---")
+        col_a, col_b, col_c = st.columns(3)
+        
+        with col_a:
+            if st.button("👉 Use in Explorer", type="primary", use_container_width=True):
+                st.session_state["symbol_json_text"] = json.dumps(archetypes, indent=2, ensure_ascii=False)
+                st.success("Loaded into Explorer! Switch to the Explorer tab.")
+        
+        with col_b:
+            st.download_button(
+                "💾 Download JSON",
+                data=json.dumps(archetypes, indent=2, ensure_ascii=False).encode("utf-8"),
+                file_name="archetypes.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        
+        with col_c:
+            # Editable JSON
+            if st.button("✏️ Edit JSON", use_container_width=True):
+                st.session_state["show_edit_archetypes"] = True
+        
+        if st.session_state.get("show_edit_archetypes"):
+            edited = st.text_area(
+                "Edit archetypes JSON",
+                value=json.dumps(archetypes, indent=2, ensure_ascii=False),
+                height=300,
+                key="edit_archetypes_json"
+            )
+            if st.button("Save edits"):
+                try:
+                    st.session_state["miner_results"] = json.loads(edited)
+                    st.success("Saved!")
+                    st.rerun()
+                except json.JSONDecodeError as e:
+                    st.error(f"Invalid JSON: {e}")
+    
+    # ========== Embedding Visualization ==========
+    if st.session_state.get("show_miner_viz") and st.session_state.get("miner_embeddings"):
+        st.markdown("### 📊 Embedding Space Visualization")
+        
+        emb_data = st.session_state["miner_embeddings"]
+        embeddings = emb_data["embeddings"]
+        ids = emb_data["ids"]
+        types = emb_data["types"]
+        
+        if embeddings.shape[0] > 2:
+            viz_method = st.selectbox("Projection", ["UMAP", "t-SNE", "PCA"], key="miner_viz_method")
+            
+            with st.spinner(f"Computing {viz_method} projection..."):
+                try:
+                    if viz_method == "PCA":
+                        from sklearn.decomposition import PCA
+                        reducer = PCA(n_components=2)
+                        coords = reducer.fit_transform(embeddings)
+                    elif viz_method == "t-SNE":
+                        from sklearn.manifold import TSNE
+                        reducer = TSNE(n_components=2, perplexity=min(30, len(ids)-1), random_state=42)
+                        coords = reducer.fit_transform(embeddings)
+                    else:  # UMAP
+                        if _HAS_UMAP:
+                            reducer = umap.UMAP(n_components=2, random_state=42)
+                            coords = reducer.fit_transform(embeddings)
+                        else:
+                            st.warning("UMAP not installed, falling back to PCA")
+                            from sklearn.decomposition import PCA
+                            coords = PCA(n_components=2).fit_transform(embeddings)
+                    
+                    # Plot with matplotlib
+                    fig, ax = plt.subplots(figsize=(10, 8))
+                    fig.patch.set_alpha(0.0)
+                    ax.patch.set_alpha(0.0)
+                    
+                    # Color by type
+                    colors = {"text": "#3498db", "image": "#e74c3c"}
+                    for t in set(types):
+                        mask = [i for i, tp in enumerate(types) if tp == t]
+                        ax.scatter(
+                            coords[mask, 0], coords[mask, 1],
+                            c=colors.get(t, "#95a5a6"),
+                            label=t,
+                            alpha=0.6,
+                            s=30
+                        )
+                    
+                    ax.legend()
+                    ax.set_title(f"{viz_method} Projection of Corpus Embeddings", color="white")
+                    ax.tick_params(colors="white")
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    
+                    st.pyplot(fig)
+                    plt.close(fig)
+                    
+                except Exception as e:
+                    st.error(f"Visualization failed: {e}")
+        else:
+            st.info("Need more items for meaningful visualization.")
+    
+    # Divider before legacy section
+    st.divider()
+    with st.expander("🔧 Legacy Miner (Original)", expanded=False):
+        st.caption("The original item-by-item miner is still available below.")
+        
+        # --- Legacy Mining hyperparams ---
+        c1, c2, c3 = st.columns(3)
+        k_legacy = c1.slider("k-NN (legacy)", 4, 32, 12, key="k_legacy")
+        min_cluster_legacy = c2.slider("Min cluster (legacy)", 4, 64, 8, key="min_legacy")
+        top_desc_legacy = c3.slider("Top desc (legacy)", 4, 24, 12, key="top_legacy")
+        canon_legacy = st.selectbox("Canonical space (legacy)", ["text","image","audio"], index=0, key="canon_legacy")
 
-            try:
-                symbols_json = miner.run(k=int(k), min_cluster=int(min_cluster), top_desc=int(top_desc))
-            except Exception as e:
-                st.error(f"Mining failed: {e}")
-                symbols_json = {}
+        if st.button("⚙️ Run legacy miner", disabled=not st.session_state["mm_items"]):
+            with st.spinner("Mining (legacy)..."):
+                mm_items = []
+                for row in st.session_state["mm_items"]:
+                    mm_items.append(MMItem(
+                        id=row.get("id") or uuid.uuid4().hex[:8],
+                        text=(row.get("text") or None),
+                        image_path=(row.get("image_path") or None),
+                        audio_path=(row.get("audio_path") or None),
+                        meta=None
+                    ))
 
-        if symbols_json:
-            st.success(f"Discovered {len(symbols_json)} symbols.")
-            with st.expander("Preview symbols", expanded=True):
+                text_adapter = _TextAdapter(embedder)
+                image_adapter = _ImageAdapter(model_name="ViT-B-32", pretrained="laion2b_s34b_b79k") if (Image is not None and open_clip is not None) else None
+                audio_adapter = _AudioAdapter(embedder)
+
+                miner = ArchetypeMiner(
+                    text_encoder=text_adapter,
+                    image_encoder=image_adapter if image_adapter else _ImageAdapter,
+                    audio_encoder=audio_adapter,
+                    canon=canon_legacy,
+                    ridge_lambda=1e-3
+                )
+                for it in mm_items: 
+                    miner.add(it)
+
+                try:
+                    symbols_json = miner.run(k=int(k_legacy), min_cluster=int(min_cluster_legacy), top_desc=int(top_desc_legacy))
+                except Exception as e:
+                    st.error(f"Mining failed: {e}")
+                    symbols_json = {}
+
+            if symbols_json:
+                st.success(f"Discovered {len(symbols_json)} symbols (legacy).")
                 for s, descs in symbols_json.items():
                     st.markdown(f"**{s}** — {', '.join(descs)}")
 
-            colA, colB = st.columns(2)
-            with colA:
-                # Use in Explorer right away
-                if st.button("👉 Use these in Explorer", type="primary", width='stretch'):
-                    st.session_state["_current_symbols_map"] = symbols_json
-                    # rebuild state & rerun
-                    st.experimental_rerun()
-            with colB:
-                st.download_button(
-                    "Download symbols.json",
-                    data=json.dumps(symbols_json, ensure_ascii=False, indent=2).encode("utf-8"),
-                    file_name="symbols.json",
-                    mime="application/json",
-                    width='stretch'
-                )
-        else:
-            st.info("No symbols discovered. Try lowering min cluster size or adding more items / paired examples.")

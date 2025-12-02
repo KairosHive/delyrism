@@ -5,6 +5,7 @@ matplotlib>=3.7
 scikit-learn>=1.3
 networkx>=3.2
 packaging>=23.2
+requests>=2.31         # For Cloudflare API calls
 
 # ---- Embedding backends ----
 sentence-transformers>=2.3.1
@@ -31,6 +32,10 @@ soundfile>=0.12
 
 # Mic recorder
 streamlit-mic-recorder>=0.0.8
+
+# ---- PDF Processing (Enhanced Miner) ----
+pymupdf>=1.24.0         # Fast PDF extraction (pip install pymupdf)
+# pdfplumber>=0.10.0    # Alternative PDF backend (uncomment if preferred)
 
 # ---- Optional / Advanced ----
 umap-learn>=0.5.5
