@@ -94,9 +94,6 @@ try:
 except Exception:
     pass
 
-# === Multimodal miner & IO helpers ===
-from multimodal_archetype_miner import ArchetypeMiner, MMItem
-
 # Image & OpenCLIP
 try:
     import open_clip
@@ -3921,52 +3918,4 @@ with tab_mine:
             else:
                 st.info("Need more items for meaningful visualization.")
         
-        # Divider before legacy section
-        st.divider()
-        with st.expander("🔧 Legacy Miner (Original)", expanded=False):
-            st.caption("The original item-by-item miner is still available below.")
-            
-            # --- Legacy Mining hyperparams ---
-            c1, c2, c3 = st.columns(3)
-            k_legacy = c1.slider("k-NN (legacy)", 4, 32, 12, key="k_legacy")
-            min_cluster_legacy = c2.slider("Min cluster (legacy)", 4, 64, 8, key="min_legacy")
-            top_desc_legacy = c3.slider("Top desc (legacy)", 4, 24, 12, key="top_legacy")
-            canon_legacy = st.selectbox("Canonical space (legacy)", ["text","image","audio"], index=0, key="canon_legacy")
-
-            if st.button("⚙️ Run legacy miner", disabled=not st.session_state["mm_items"]):
-                with st.spinner("Mining (legacy)..."):
-                    mm_items = []
-                    for row in st.session_state["mm_items"]:
-                        mm_items.append(MMItem(
-                            id=row.get("id") or uuid.uuid4().hex[:8],
-                            text=(row.get("text") or None),
-                            image_path=(row.get("image_path") or None),
-                            audio_path=(row.get("audio_path") or None),
-                            meta=None
-                        ))
-
-                    text_adapter = _TextAdapter(embedder)
-                    image_adapter = _ImageAdapter(model_name="ViT-B-32", pretrained="laion2b_s34b_b79k") if (Image is not None and open_clip is not None) else None
-                    audio_adapter = _AudioAdapter(embedder)
-
-                    miner = ArchetypeMiner(
-                        text_encoder=text_adapter,
-                        image_encoder=image_adapter if image_adapter else _ImageAdapter,
-                        audio_encoder=audio_adapter,
-                        canon=canon_legacy,
-                        ridge_lambda=1e-3
-                    )
-                    for it in mm_items: 
-                        miner.add(it)
-
-                    try:
-                        symbols_json = miner.run(k=int(k_legacy), min_cluster=int(min_cluster_legacy), top_desc=int(top_desc_legacy))
-                    except Exception as e:
-                        st.error(f"Mining failed: {e}")
-                        symbols_json = {}
-
-                if symbols_json:
-                    st.success(f"Discovered {len(symbols_json)} symbols (legacy).")
-                    for s, descs in symbols_json.items():
-                        st.markdown(f"**{s}** — {', '.join(descs)}")
-
+    
