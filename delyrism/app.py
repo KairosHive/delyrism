@@ -3127,6 +3127,9 @@ with tab_story:
 with tab_mine:
     st.subheader("🧪 Corpus Miner — build symbols & descriptors from multimodal corpora")
     
+    # Real-time miner link
+    st.info("💡 For real-time progress monitoring, use the [**Real-time Miner**](http://localhost:8765) (run `uvicorn miner_server:app --port 8765`)")
+    
     # Initialize enhanced miner state
     st.session_state.setdefault("enhanced_miner_corpus", {"pdfs": [], "folders": [], "texts": [], "images": []})
     st.session_state.setdefault("miner_embeddings", None)

@@ -10,6 +10,7 @@
 from __future__ import annotations
 import math, warnings, itertools
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import matplotlib.pyplot as plt
@@ -169,18 +170,111 @@ class TextEmbedder:
             self._init_qwen(model or "Qwen/Qwen2-Embedding")
         elif self.backend_type == "qwen3":
             self._init_qwen(model or "Qwen/Qwen3-Embedding-0.6B")
+        elif self.backend_type == "cloudflare":
+            self._init_cloudflare(model or "@cf/baai/bge-base-en-v1.5")
         elif self.backend_type == "audioclip":           # <-- ADD
             self._init_audioclip(model)                  # <-- ADD
         elif self.backend_type == "clap":
             self._init_clap(model or "laion/clap-htsat-fused")
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: original | qwen2 | qwen3 | audioclip")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: original | qwen2 | qwen3 | cloudflare | audioclip")
 
-        if self._backend is None and self.backend_type != "audioclip":  # audioclip uses separate model var
+        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare"):  # these use separate vars
             self._init_fallback()
 
     # ---------- init helpers ----------
+    def _init_cloudflare(self, model_name: str):
+        """Initialize Cloudflare Workers AI embedding backend."""
+        import os
+        self._cf_model = model_name
+        self._cf_account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+        self._cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+        
+        # Also check secrets.toml
+        if not self._cf_account or not self._cf_token:
+            try:
+                import tomli
+                secrets_path = Path(__file__).parent / ".streamlit" / "secrets.toml"
+                if secrets_path.exists():
+                    with open(secrets_path, "rb") as f:
+                        secrets = tomli.load(f)
+                    cf = secrets.get("cloudflare", {})
+                    self._cf_account = self._cf_account or cf.get("account_id", "")
+                    self._cf_token = self._cf_token or cf.get("api_token", "")
+            except:
+                pass
+        
+        if not self._cf_account or not self._cf_token:
+            raise ValueError("Cloudflare credentials not found. Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN")
+        
+        # Dimension mapping for known models
+        dim_map = {
+            "@cf/baai/bge-small-en-v1.5": 384,
+            "@cf/baai/bge-base-en-v1.5": 768,
+            "@cf/baai/bge-large-en-v1.5": 1024,
+            "@cf/baai/bge-m3": 1024,
+            "@cf/qwen/qwen3-embedding-0.6b": 1024,
+            "@cf/google/embeddinggemma-300m": 768,
+        }
+        self.dim = dim_map.get(model_name, 768)
+        self._cf_ready = True
+        print(f"[Embedder] Cloudflare ready: {model_name} (dim={self.dim})")
+    
+    def _call_cloudflare_embed(self, texts: List[str], max_retries: int = 3) -> np.ndarray:
+        """Call Cloudflare embedding API with retry logic."""
+        import requests
+        import time
+        
+        url = f"https://api.cloudflare.com/client/v4/accounts/{self._cf_account}/ai/run/{self._cf_model}"
+        
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    url,
+                    json={"text": texts},
+                    headers={
+                        "Authorization": f"Bearer {self._cf_token}",
+                        "Content-Type": "application/json"
+                    },
+                    timeout=120
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                if not data.get("success"):
+                    raise RuntimeError(f"Cloudflare API error: {data.get('errors', [])}")
+                
+                # Extract embeddings from response
+                result = data.get("result", {})
+                
+                if isinstance(result, dict) and "data" in result:
+                    embeddings = result["data"]
+                elif isinstance(result, list):
+                    embeddings = result
+                else:
+                    raise RuntimeError(f"Unexpected Cloudflare response format: {type(result)}")
+                
+                return np.array(embeddings, dtype=np.float32)
+                
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                if response.status_code == 500 and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # 2, 4, 6 seconds
+                    print(f"[Embedder] Cloudflare 500 error, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                raise
+        
+        raise last_error
+
     def _init_clap(self, model_name: str):
         try:
             from transformers import ClapProcessor, ClapModel
@@ -382,6 +476,23 @@ class TextEmbedder:
         context: Optional[str] = None,
         batch_size: int = 32  # Process in chunks to save RAM
     ):
+        # --- Cloudflare path (fastest!) ---
+        if self.backend_type == "cloudflare" and hasattr(self, "_cf_ready"):
+            all_embeddings = []
+            # Smaller batches for stability (Qwen3 especially needs this)
+            batch_size_cf = 25 if "qwen" in self._cf_model.lower() else 50
+            for i in range(0, len(texts), batch_size_cf):
+                batch = texts[i:i + batch_size_cf]
+                embs = self._call_cloudflare_embed(batch)
+                all_embeddings.append(embs)
+            if not all_embeddings:
+                return np.array([], dtype=np.float32)
+            result = np.concatenate(all_embeddings, axis=0)
+            # Normalize
+            norms = np.linalg.norm(result, axis=1, keepdims=True)
+            result = result / (norms + 1e-9)
+            return result.astype(np.float32)
+        
         # --- Qwen path ---
         if self._backend is not None and self._tokenizer is not None and self.backend_type in ("qwen2","qwen3"):
             inputs = self._apply_prompt_template(texts, instruction, context)
