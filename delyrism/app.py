@@ -1269,7 +1269,7 @@ STRUCTURE_DISPLAY_NAMES = {
     "elements.json": "🜂 Four Elements",
     "planets.json": "☉ Celestial Planets",
     "jungian.json": "🜏 Jungian Archetypes",
-    "lakota.json": "🪶 Lakota Spirits",
+    "lakota.json": "🪶 Lakota Dream Symbols",
     "chakras.json": "◉ Chakra System",
     "chinese_zodiac.json": "🐉 Chinese Zodiac",
     "mayan.json": "𐊗 Mayan Calendar",
