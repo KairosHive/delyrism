@@ -1880,7 +1880,7 @@ if backend in ("audioclip", "clap") and audio_vec is not None:
 else:
     space.set_context_vec(None)
 
-tab_explore, tab_story, tab_mine = st.tabs(["Explorer", "Story Generator", "Corpus Miner"])
+tab_explore, tab_story, tab_mine = st.tabs(["Explorer", "Story Generator", "Archetype Builder"])
 
 with tab_explore:
     color_map = space.get_symbol_color_dict("AuroraPop")
@@ -3298,10 +3298,43 @@ with tab_mine:
             st.code("uvicorn miner_server:app --port 8765", language="bash")
         
         with col_iframe:
-            import streamlit.components.v1 as components
-            
-            # Embed the Egregore iframe
-            components.iframe(egregore_url, height=850, scrolling=False)
+            # Call to action to visit Egregore
+            st.markdown("""
+            <div style="
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 400px;
+                background: linear-gradient(135deg, rgba(194, 166, 254, 0.08) 0%, rgba(10, 10, 15, 0.95) 100%);
+                border: 1px solid rgba(194, 166, 254, 0.3);
+                border-radius: 16px;
+                text-align: center;
+                padding: 2rem;
+            ">
+                <h2 style="color: #c2a6fe; margin-bottom: 0.5rem;">⚗️ Egregore</h2>
+                <p style="color: #a1a1aa; font-size: 1.1rem; margin-bottom: 1.5rem;">
+                    Build custom archetypes with real-time AI feedback
+                </p>
+                <a href="https://egregore.kairos-hive.org" target="_blank" style="
+                    display: inline-block;
+                    padding: 1rem 2.5rem;
+                    background: linear-gradient(135deg, #c2a6fe 0%, #9b7edb 100%);
+                    color: #0a0a0f;
+                    font-weight: 600;
+                    font-size: 1.1rem;
+                    border-radius: 8px;
+                    text-decoration: none;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 4px 15px rgba(194, 166, 254, 0.3);
+                ">
+                    🚀 Launch Egregore Builder
+                </a>
+                <p style="color: #71717a; font-size: 0.85rem; margin-top: 1.5rem;">
+                    egregore.kairos-hive.org
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
     
     else:
         # ========== CLASSIC STREAMLIT MINER ==========
