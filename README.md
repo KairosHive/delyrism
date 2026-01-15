@@ -222,4 +222,321 @@ Navigate through the tabbed interface:
 
 **Use case**: Track how context reshapes the macro-structure of your symbol space
 
+---
 
+## 🧠 Technical Deep Dive
+
+### How Context Conditioning Works
+
+#### The Core Algorithm
+1. **Encode** all descriptors into a semantic embedding space (using transformer models)
+2. **Build** a bipartite graph: Symbols ↔ Descriptors + Descriptor-Descriptor edges (by cosine similarity threshold)
+3. **Compute context vector** from input (text, audio, or weights)
+4. **Apply attention** using softmax over descriptor-context similarities (temperature τ)
+5. **Shift embeddings** using one of four strategies:
+   - **Gate**: `D' = norm(D + β * gate(D·ctx) * ctx)`
+   - **Reembed**: Re-encode descriptors with context prepended
+   - **Pooling**: `D' = norm((1-w)*D + w*ctx)`
+   - **Hybrid**: Blend gate + reembed results
+6. **Rank symbols** by combining coherence and graph diffusion (λ blend parameter)
+
+#### Personalized PageRank
+- Inject probability mass at descriptor nodes proportional to their context similarity
+- Diffuse through the graph (α damping controls locality)
+- Aggregate symbol scores from descriptor scores
+- Combine with direct coherence for final ranking
+
+#### Delta Graph Construction
+1. Compute descriptor similarity matrices before and after shift: `S_before`, `S_after`
+2. Calculate delta: `Δ = S_after - S_before`
+3. Extract top-K edges by `|Δ|` (absolute change)
+4. Build NetworkX graph with Δ-weighted edges
+5. Optionally filter by symbol, connectivity, or within-symbol only
+
+### Parameter Reference
+
+| Parameter | Range | Default | Effect |
+|-----------|-------|---------|--------|
+| **τ (tau)** | 0.01–1.0 | 0.3 | Attention sharpness (lower = more focused) |
+| **β (beta)** | 0.0–2.0 | 0.6 | Shift strength for gate strategy |
+| **α (alpha)** | 0.0–1.0 | 0.85 | PageRank damping (higher = more diffusion) |
+| **λ (lambda)** | 0.0–1.0 | 0.6 | Coherence vs. diffusion weight |
+| **descriptor_threshold** | 0.0–1.0 | 0.2 | Min cosine similarity for descriptor edges |
+| **membership_alpha** | 0.0–1.0 | 0.0 | Blend shift by symbol membership |
+| **top_abs_edges** | 5–500 | 30 | Number of Δ edges to visualize |
+
+### Embedding Backends Compared
+
+| Backend | Speed | Quality | GPU | Audio | Notes |
+|---------|-------|---------|-----|-------|-------|
+| **Qwen3** | ⚡⚡⚡ | ⭐⭐⭐⭐⭐ | Optional | ❌ | Best for CPU, int8 quantization |
+| **Cloudflare** | ⚡⚡⚡⚡⚡ | ⭐⭐⭐⭐ | N/A | ❌ | Zero local compute, requires API key |
+| **SentenceTransformers** | ⚡⚡ | ⭐⭐⭐⭐ | Recommended | ❌ | Classic, broad model support |
+| **CLAP** | ⚡⚡ | ⭐⭐⭐⭐ | Recommended | ✅ | Audio-text joint space |
+| **AudioCLIP** | ⚡⚡⚡ | ⭐⭐⭐ | Optional | ✅ | Lightweight audio via OpenCLIP |
+
+---
+
+## 🚀 Advanced Features
+
+### Membership Alpha Blending
+Control how much context shifts respect symbol boundaries:
+```python
+space.make_shifted_matrix(
+    sentence="your context",
+    membership_alpha=0.5  # 0=full shift, 1=no shift
+)
+```
+- **0.0**: Descriptors can drift arbitrarily far (explore novel connections)
+- **1.0**: Descriptors stay within symbol clusters (preserve structure)
+- **0.3–0.7**: Balanced (recommended range)
+
+### Within-Symbol Softmax
+Apply attention separately per symbol (useful when symbols have very different descriptor counts):
+```python
+space.propose(
+    sentence="context",
+    tau=0.3,
+    within_symbol_softmax=True  # Each symbol's descriptors compete only with each other
+)
+```
+
+### Dual Context Comparison
+The app supports **Context A** and **Context B** modes for side-by-side analysis:
+- Compare how different prompts affect the same symbol space
+- Visualize trajectory between two semantic positions
+- Track which descriptors shift most between contexts
+
+### Audio Context Integration
+1. Set embedder backend to `clap` or `audioclip`
+2. Upload audio file or record live
+3. System embeds audio into the same space as text
+4. Override context vector with audio embedding
+5. All visualizations now show audio-conditioned shifts
+
+### JSON Import/Export
+Save and load complete symbol spaces with metadata:
+```json
+{
+  "symbols": {
+    "Fire": ["passion", "energy", "transformation"],
+    "Water": ["flow", "healing", "depth"]
+  },
+  "metadata": {
+    "source": "custom",
+    "created": "2026-01-15",
+    "descriptor_threshold": 0.2
+  }
+}
+```
+
+### Programmatic API
+Use the core engine without Streamlit:
+```python
+from delyrism import SymbolSpace, TextEmbedder
+
+# Initialize
+embedder = TextEmbedder(backend="qwen3", model="Qwen/Qwen3-Embedding-0.6B")
+symbols = {"Fire": ["passion", "energy"], "Water": ["calm", "flow"]}
+space = SymbolSpace(symbols, embedder, descriptor_threshold=0.2)
+
+# Get proposals
+proposals = space.propose(sentence="intense transformation", topk=3, tau=0.3)
+
+# Get delta graph
+from delyrism import context_delta_graph, plot_delta_graph
+G = context_delta_graph(space, sentence="healing journey", top_abs_edges=20)
+fig = plot_delta_graph(G, space, palette="Nord")
+```
+
+---
+
+## 🎯 Use Cases
+
+### 1. Mythopoetic Writing & Worldbuilding
+- Explore symbolic associations for narrative themes
+- Generate story seeds from delta graph motifs
+- Track character archetypes across different emotional contexts
+- Multi-language myth generation with tone presets
+
+### 2. Psychological Analysis
+- Map Jungian archetypes with contextual activation
+- Visualize how life experiences shift symbolic importance
+- Track therapeutic themes across session transcripts (audio)
+- Measure archetype ambiguity and overlap
+
+### 3. Brand & Marketing Strategy
+- Define brand symbols and attributes as descriptors
+- Test how different campaign messages activate brand facets
+- Discover unexpected associations via delta graphs
+- Compare competitor positioning in symbol space
+
+### 4. Cultural Studies & Semiotics
+- Analyze how cultural contexts shift symbolic meanings
+- Compare symbol systems across languages/cultures
+- Mine archetypes from historical texts or image corpora
+- Visualize semantic evolution over time
+
+### 5. Music & Audio Analysis
+- Use CLAP embeddings to explore audio-symbolic relationships
+- Map musical qualities to archetypal descriptors
+- Generate narratives from audio input
+- Discover cross-modal metaphors (sound → symbol)
+
+---
+
+## 🛠️ Performance Optimization
+
+### For Low-Resource Environments
+```bash
+# Use Cloudflare for embeddings (no GPU needed)
+# In app: Select "Cloudflare" backend
+
+# OR use quantized local model
+# Qwen3 auto-applies int8 quantization on CPU
+```
+
+### For Speed
+- Reduce `descriptor_threshold` to create sparser graphs (0.15–0.2 is good)
+- Use PCA instead of UMAP for faster 2D projections
+- Batch process embeddings (automatically handled)
+- Cache symbol spaces (use Export/Save feature)
+
+### For Quality
+- Use `strategy="hybrid"` for richest semantic shifts
+- Lower τ to 0.1–0.2 for sharper attention
+- Increase `top_abs_edges` to 50–100 for comprehensive delta graphs
+- Use Qwen3 or sentence-transformers for embeddings
+
+### For Large Symbol Sets (100+ symbols)
+- Increase `descriptor_threshold` to 0.25–0.3
+- Use `connected_only=True` in delta graph
+- Apply `symbol_filter` to focus on subsets
+- Consider mining sub-spaces with Egregore
+
+---
+
+## 📦 Dependencies
+
+### Core (required)
+```
+torch >= 2.0
+transformers >= 4.35
+sentence-transformers >= 2.2
+numpy >= 1.23
+networkx >= 3.0
+scikit-learn >= 1.2
+matplotlib >= 3.6
+streamlit >= 1.28
+```
+
+### Optional (for full features)
+```
+umap-learn >= 0.5      # for UMAP projections
+scipy >= 1.9           # for convex hulls
+open-clip-torch >= 2.23  # for AudioCLIP/image
+laion-clap >= 1.1      # for CLAP audio
+librosa >= 0.10        # for audio processing
+Pillow >= 9.0          # for image handling
+streamlit-mic-recorder  # for live audio recording
+```
+
+### For Egregore (archetype mining)
+```
+hdbscan >= 0.8
+PyPDF2 or pypdf        # for PDF parsing
+openai                 # for LLM refinement (optional)
+```
+
+---
+
+## 🔧 Configuration
+
+### Cloudflare Workers AI Setup
+Create `.streamlit/secrets.toml`:
+```toml
+[cloudflare]
+account_id = "your_cloudflare_account_id"
+api_token = "your_cloudflare_api_token"
+```
+Or set environment variables:
+```bash
+export CLOUDFLARE_ACCOUNT_ID="your_account_id"
+export CLOUDFLARE_API_TOKEN="your_api_token"
+```
+
+### OpenAI API (for Egregore LLM refinement)
+```toml
+[openai]
+api_key = "your_openai_api_key"
+```
+
+### Custom Symbol Sets
+Place JSON files in `delyrism/structures/`:
+```json
+{
+  "SymbolName": ["descriptor1", "descriptor2", "descriptor3"],
+  "AnotherSymbol": ["desc_a", "desc_b"]
+}
+```
+
+---
+
+## 📚 Documentation
+
+- **[FUNCTIONS_README.md](FUNCTIONS_README.md)**: Complete API reference with all function signatures
+- **[Example Notebooks](notebooks/)**: Jupyter notebooks with detailed workflows
+- **[Preset Symbol Sets](delyrism/structures/)**: Pre-built archetypal systems
+
+---
+
+## 🤝 Contributing
+
+Delyrism is experimental research code. Contributions welcome:
+- New embedding backends
+- Additional visualization methods
+- Symbol set templates
+- Performance optimizations
+- Documentation improvements
+
+---
+
+## 📄 License
+
+MIT License - See LICENSE file for details
+
+---
+
+## 🙏 Acknowledgments
+
+Built with:
+- **Transformers** (Hugging Face) for semantic embeddings
+- **NetworkX** for graph algorithms
+- **Streamlit** for interactive interface
+- **UMAP** for dimensionality reduction
+- **CLAP/AudioCLIP** for multimodal embeddings
+
+Inspired by concepts from:
+- Symbolic cognition & archetypal psychology (Jung)
+- Distributional semantics & word embeddings
+- Graph-based knowledge representation
+- Attention mechanisms in transformers
+- Mythopoetic traditions across cultures
+
+---
+
+## 📬 Citation
+
+If you use Delyrism in your research or creative work, please cite:
+```
+@software{delyrism2026,
+  title={Delyrism: Context-Aware Symbolic Archetype Explorer},
+  author={Your Name},
+  year={2026},
+  url={https://github.com/yourusername/delyrism}
+}
+```
+
+---
+
+**Explore the liminal space where meaning shifts and archetypes dance.** 🌀
