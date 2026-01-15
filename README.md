@@ -365,19 +365,14 @@ fig = plot_delta_graph(G, space, palette="Nord")
 - Track therapeutic themes across session transcripts (audio)
 - Measure archetype ambiguity and overlap
 
-### 3. Brand & Marketing Strategy
-- Define brand symbols and attributes as descriptors
-- Test how different campaign messages activate brand facets
-- Discover unexpected associations via delta graphs
-- Compare competitor positioning in symbol space
 
-### 4. Cultural Studies & Semiotics
+### 3. Cultural Studies & Semiotics
 - Analyze how cultural contexts shift symbolic meanings
 - Compare symbol systems across languages/cultures
 - Mine archetypes from historical texts or image corpora
 - Visualize semantic evolution over time
 
-### 5. Music & Audio Analysis
+### 4. Music & Audio Analysis
 - Use CLAP embeddings to explore audio-symbolic relationships
 - Map musical qualities to archetypal descriptors
 - Generate narratives from audio input
