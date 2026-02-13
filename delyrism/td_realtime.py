@@ -374,65 +374,94 @@ class OSCTransport:
     def __init__(self, host: str = "127.0.0.1", port: int = 7000):
         self.host = host
         self.port = port
-        self._socket = None
+        self._client = None
+        self._has_osc = False
         
     def start(self):
-        import socket
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        print(f"[OSC] Sending to {self.host}:{self.port}")
+        try:
+            from pythonosc import udp_client
+            self._client = udp_client.SimpleUDPClient(self.host, self.port)
+            self._has_osc = True
+            print(f"[OSC] Sending to {self.host}:{self.port} (python-osc)")
+        except ImportError:
+            import socket
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._has_osc = False
+            print(f"[OSC] Sending to {self.host}:{self.port} (raw UDP - install python-osc for proper OSC)")
     
     def stop(self):
-        if self._socket:
+        if hasattr(self, '_socket') and self._socket:
             self._socket.close()
-            self._socket = None
+        self._client = None
     
     def send(self, data: DeltaGraphData):
-        if not self._socket:
-            return
-        
-        # OSC message implementation (simplified - use python-osc for full impl)
-        # For now, send JSON over UDP as a fallback
+        if self._has_osc and self._client:
+            self._send_osc(data)
+        else:
+            self._send_json(data)
+    
+    def _send_json(self, data: DeltaGraphData):
+        """Fallback: send JSON over UDP."""
         try:
             msg = data.to_json().encode('utf-8')
             self._socket.sendto(msg, (self.host, self.port))
         except Exception as e:
             print(f"[OSC] Send error: {e}")
     
-    def send_osc_bundle(self, data: DeltaGraphData):
-        """
-        Send proper OSC bundle. Requires python-osc:
-            pip install python-osc
-        """
-        try:
-            from pythonosc import osc_bundle_builder, osc_message_builder
-            from pythonosc import udp_client
-            
-            client = udp_client.SimpleUDPClient(self.host, self.port)
-            
-            # Send frame info
-            client.send_message("/delyrism/frame", [data.frame_id, data.timestamp])
-            client.send_message("/delyrism/context", data.context_sentence)
-            
-            # Send metrics
-            for k, v in data.metrics.items():
-                client.send_message(f"/delyrism/metrics/{k}", v)
-            
-            # Send nodes (batched)
-            for i, n in enumerate(data.nodes):
-                client.send_message(f"/delyrism/node/{i}", [
-                    n['id'], n['symbol'], n['x'], n['y'], n['size'],
-                    n['r'], n['g'], n['b'], n['delta_sum']
-                ])
-            
-            # Send edges
-            for i, e in enumerate(data.edges):
-                client.send_message(f"/delyrism/edge/{i}", [
-                    e['source'], e['target'], e['delta'], e['width']
-                ])
-                
-        except ImportError:
-            # Fallback to raw JSON
-            self.send(data)
+    def _send_osc(self, data: DeltaGraphData):
+        """Send proper OSC messages."""
+        c = self._client
+        
+        # Frame info
+        c.send_message("/delyrism/frame", [data.frame_id, float(data.timestamp)])
+        c.send_message("/delyrism/context", data.context_sentence)
+        
+        # Counts (so TD knows how many to expect)
+        c.send_message("/delyrism/count/nodes", len(data.nodes))
+        c.send_message("/delyrism/count/edges", len(data.edges))
+        
+        # Metrics
+        c.send_message("/delyrism/metrics", [
+            float(data.metrics.get('total_nodes', 0)),
+            float(data.metrics.get('total_edges', 0)),
+            float(data.metrics.get('avg_delta', 0)),
+            float(data.metrics.get('max_delta', 0)),
+            float(data.metrics.get('compute_time_ms', 0)),
+        ])
+        
+        # Nodes: /delyrism/node/<index> [name, symbol, x, y, size, r, g, b]
+        for i, n in enumerate(data.nodes):
+            c.send_message(f"/delyrism/node/{i}", [
+                n['label'],           # node name (descriptor)
+                n['symbol'],          # symbol family
+                float(n['x']),        # position x
+                float(n['y']),        # position y
+                float(n['size']),     # node size
+                float(n['r']),        # color r
+                float(n['g']),        # color g
+                float(n['b']),        # color b
+            ])
+        
+        # Edges: /delyrism/edge/<index> [source_name, target_name, delta, width]
+        for i, e in enumerate(data.edges):
+            c.send_message(f"/delyrism/edge/{i}", [
+                e['source'],          # source node name
+                e['target'],          # target node name
+                float(e['delta']),    # delta value (signed)
+                float(e['width']),    # edge width
+            ])
+        
+        # Symbol summaries: /delyrism/symbol/<index> [name, node_count, centroid_x, centroid_y, r, g, b]
+        for i, s in enumerate(data.symbols):
+            c.send_message(f"/delyrism/symbol/{i}", [
+                s['name'],
+                int(s['node_count']),
+                float(s['centroid_x']),
+                float(s['centroid_y']),
+                float(s['r']),
+                float(s['g']),
+                float(s['b']),
+            ])
 
 
 class WebSocketTransport:

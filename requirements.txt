@@ -54,3 +54,6 @@ leidenalg>=0.10.0       # For advanced clustering in miner
 
 # ---- Compatibility ----
 protobuf>=4.25.3
+
+# ---- Real-time OSC Server ----
+python-osc
