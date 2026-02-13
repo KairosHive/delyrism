@@ -205,13 +205,53 @@ class DeltaGraphEngine:
     Core engine for computing delta graphs with caching and incremental updates.
     """
     
-    def __init__(self, space, cache_embeddings: bool = True):
+    def __init__(self, space, cache_embeddings: bool = True, deterministic: bool = True,
+                 layout_cache_path: Optional[str] = None):
         self.space = space
         self.cache_embeddings = cache_embeddings
+        self.deterministic = deterministic
+        self.layout_cache_path = Path(layout_cache_path) if layout_cache_path else None
         self._layout_cache: Dict[str, np.ndarray] = {}
+        self._sentence_cache: Dict[str, np.ndarray] = {}  # Cache for sentence embeddings
         self._last_params_hash: Optional[int] = None
         self._last_graph = None
         self._frame_id = 0
+        
+        if deterministic:
+            self._set_deterministic()
+        
+        # Load persistent layout cache if exists
+        if self.layout_cache_path and self.layout_cache_path.exists():
+            try:
+                import pickle
+                with open(self.layout_cache_path, 'rb') as f:
+                    self._layout_cache = pickle.load(f)
+                print(f"[Engine] Loaded {len(self._layout_cache)} cached layouts")
+            except Exception as e:
+                print(f"[Engine] Could not load layout cache: {e}")
+    
+    def save_layout_cache(self):
+        """Save layout cache to disk for persistence across restarts."""
+        if self.layout_cache_path:
+            import pickle
+            with open(self.layout_cache_path, 'wb') as f:
+                pickle.dump(self._layout_cache, f)
+            print(f"[Engine] Saved {len(self._layout_cache)} layouts to {self.layout_cache_path}")
+    
+    def _set_deterministic(self):
+        """Set random seeds for reproducibility."""
+        import random
+        random.seed(42)
+        np.random.seed(42)
+        try:
+            import torch
+            torch.manual_seed(42)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(42)
+                torch.backends.cudnn.deterministic = True
+                torch.backends.cudnn.benchmark = False
+        except ImportError:
+            pass
         
     def compute(self, params: DeltaParams) -> DeltaGraphData:
         """Compute delta graph for given parameters."""
@@ -244,13 +284,17 @@ class DeltaGraphEngine:
             membership_alpha=params.membership_alpha,
         )
         
-        # Layout (cached by graph hash for stability)
-        graph_hash = hash(frozenset(G.edges()))
-        if graph_hash in self._layout_cache:
-            pos = self._layout_cache[graph_hash]
+        # Layout: use stable node-based hash (not edge-based) for better caching
+        # Sort nodes for deterministic ordering
+        sorted_nodes = tuple(sorted(G.nodes()))
+        graph_key = (sorted_nodes, params.layout_seed)
+        
+        if graph_key in self._layout_cache:
+            pos = self._layout_cache[graph_key]
         else:
-            pos = nx.spring_layout(G, seed=params.layout_seed, k=params.layout_k)
-            self._layout_cache[graph_hash] = pos
+            # Use fixed seed and iteration count for determinism
+            pos = nx.spring_layout(G, seed=params.layout_seed, k=params.layout_k, iterations=50)
+            self._layout_cache[graph_key] = pos
             # Limit cache size
             if len(self._layout_cache) > 100:
                 self._layout_cache.pop(next(iter(self._layout_cache)))
@@ -743,10 +787,11 @@ class DeltaGraphServer:
         protocol: str = "osc",
         host: str = "127.0.0.1",
         port: int = 7000,
+        layout_cache_path: str = ".delyrism_layout_cache.pkl",
         **transport_kwargs
     ):
         self.space = space
-        self.engine = DeltaGraphEngine(space)
+        self.engine = DeltaGraphEngine(space, layout_cache_path=layout_cache_path)
         self.params = DeltaParams()
         self._lock = threading.Lock()
         self._running = False
@@ -786,9 +831,10 @@ class DeltaGraphServer:
         self._running = True
     
     def stop(self):
-        """Stop the server."""
+        """Stop the server and save caches."""
         self._running = False
         self.transport.stop()
+        self.engine.save_layout_cache()
     
     def add_callback(self, callback: Callable[[DeltaGraphData], None]):
         """Add a callback to receive computed data."""
@@ -1004,6 +1050,11 @@ def main():
     parser.add_argument("--port", type=int, default=7000, help="Port number")
     parser.add_argument("--fps", type=float, default=30.0, help="Update rate")
     parser.add_argument("--structure", default="elements", help="Symbol structure to load")
+    parser.add_argument("--backend", default="sentence-transformer", 
+                        choices=["sentence-transformer", "qwen2", "qwen3", "cloudflare"],
+                        help="Embedding backend")
+    parser.add_argument("--pooling", default="eos", choices=["eos", "mean", "cls"],
+                        help="Pooling strategy for transformer models")
     args = parser.parse_args()
     
     # Load a default structure
@@ -1021,7 +1072,7 @@ def main():
     
     # Create embedder and space
     dly = _import_delyrism()
-    embedder = dly.TextEmbedder(backend="sentence-transformer", pooling="eos")
+    embedder = dly.TextEmbedder(backend=args.backend, pooling=args.pooling)
     space = dly.SymbolSpace(symbols_to_descriptors=symbols_to_descriptors, embedder=embedder)
     
     # Create server
@@ -1032,6 +1083,8 @@ def main():
     print(f"Endpoint: {args.host}:{args.port}")
     print(f"FPS: {args.fps}")
     print(f"Structure: {args.structure}")
+    print(f"Backend: {args.backend} (pooling: {args.pooling})")
+    print(f"Params: beta={server.params.beta}, tau={server.params.tau}, top_edges={server.params.top_abs_edges}")
     print("\nPress Ctrl+C to stop\n")
     
     server.start()
@@ -1051,6 +1104,13 @@ def main():
             print(f"\n{'='*60}")
             print(f"[Frame {i+1}] Context: \"{ctx}\"")
             print(f"{'='*60}")
+            
+            # DEBUG: Check sentence embedding consistency
+            sent_emb = space.embedder.encode([ctx])[0]
+            emb_hash = hash(sent_emb.tobytes()) % 100000
+            print(f"  [DEBUG] Sentence embedding hash: {emb_hash}")
+            print(f"  [DEBUG] space.D hash: {hash(space.D.tobytes()) % 100000}")
+            
             server.update_context(ctx)
             data = server.compute_once()
             
