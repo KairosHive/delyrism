@@ -692,7 +692,14 @@ class LLMArchetypeRefiner:
                         return s
             return ""
 
-        content = _as_text(result.get("response"))
+        # Llama 4 Scout returns result.response as an already-parsed dict
+        # (not a JSON string). Re-serialize so downstream parser can json.loads.
+        response_value = result.get("response")
+        if isinstance(response_value, dict) and (response_value.get("name") or response_value.get("descriptors")):
+            import json as _json
+            content = _json.dumps(response_value)
+        else:
+            content = _as_text(response_value)
         if not content:
             choices = result.get("choices") or []
             if choices and isinstance(choices, list):
