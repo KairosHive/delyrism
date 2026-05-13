@@ -1448,7 +1448,9 @@ with st.sidebar:
 
     # --- Context Options --------------------------
     # Ensure backend/embedder are defined for audio checks (they are selected in Embeddings below)
-    backend = st.session_state.get("backend_selection", "qwen3")
+    # Default must match the first option in the Embedding Model selectbox (cloudflare-bge-m3)
+    # so first-paint works in environments without local Qwen weights (e.g. Railway).
+    backend = st.session_state.get("backend_selection", "cloudflare-bge-m3")
     model_val = st.session_state.get("embedding_model", "")
     pooling_val = st.session_state.get("embedding_pooling", "eos")
     embedder = get_embedder(backend, model_val or None, pooling_val)
