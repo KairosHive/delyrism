@@ -650,19 +650,20 @@ class LLMArchetypeRefiner:
             if _cf_gateway_token:
                 headers["cf-aig-authorization"] = f"Bearer {_cf_gateway_token}"
 
-        payload = {
+        # reasoning_effort + response_format are best-effort hints. Some
+        # models (e.g. GLM 4.7 Flash) reject unknown params with 400. Retry
+        # minimal on 400 and log what Cloudflare rejected.
+        base_payload = {
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0.7,
-            "reasoning_effort": "low",
-            "response_format": {"type": "json_object"},
         }
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=120
-        )
+        payload = {**base_payload, "reasoning_effort": "low", "response_format": {"type": "json_object"}}
+        response = requests.post(url, json=payload, headers=headers, timeout=120)
+        if response.status_code == 400:
+            body_preview = (response.text or "")[:300].replace("\n", " ")
+            print(f"[delyrism Refiner] 400 from {self.model}; retrying minimal. Body: {body_preview}", flush=True)
+            response = requests.post(url, json=base_payload, headers=headers, timeout=120)
         response.raise_for_status()
         data = response.json()
 
