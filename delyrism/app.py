@@ -399,12 +399,10 @@ import requests
 
 # ===== Cloudflare Workers AI =====
 CLOUDFLARE_MODELS = {
-    "Llama 3.3 70B Fast (default — reliable JSON)":           "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "GLM 4.7 Flash (cheap, multilingual)":                    "@cf/zai-org/glm-4.7-flash",
-    "Kimi K2.6 (long-form, 262k ctx)":                        "@cf/moonshotai/kimi-k2.6",
-    "Qwen3 30B A3B (reasoning — may be unreliable for JSON)": "@cf/qwen/qwen3-30b-a3b-fp8",
-    "QwQ 32B (reasoning — may be unreliable for JSON)":       "@cf/qwen/qwq-32b",
-    "Custom (specify @cf/... below)":                         "__custom__",
+    "Llama 3.3 70B Fast (default — premium, reliable JSON)": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "Llama 4 Scout 17B (cheap MoE, vision)":                 "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "Mistral Small 3.1 24B (multilingual)":                  "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    "Custom (specify @cf/... below)":                        "__custom__",
 }
 
 def generate_with_cloudflare(
