@@ -399,19 +399,19 @@ import requests
 
 # ===== Cloudflare Workers AI =====
 CLOUDFLARE_MODELS = {
-    "Gemma 4 26B A4B (default — MoE + thinking, 256k ctx)":  "@cf/google/gemma-4-26b-a4b-it",
-    "Llama 3.3 70B Fast (premium EN prose)":                  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "Qwen3 30B A3B (multilingual sibling, same price)":       "@cf/qwen/qwen3-30b-a3b-fp8",
-    "QwQ 32B (reasoning-tuned, structural narrative)":        "@cf/qwen/qwq-32b",
+    "Llama 3.3 70B Fast (default — reliable JSON)":           "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "GLM 4.7 Flash (cheap, multilingual)":                    "@cf/zhipu/glm-4.7-flash",
     "Kimi K2.6 (long-form, 262k ctx)":                        "@cf/moonshotai/kimi-k2.6",
-    "GLM 4.7 Flash (cheapest multilingual fallback)":         "@cf/zhipu/glm-4.7-flash",
+    "Qwen3 30B A3B (reasoning — may be unreliable for JSON)": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "QwQ 32B (reasoning — may be unreliable for JSON)":       "@cf/qwen/qwq-32b",
+    "Gemma 4 26B A4B (thinking — known unreliable for JSON)": "@cf/google/gemma-4-26b-a4b-it",
     "Custom (specify @cf/... below)":                         "__custom__",
 }
 
 def generate_with_cloudflare(
     messages: list,
     *,
-    model: str = "@cf/google/gemma-4-26b-a4b-it",
+    model: str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     account_id: str = None,
     api_token: str = None,
     max_tokens: int = 256,
@@ -2997,7 +2997,7 @@ with tab_story:
                             value="@cf/",
                             help="Paste any @cf/... model ID from the Cloudflare Workers AI catalog.",
                             key="cf_custom_model_main",
-                        ).strip() or "@cf/google/gemma-4-26b-a4b-it"
+                        ).strip() or "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
                     st.caption(f"Model: `{cf_model_id}`")
                     # Cloudflare doesn't need 8-bit or local settings
                     use_8bit = False

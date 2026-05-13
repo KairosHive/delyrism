@@ -615,7 +615,7 @@ class LLMArchetypeRefiner:
     def __init__(
         self,
         backend: Literal["cloudflare", "local"] = "cloudflare",
-        model: str = "@cf/google/gemma-4-26b-a4b-it",
+        model: str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         cloudflare_account_id: Optional[str] = None,
         cloudflare_api_token: Optional[str] = None,
         local_model_loader: Optional[Callable] = None,
@@ -650,19 +650,72 @@ class LLMArchetypeRefiner:
             if _cf_gateway_token:
                 headers["cf-aig-authorization"] = f"Bearer {_cf_gateway_token}"
 
+        payload = {
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+            "reasoning_effort": "low",
+            "response_format": {"type": "json_object"},
+        }
         response = requests.post(
             url,
-            json={"messages": messages, "max_tokens": max_tokens, "temperature": 0.7},
+            json=payload,
             headers=headers,
             timeout=120
         )
         response.raise_for_status()
         data = response.json()
-        
+
         if not data.get("success"):
             raise RuntimeError(f"Cloudflare API error: {data.get('errors', [])}")
-        
-        return data.get("result", {}).get("response", "").strip()
+
+        result = data.get("result", {}) or {}
+
+        def _as_text(value):
+            if value is None:
+                return ""
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, dict):
+                for k in ("text", "content", "response", "message", "output_text", "reasoning_content", "arguments"):
+                    sub = value.get(k)
+                    if sub:
+                        s = _as_text(sub)
+                        if s:
+                            return s
+                return ""
+            if isinstance(value, list) and value:
+                for item in value:
+                    s = _as_text(item)
+                    if s:
+                        return s
+            return ""
+
+        content = _as_text(result.get("response"))
+        if not content:
+            choices = result.get("choices") or []
+            if choices and isinstance(choices, list):
+                msg = (choices[0] or {}).get("message") or {}
+                content = _as_text(msg.get("content")) or _as_text(msg.get("reasoning_content"))
+                if not content:
+                    # tool_calls envelope (Llama 3.3 70B routes JSON output here)
+                    tcs = msg.get("tool_calls") or result.get("tool_calls") or []
+                    for tc in tcs if isinstance(tcs, list) else []:
+                        if isinstance(tc, dict):
+                            content = _as_text((tc.get("function") or {}).get("arguments")) or _as_text(tc.get("arguments"))
+                            if content:
+                                break
+        if not content:
+            tcs = result.get("tool_calls") or []
+            for tc in tcs if isinstance(tcs, list) else []:
+                if isinstance(tc, dict):
+                    content = _as_text((tc.get("function") or {}).get("arguments")) or _as_text(tc.get("arguments"))
+                    if content:
+                        break
+        if not content:
+            print(f"[delyrism Refiner] Empty LLM response. result keys={list(result.keys())} usage={result.get('usage')} model={self.model}", flush=True)
+
+        return content
     
     def _call_local(self, messages: List[Dict], max_tokens: int = 2048) -> str:
         """Call local model (requires loader function)."""
