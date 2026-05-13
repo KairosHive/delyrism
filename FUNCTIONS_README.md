@@ -330,7 +330,7 @@ Build chat-style prompt for narrative generation.
 
 **Returns:** List of chat messages
 
-##### `generate_with_cloudflare(messages, model='@cf/meta/llama-3.1-8b-instruct', max_tokens=256, temperature=0.8, top_p=0.9)`
+##### `generate_with_cloudflare(messages, model='@cf/google/gemma-4-26b-a4b-it', max_tokens=256, temperature=0.8, top_p=0.9)`
 Call Cloudflare Workers AI for text generation.
 
 ##### `load_gemma(model_id, use_8bit=False, force_gpu=False)`

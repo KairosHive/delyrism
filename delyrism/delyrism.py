@@ -94,7 +94,6 @@ def _l2norm_torch(x, eps=1e-9):
 
 def make_symbol_palette(symbols, name="Nord"):
     base = CHIC_PALETTES[name]
-    print('BASE', base)
 
     # extend if you have more symbols than base colors (cycles: normal, slightly lighter, slightly darker)
     layers = [0, +1, -1]
@@ -178,10 +177,11 @@ class TextEmbedder:
             self._init_clap(model or "laion/clap-htsat-fused")
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: original | qwen2 | qwen3 | cloudflare | audioclip")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap")
 
-        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare"):  # these use separate vars
-            self._init_fallback()
+        # Check if backend was properly initialized
+        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap"):
+            raise RuntimeError(f"[Embedder] FAILED to initialize backend '{backend}'. Check dependencies and model availability.")
 
     # ---------- init helpers ----------
     def _init_cloudflare(self, model_name: str):
@@ -225,19 +225,31 @@ class TextEmbedder:
         """Call Cloudflare embedding API with retry logic."""
         import requests
         import time
+        import os
+
+        # Optional AI Gateway proxy: set CLOUDFLARE_GATEWAY_ID to enable caching/analytics.
+        _cf_gateway = os.environ.get("CLOUDFLARE_GATEWAY_ID", "")
+        if _cf_gateway:
+            url = f"https://gateway.ai.cloudflare.com/v1/{self._cf_account}/{_cf_gateway}/workers-ai/{self._cf_model}"
+        else:
+            url = f"https://api.cloudflare.com/client/v4/accounts/{self._cf_account}/ai/run/{self._cf_model}"
         
-        url = f"https://api.cloudflare.com/client/v4/accounts/{self._cf_account}/ai/run/{self._cf_model}"
-        
+        headers = {
+            "Authorization": f"Bearer {self._cf_token}",
+            "Content-Type": "application/json",
+        }
+        if _cf_gateway:
+            _cf_gateway_token = os.environ.get("CLOUDFLARE_GATEWAY_TOKEN", "")
+            if _cf_gateway_token:
+                headers["cf-aig-authorization"] = f"Bearer {_cf_gateway_token}"
+
         last_error = None
         for attempt in range(max_retries):
             try:
                 response = requests.post(
                     url,
                     json={"text": texts},
-                    headers={
-                        "Authorization": f"Bearer {self._cf_token}",
-                        "Content-Type": "application/json"
-                    },
+                    headers=headers,
                     timeout=120
                 )
                 response.raise_for_status()
@@ -404,9 +416,8 @@ class TextEmbedder:
             self._tokenizer = None
 
     def _init_fallback(self):
-        rng = np.random.default_rng(42)
-        self._proj = rng.normal(0, 1 / math.sqrt(self.dim), size=(7000, self.dim))
-        print(f"[Embedder] Using hashing fallback ({self.dim}-d).")
+        # DEPRECATED: fallback removed - raise error instead
+        raise RuntimeError("[Embedder] Hashing fallback is disabled. Fix your model configuration.")
 
     # ---------- pooling ----------
     def _pool(self, last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -478,11 +489,21 @@ class TextEmbedder:
     ):
         # --- Cloudflare path (fastest!) ---
         if self.backend_type == "cloudflare" and hasattr(self, "_cf_ready"):
+            # For Qwen-family CF embedders, apply the same instruction/context
+            # templating as the local Qwen path so cloudflare-qwen3 is a
+            # drop-in replacement for local qwen3 (preserves prompting feature).
+            cf_is_qwen = "qwen" in self._cf_model.lower()
+            has_prompt = (
+                instruction is not None or context is not None
+                or self.default_instruction is not None or self.default_context is not None
+            )
+            inputs_cf = self._apply_prompt_template(texts, instruction, context) if (cf_is_qwen and has_prompt) else texts
+
             all_embeddings = []
             # Smaller batches for stability (Qwen3 especially needs this)
-            batch_size_cf = 25 if "qwen" in self._cf_model.lower() else 50
-            for i in range(0, len(texts), batch_size_cf):
-                batch = texts[i:i + batch_size_cf]
+            batch_size_cf = 25 if cf_is_qwen else 50
+            for i in range(0, len(inputs_cf), batch_size_cf):
+                batch = inputs_cf[i:i + batch_size_cf]
                 embs = self._call_cloudflare_embed(batch)
                 all_embeddings.append(embs)
             if not all_embeddings:
@@ -512,7 +533,7 @@ class TextEmbedder:
             return np.concatenate(all_embeddings, axis=0)
 
         # --- SentenceTransformer (handles batching internally usually, but we can force it if needed) ---
-        if self.backend_type == "original" and self._backend is not None:
+        if self.backend_type == "sentence-transformer" and self._backend is not None:
             return np.asarray(self._backend.encode(texts, normalize_embeddings=True, batch_size=batch_size), dtype=np.float32)
 
         # --- NEW: AudioCLIP text path (open_clip) ---
@@ -533,19 +554,9 @@ class TextEmbedder:
             return z.detach().cpu().numpy().astype(np.float32)
 
 
-        # --- hashing fallback (last resort) ---
-        vocab = 7000
-        def vec(t):
-            v = np.zeros(vocab, np.float32)
-            for tok in t.lower().split():
-                v[hash(tok) % vocab] += 1
-            return v
-        if self._proj is None:
-            # safety: create projection if not already set
-            self._init_fallback()
-        M = np.stack([vec(t) for t in texts]) @ self._proj
-        M = M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
-        return M.astype(np.float32)
+        # No fallback - raise error if we got here
+        raise RuntimeError(f"[Embedder] encode() failed: backend_type='{self.backend_type}' not handled. "
+                          f"_backend={self._backend is not None}. Check your configuration.")
 
 
 
@@ -2127,7 +2138,10 @@ def context_delta_graph(
     # --- pick strongest |Δ| edges (upper triangle only) ---
     tri = np.triu_indices_from(Delta, k=1)
     vals = Delta[tri]
-    order = np.argsort(np.abs(vals))[::-1]
+    # Round to 6 decimal places for stable sorting (avoids floating-point noise)
+    abs_vals_rounded = np.round(np.abs(vals), 6)
+    # Secondary sort by index for determinism when values are equal
+    order = np.lexsort((np.arange(len(vals)), -abs_vals_rounded))
 
     G = nx.Graph()
     for n in names:

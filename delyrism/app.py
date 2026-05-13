@@ -399,20 +399,19 @@ import requests
 
 # ===== Cloudflare Workers AI =====
 CLOUDFLARE_MODELS = {
-    "Llama 3.1 (8B-Instruct)": "@cf/meta/llama-3.1-8b-instruct",
-    "Llama 3.2 (3B-Instruct)": "@cf/meta/llama-3.2-3b-instruct",
-    "Llama 3.2 (1B-Instruct)": "@cf/meta/llama-3.2-1b-instruct",
-    "Mistral (7B-Instruct)": "@cf/mistral/mistral-7b-instruct-v0.1",
-    "Qwen 1.5 (7B-Chat)": "@cf/qwen/qwen1.5-7b-chat-awq",
-    "Qwen 1.5 (1.8B-Chat)": "@cf/qwen/qwen1.5-1.8b-chat",
-    "Qwen 1.5 (0.5B-Chat)": "@cf/qwen/qwen1.5-0.5b-chat",
-    "Gemma (7B-IT-LoRA)": "@cf/google/gemma-7b-it-lora",
+    "Gemma 4 26B A4B (default — MoE + thinking, 256k ctx)":  "@cf/google/gemma-4-26b-a4b-it",
+    "Llama 3.3 70B Fast (premium EN prose)":                  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "Qwen3 30B A3B (multilingual sibling, same price)":       "@cf/qwen/qwen3-30b-a3b-fp8",
+    "QwQ 32B (reasoning-tuned, structural narrative)":        "@cf/qwen/qwq-32b",
+    "Kimi K2.6 (long-form, 262k ctx)":                        "@cf/moonshotai/kimi-k2.6",
+    "GLM 4.7 Flash (cheapest multilingual fallback)":         "@cf/zhipu/glm-4.7-flash",
+    "Custom (specify @cf/... below)":                         "__custom__",
 }
 
 def generate_with_cloudflare(
     messages: list,
     *,
-    model: str = "@cf/meta/llama-3.1-8b-instruct",
+    model: str = "@cf/google/gemma-4-26b-a4b-it",
     account_id: str = None,
     api_token: str = None,
     max_tokens: int = 256,
@@ -433,8 +432,14 @@ def generate_with_cloudflare(
             "as environment variables or in Streamlit secrets."
         )
     
-    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
-    
+    # Optional AI Gateway proxy: set CLOUDFLARE_GATEWAY_ID to route through
+    # https://gateway.ai.cloudflare.com (caching, rate limits, analytics).
+    _cf_gateway = os.environ.get("CLOUDFLARE_GATEWAY_ID") or (st.secrets.get("CLOUDFLARE_GATEWAY_ID", "") if hasattr(st, "secrets") else "")
+    if _cf_gateway:
+        url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{_cf_gateway}/workers-ai/{model}"
+    else:
+        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
+
     # Convert messages to Cloudflare format (same as OpenAI style)
     cf_messages = []
     for m in messages:
@@ -445,18 +450,26 @@ def generate_with_cloudflare(
             cf_messages.append({"role": "system", "content": content})
         else:
             cf_messages.append({"role": role, "content": content})
-    
+
     payload = {
         "messages": cf_messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "top_p": top_p,
     }
-    
+
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
+        # Story generation is creative — skip AI Gateway cache so each call
+        # produces fresh output even when prompt/temperature are identical.
+        # No-op when CLOUDFLARE_GATEWAY_ID is not set.
+        "cf-aig-skip-cache": "true",
     }
+    if _cf_gateway:
+        _cf_gateway_token = os.environ.get("CLOUDFLARE_GATEWAY_TOKEN") or (st.secrets.get("CLOUDFLARE_GATEWAY_TOKEN", "") if hasattr(st, "secrets") else "")
+        if _cf_gateway_token:
+            headers["cf-aig-authorization"] = f"Bearer {_cf_gateway_token}"
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=60)
@@ -820,8 +833,18 @@ def _load_symbols_map(txt: str | None) -> Dict[str, List[str]]:
         return _default_symbols_map()
 
 
+CF_EMBEDDER_PRESETS = {
+    "cloudflare-bge-base":        "@cf/baai/bge-base-en-v1.5",
+    "cloudflare-bge-large":       "@cf/baai/bge-large-en-v1.5",
+    "cloudflare-bge-m3":          "@cf/baai/bge-m3",
+    "cloudflare-embeddinggemma":  "@cf/google/embeddinggemma-300m",
+    "cloudflare-qwen3":           "@cf/qwen/qwen3-embedding-0.6b",
+}
+
 @st.cache_resource(show_spinner=False)
 def get_embedder(backend: str, model: Optional[str], pooling: str) -> TextEmbedder:
+    if backend in CF_EMBEDDER_PRESETS:
+        return TextEmbedder(backend="cloudflare", model=model or CF_EMBEDDER_PRESETS[backend], pooling=pooling)
     return TextEmbedder(backend=backend, model=model or None, pooling=pooling)
 
 
@@ -1583,12 +1606,17 @@ with st.sidebar:
         # ADD (audio): include audioclip as a backend option
         backend_help = (
             "Which encoder turns your inputs into vectors.\n"
-            "- Sentence-Transformer: good general text embeddings (e.g., all-mpnet-base-v2).\n"
-            "- Qwen2/Qwen3 Embedding: strong multilingual; uses token pooling (EOS by default).\n"
-            "- AudioCLIP / CLAP: enable AUDIO → vector (and text, for AudioCLIP). Use only if you need audio.\n"
+            "- Sentence-Transformer / Qwen2 / Qwen3: LOCAL text models (run on your CPU/GPU).\n"
+            "- Cloudflare-*: REMOTE text embeddings via Workers AI API (no local compute, needs CF credentials).\n"
+            "    • bge-base (768d) — cheap baseline\n"
+            "    • bge-large (1024d) — higher quality EN\n"
+            "    • bge-m3 (1024d) — multilingual + multi-granularity\n"
+            "    • embeddinggemma (768d) — 100+ languages, fastest\n"
+            "    • qwen3 (1024d) — latest Qwen embedder, strong multilingual\n"
+            "- CLAP: LOCAL audio → vector. Use only if you need audio input.\n"
             "Changing backend re-embeds descriptors and context; results, dims, and speed can change."
         )
-        
+
         def on_backend_change():
             # Auto-calibrate Beta (Shift Strength) based on model sensitivity
             b = st.session_state.backend_selection
@@ -1598,15 +1626,25 @@ with st.sidebar:
                 st.session_state["beta_slider"] = 1.2  # Higher beta for Qwen3/others
 
         backend = st.selectbox(
-            "Backend", 
-            ["qwen3", "qwen2", "sentence-transformer", "clap"], 
-            index=0, 
-            help=backend_help, 
+            "Backend",
+            [
+                "cloudflare-bge-m3",          # default — multilingual + multi-granularity, 1024d
+                "cloudflare-qwen3",           # latest Qwen embedder, supports instruction/context prompting
+                "cloudflare-embeddinggemma",  # 100+ languages, 768d
+                "cloudflare-bge-large",       # 1024d English-strong
+                "cloudflare-bge-base",        # 768d cheap baseline
+                "qwen3", "qwen2", "sentence-transformer",  # local text
+                "clap",                        # local audio
+            ],
+            index=0,
+            help=backend_help,
             key="backend_selection",
             on_change=on_backend_change
         )
         if backend in ["qwen3", "qwen2"]:
-            st.warning("⚠️ Qwen models require ~2.5GB RAM. If on a free/starter cloud instance, this may crash or run very slowly. Use 'sentence-transformer' for speed.")
+            st.warning("⚠️ Qwen models require ~2.5GB RAM. If on a free/starter cloud instance, this may crash or run very slowly. Use 'sentence-transformer' or a 'cloudflare-*' backend for speed.")
+        elif backend in CF_EMBEDDER_PRESETS:
+            st.info(f"☁️ Remote embedding via Cloudflare Workers AI — model: `{CF_EMBEDDER_PRESETS[backend]}`. Requires `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.")
         hf_model_help = (
             "Hugging Face repo ID for the embedding model (e.g., 'sentence-transformers/all-mpnet-base-v2', "
             "'Qwen/Qwen2-Embedding', 'Qwen/Qwen3-Embedding-0.6B').\n"
@@ -1623,7 +1661,7 @@ with st.sidebar:
             "All pooled vectors are L2-normalized. Keep the same setting when comparing runs.\n\n"
             "⚠️ Pooling only applies to Qwen models. SentenceTransformer/CLAP use their own built-in pooling."
         )
-        pooling_disabled = backend in ["sentence-transformer", "clap"]
+        pooling_disabled = backend in ["sentence-transformer", "clap"] or backend in CF_EMBEDDER_PRESETS
         pooling_index = 1 if pooling_disabled else 0  # default to 'mean' label when disabled
         pooling = st.selectbox(
             "Pooling", ["eos", "mean", "cls", "last"], 
@@ -1636,7 +1674,7 @@ with st.sidebar:
             st.caption(f"ℹ️ {backend} uses its own internal pooling — this setting is ignored.")
         embedder = get_embedder(backend, model or None, pooling)
 
-        if backend == "qwen3":  # (use `in ("qwen2","qwen3")` if you want both)
+        if backend in ("qwen3", "cloudflare-qwen3"):  # local Qwen3 + cloudflare-qwen3 both support prompting
             st.markdown("**Qwen prompting (instruction + context)**")
 
             instr_help = (
@@ -2951,6 +2989,13 @@ with tab_story:
                     with c_cf2:
                         st.write("")  # spacer
                     cf_model_id = CLOUDFLARE_MODELS[cf_preset]
+                    if cf_model_id == "__custom__":
+                        cf_model_id = st.text_input(
+                            "Custom Cloudflare model ID",
+                            value="@cf/",
+                            help="Paste any @cf/... model ID from the Cloudflare Workers AI catalog.",
+                            key="cf_custom_model_main",
+                        ).strip() or "@cf/google/gemma-4-26b-a4b-it"
                     st.caption(f"Model: `{cf_model_id}`")
                     # Cloudflare doesn't need 8-bit or local settings
                     use_8bit = False
@@ -3694,7 +3739,16 @@ with tab_mine:
                     index=0,
                     key="mine_llm_model"
                 )
-                st.caption(f"Model: `{CLOUDFLARE_MODELS[llm_model]}`")
+                _mine_llm_id = CLOUDFLARE_MODELS[llm_model]
+                if _mine_llm_id == "__custom__":
+                    _mine_llm_id = st.text_input(
+                        "Custom Cloudflare model ID",
+                        value="@cf/",
+                        help="Paste any @cf/... model ID from the Cloudflare Workers AI catalog.",
+                        key="cf_custom_model_mine",
+                    ).strip() or "@cf/google/gemma-4-26b-a4b-it"
+                st.session_state["_resolved_mine_llm_id"] = _mine_llm_id
+                st.caption(f"Model: `{_mine_llm_id}`")
         
         # ========== Run Mining ==========
         st.markdown("---")
@@ -3730,7 +3784,7 @@ with tab_mine:
                         if use_llm:
                             llm_refiner = LLMArchetypeRefiner(
                                 backend="cloudflare",
-                                model=CLOUDFLARE_MODELS[llm_model]
+                                model=st.session_state.get("_resolved_mine_llm_id", CLOUDFLARE_MODELS[llm_model])
                             )
                         
                         # Create enhanced miner
