@@ -1,0 +1,185 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html, body {
+    @apply h-full bg-ink-950 text-ink-100 font-sans antialiased;
+  }
+  body {
+    background:
+      radial-gradient(1200px 700px at 12% -10%, rgba(59,189,176,0.10), transparent 60%),
+      radial-gradient(900px 600px at 95% 20%, rgba(208,135,112,0.07), transparent 65%),
+      linear-gradient(180deg, #070912 0%, #0b0f1a 100%);
+    min-height: 100vh;
+  }
+  ::selection { background: rgba(59,189,176,0.35); }
+}
+
+@layer components {
+  .panel {
+    @apply relative isolate overflow-hidden rounded-xl border border-ink-700/70 bg-ink-900 shadow-soft;
+    /* `paint` is the strong form of overflow-hidden — guarantees no
+     * descendant (incl. Plotly's absolutely-positioned overlays) can render
+     * outside this box, even during scroll repaints. */
+    contain: layout paint;
+    /* Force each panel onto its own GPU compositing layer.  Without this,
+     * Plotly's hover/legend overlays sometimes briefly render over the
+     * next panel during scroll because the browser shares one layer.
+     * `translateZ(0)` is the canonical trigger for layer promotion. */
+    transform: translateZ(0);
+    will-change: transform;
+  }
+  .panel-tight {
+    @apply panel p-3;
+  }
+  .panel-pad {
+    @apply panel p-5;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-ink-700 bg-ink-800/60 px-2.5 py-0.5 text-xs text-ink-200;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-sm font-medium text-ink-100 transition
+           hover:bg-ink-700 hover:border-ink-600 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn border-accent-600 bg-accent-600/80 text-white hover:bg-accent-500 hover:border-accent-400;
+  }
+  .label-sm {
+    @apply text-[11px] font-medium uppercase tracking-wider text-ink-300;
+  }
+  .input-base {
+    @apply w-full rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1.5 text-sm text-ink-100
+           placeholder:text-ink-400 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40;
+  }
+  .select-base { @apply input-base appearance-none cursor-pointer; }
+  .slider-track {
+    @apply h-1.5 w-full rounded-full bg-ink-700;
+  }
+  .section-title {
+    @apply text-sm font-semibold text-ink-100 tracking-tight;
+  }
+  .sub-title {
+    @apply text-xs font-medium uppercase tracking-wider text-ink-300;
+  }
+}
+
+/* ----------------------------------------------------------- *
+ * DELYRISM title — gradient wordmark + dripping runes          *
+ * Ported from the old Streamlit app (delyrism/app.py L1083+).  *
+ * ----------------------------------------------------------- */
+.delyrism-header {
+  position: relative;
+  margin: 0 auto;
+  padding: 2.2rem 0 2.6rem;
+  text-align: center;
+  overflow: visible;
+}
+.delyrism-title-container {
+  position: relative;
+  display: inline-block;
+}
+.delyrism-title {
+  font-family: "InterDisplay", "Inter", system-ui, sans-serif;
+  font-size: clamp(3rem, 6.5vw, 5rem);
+  font-weight: 200;
+  letter-spacing: 0.18em;
+  line-height: 1.05;
+  margin: 0;
+  background: linear-gradient(120deg, #ffffff 0%, #a1c4fd 50%, #c2a6fe 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 6px rgba(161, 196, 253, 0.18));
+  animation: glow-pulse 4s ease-in-out infinite, gradient-shift 8s ease infinite;
+}
+.delyrism-subtitle {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.45em;
+  text-transform: uppercase;
+  color: #8899a6;
+}
+.drip-container {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 70px;
+  pointer-events: none;
+  overflow: hidden;
+}
+.drip {
+  position: absolute;
+  font-size: 1.25rem;
+  font-weight: 200;
+  background: linear-gradient(180deg, #a1c4fd 0%, transparent 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: drip-fall 3s ease-in infinite, drip-spawn 3s ease-in-out infinite;
+  opacity: 0;
+}
+.drip-0 { left:  8%; animation-delay: 0.0s; }
+.drip-1 { left: 22%; animation-delay: 0.7s; }
+.drip-2 { left: 35%; animation-delay: 1.4s; }
+.drip-3 { left: 48%; animation-delay: 2.1s; }
+.drip-4 { left: 62%; animation-delay: 0.3s; }
+.drip-5 { left: 75%; animation-delay: 1.8s; }
+.drip-6 { left: 88%; animation-delay: 1.1s; }
+.drip-7 { left: 15%; animation-delay: 2.5s; }
+.drip-8 { left: 55%; animation-delay: 0.9s; }
+.drip-9 { left: 82%; animation-delay: 2.3s; }
+
+@keyframes drip-fall {
+  0%   { transform: translateY(0);    }
+  100% { transform: translateY(60px); }
+}
+@keyframes drip-spawn {
+  0%, 100% { opacity: 0; }
+  10%, 40% { opacity: 0.65; }
+}
+@keyframes glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(161, 196, 253, 0.18)); }
+  50%      { filter: drop-shadow(0 0 14px rgba(194, 166, 254, 0.30)); }
+}
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Console cards — Symbolic Structure & Context Prompt */
+.console-card {
+  position: relative;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(20,24,34,0.85), rgba(10,12,20,0.85));
+  border: 1px solid rgba(255,255,255,0.06);
+  padding: 1rem 1.1rem;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.console-card:hover { border-color: rgba(255,255,255,0.12); }
+.console-card[data-accent] {
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+}
+.console-card .console-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  margin-bottom: 0.65rem;
+}
+
+/* Custom scrollbar — slim, themed */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }

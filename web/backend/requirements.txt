@@ -1,0 +1,8 @@
+# FastAPI service for Delyrism — wraps the existing engine in delyrism/
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+python-multipart>=0.0.9
+requests>=2.31
+# The engine itself reuses dependencies from ../../requirements.txt
+# (numpy, scikit-learn, networkx, sentence-transformers, transformers, torch...)
