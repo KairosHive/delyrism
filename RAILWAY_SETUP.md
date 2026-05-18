@@ -1,66 +1,52 @@
 # Railway Deployment Guide
 
-The new stack runs as **two Railway services** sharing the same GitHub repo:
+The app deploys as a **single Railway service**.  The build phase compiles
+the Next.js frontend to a static export, and at runtime the FastAPI backend
+serves both the API routes (`/spaces`, `/propose`, `/delta-graph`, …) and
+the SPA bundle from the same uvicorn process.
 
-| Service       | Role                                  | Nixpacks config            |
-|---------------|---------------------------------------|----------------------------|
-| `backend`     | FastAPI server wrapping the engine    | `nixpacks.toml` (root)     |
-| `frontend`    | Next.js 14 UI                         | `frontend.nixpacks.toml`   |
-| `egregore`    | (optional) Real-time archetype miner  | `egregore.nixpacks.toml`   |
+That means: no CORS to configure, no second service to manage, no env-var
+juggling between two domains.
 
-The previous Streamlit deployment lives on the `old` branch — if you ever
-need to roll back, point a service at that branch.
-
----
-
-## 1. Backend service
-
-1. Create a new Railway project, connect the GitHub repo.
-2. Railway picks up `nixpacks.toml` and `Procfile` automatically — no extra
-   configuration needed.
-3. **Environment variables** (Settings → Variables):
-
-   | Variable                  | Required for                              |
-   |---------------------------|-------------------------------------------|
-   | `CLOUDFLARE_ACCOUNT_ID`   | Cloudflare embedder + story generator     |
-   | `CLOUDFLARE_API_TOKEN`    | Same                                      |
-   | `CLOUDFLARE_GATEWAY_ID`   | (optional) Cloudflare AI Gateway proxy    |
-   | `CLOUDFLARE_GATEWAY_TOKEN`| (optional) AI Gateway auth                |
-   | `CORS_ORIGINS`            | Comma-separated list of allowed origins.  |
-   |                           | Defaults to localhost; add your frontend  |
-   |                           | URL once deployed.                        |
-   | `EGREGORE_URL`            | (optional) URL of the Egregore service    |
-
-4. Click **Settings → Networking → Generate Domain** — note the URL, you'll
-   need it as `NEXT_PUBLIC_API_BASE` on the frontend.
+The previous Streamlit deployment is preserved on the `old` branch — point a
+service at that branch if you ever need to roll back.
 
 ---
 
-## 2. Frontend service
+## Deploy
 
-1. In the same project click **+ New Service → GitHub repo** (same repo).
-2. **Settings → Build**:
-   - **Nixpacks Config Path**: `frontend.nixpacks.toml`
-3. **Settings → Variables** (these must be set **before** the first build —
-   Next.js inlines `NEXT_PUBLIC_*` vars into the bundle at build time):
+1. Connect the GitHub repo as a Railway service (or keep the existing
+   `delyrism` service — it auto-deploys on push to `main`).
+2. Railway picks up `nixpacks.toml` and `Procfile` automatically.
+3. **Settings → Networking → Generate Domain** for the public URL.
 
-   | Variable                 | Value                                                       |
-   |--------------------------|-------------------------------------------------------------|
-   | `NEXT_PUBLIC_API_BASE`   | `https://<backend-domain>.up.railway.app`                   |
-   | `NODE_ENV`               | `production` (Railway sets this by default)                 |
-
-4. **Settings → Networking → Generate Domain** — this is the public URL of
-   the app.
-5. Back on the **backend** service, add this URL to `CORS_ORIGINS` so the
-   browser can talk to the API.
+That's it for a baseline deploy.
 
 ---
 
-## 3. (Optional) Egregore — real-time miner
+## Environment variables
 
-The Δ-graph and the rest of the explorer work without Egregore.  Egregore is
-only needed for the *Archetype Builder* tab's real-time PDF/image mining
-flow with WebSocket progress.
+| Variable                  | Required for                              |
+|---------------------------|-------------------------------------------|
+| `CLOUDFLARE_ACCOUNT_ID`   | Cloudflare embedder + story generator     |
+| `CLOUDFLARE_API_TOKEN`    | Same                                      |
+| `CLOUDFLARE_GATEWAY_ID`   | (optional) Cloudflare AI Gateway proxy    |
+| `CLOUDFLARE_GATEWAY_TOKEN`| (optional) AI Gateway auth                |
+| `EGREGORE_URL`            | (optional) URL of an Egregore miner       |
+| `CORS_ORIGINS`            | Unused in single-service mode — set only  |
+|                           | if you split frontend & backend across    |
+|                           | domains again.                            |
+
+If you skip the Cloudflare vars, the Cloudflare embedder dropdown will
+error; users can still pick the local `sentence-transformer` backend in the
+sidebar for offline operation.
+
+---
+
+## (Optional) Egregore — real-time miner
+
+Egregore is only needed for the *Archetype Builder* tab's real-time
+PDF/image mining flow.  The rest of the explorer works without it.
 
 1. **+ New Service** → same repo.
 2. **Settings → Build → Nixpacks Config Path**: `egregore.nixpacks.toml`
@@ -68,19 +54,19 @@ flow with WebSocket progress.
    ```
    cd delyrism && uvicorn miner_server:app --host 0.0.0.0 --port $PORT
    ```
-4. On the **backend** service, set `EGREGORE_URL` to this service's domain.
+4. On the main service, set `EGREGORE_URL` to this service's domain.
    The frontend reads it via the `/miner` endpoint.
 
 ---
 
-## Shared model cache (recommended)
+## Shared model cache (recommended if you use local embedders)
 
-The backend downloads Hugging Face models on first use (Qwen3 embeddings,
-sentence-transformers, …).  Without a volume, Railway redownloads on every
-deploy.  Attach a single volume to **both** the backend and Egregore services:
+Local Qwen3 / sentence-transformers / CLAP models download on first use.
+Without a volume Railway redownloads every deploy.  If you use only
+Cloudflare-hosted embedders you can skip this entire section.
 
-1. **+ New Volume**, mount path `/app/cache`, attach to both services.
-2. Variables on each service:
+1. **+ New Volume**, mount path `/app/cache`, attach to the service.
+2. Add these variables to the service:
 
    | Variable          | Value                       |
    |-------------------|-----------------------------|
@@ -88,52 +74,54 @@ deploy.  Attach a single volume to **both** the backend and Egregore services:
    | `TORCH_HOME`      | `/app/cache/torch`          |
    | `XDG_CACHE_HOME`  | `/app/cache`                |
 
-If you use only Cloudflare-hosted embedders (no local models) you don't need
-the volume at all.
-
 ---
 
 ## Local development
 
 ```bash
-# Backend  (port 8000)
+# 1. Backend  (port 8000)
 pip install -r requirements.txt -r web/backend/requirements.txt
 uvicorn app.main:app --reload --port 8000 --app-dir web/backend
 
-# Frontend (port 3000)
+# 2. Frontend (port 3000)
 cd web/frontend
 NEXT_PUBLIC_API_BASE=http://localhost:8000 npm install
 NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
-
-# Optional: Egregore (port 8765)
-cd delyrism && uvicorn miner_server:app --port 8765
 ```
 
 Open <http://localhost:3000>.
 
+Two separate dev processes is the most ergonomic local setup: Next.js HMR
+gives instant frontend reloads while the backend autoreloads via uvicorn.
+In production the build step compiles the frontend into
+`web/frontend/out/` which the backend then serves at `/`.
+
 ---
 
-## Architecture
+## How it works under the hood
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                       Railway project                         │
-│                                                               │
-│   ┌────────────┐    ┌────────────┐    ┌──────────────┐       │
-│   │  frontend  │───▶│  backend   │◀──▶│   egregore   │       │
-│   │ (Next.js)  │ JSON│ (FastAPI) │ HTTP│  (optional)  │       │
-│   └─────┬──────┘    └─────┬──────┘    └──────┬───────┘       │
-│         │                 │                  │                │
-│         ▼                 ▼                  ▼                │
-│     public domain    public domain      public domain         │
-│                                                               │
-│              ┌──────────────────────────────────┐             │
-│              │  Shared volume — /app/cache      │             │
-│              │  (HF model cache, optional)      │             │
-│              └──────────────────────────────────┘             │
-└──────────────────────────────────────────────────────────────┘
+  Request                                                    Response
+     │                                                          ▲
+     ▼                                                          │
+  ┌────────────────────────────────────────────────────────────┐
+  │  Single uvicorn process (single Railway service)            │
+  │                                                             │
+  │   FastAPI router (in order):                                │
+  │     /spaces        /propose         /attention              │
+  │     /reduce-2d     /shift           /delta-graph            │
+  │     /subgraph      /similarity      /context/*              │
+  │     /story/*       /miner           /backends               │
+  │     /healthz       /api                                     │
+  │                                                             │
+  │   ↓  (everything else)                                      │
+  │                                                             │
+  │   StaticFiles(directory="web/frontend/out", html=True)      │
+  │     → index.html, _next/*, *.js, *.css, …                   │
+  └────────────────────────────────────────────────────────────┘
 ```
 
-The backend keeps engine state in memory (SymbolSpace per session) and
-talks to Cloudflare Workers AI for embeddings + story generation.  The
-frontend is stateless — every interaction goes through the backend.
+FastAPI routes are evaluated first; anything that doesn't match falls
+through to the static-file handler.  The Next.js bundle is fully
+client-rendered (every component is `"use client"`), so static export is a
+clean fit — no SSR or `/api/*` routes to worry about.

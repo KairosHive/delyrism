@@ -6,8 +6,11 @@ Run with:
 from __future__ import annotations
 import os
 import time
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .routes import spaces, analysis, delta, context, story, miner
 
@@ -65,14 +68,16 @@ app.include_router(story.router)
 app.include_router(miner.router)
 
 
-@app.get("/")
-def root():
-    return {"ok": True, "name": "delyrism-api"}
-
-
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/api")
+def api_info():
+    """Cheap probe — returns OK so /api responds with JSON even when the
+    static export's index.html is mounted at /."""
+    return {"ok": True, "name": "delyrism-api"}
 
 
 @app.get("/backends")
@@ -92,3 +97,25 @@ def backends():
             {"id": "audioclip", "label": "Local · AudioCLIP", "remote": False, "audio": True, "dim": 512},
         ],
     }
+
+
+# ---- Static frontend ---------------------------------------------------------
+# In production the Next.js static export (`output: 'export'`) lands at
+# web/frontend/out/.  Mounting it AFTER every API route is registered means
+# /spaces, /propose, /healthz, etc. still hit FastAPI; everything else falls
+# through to the SPA bundle.  In local dev the directory won't exist — we
+# silently skip the mount and the user runs `npm run dev` separately.
+_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "out"
+if _STATIC_DIR.is_dir():
+    # Mount under a real path first so we serve _next/* assets correctly.
+    app.mount(
+        "/",
+        StaticFiles(directory=str(_STATIC_DIR), html=True),
+        name="frontend",
+    )
+    print(f"[delyrism] serving Next.js static export from {_STATIC_DIR}")
+else:
+    print(
+        f"[delyrism] no static frontend at {_STATIC_DIR} "
+        "(dev mode — run `npm run dev` separately)"
+    )
