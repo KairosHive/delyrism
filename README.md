@@ -2,6 +2,14 @@
 
 A semantic engine for exploring symbolic relationships through **context-conditioned embeddings**, **graph diffusion**, and **attention mechanisms**. Watch how meanings shift and relationships reorganize when you provide textual, audio, or multimodal context.
 
+> **The app now ships as a FastAPI + Next.js stack under [`web/`](web/).** Slider tweaks
+> are instant, plots are real interactive Plotly/force-graph components, and the
+> backend caches embeddings, UMAP layouts and per-request results so context
+> changes don't trigger a full recompute. See [`web/README.md`](web/README.md) and
+> [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md) for the new architecture.
+>
+> The previous Streamlit app is preserved on the [`old`](https://github.com/KairosHive/delyrism/tree/old) branch.
+
 ## Core Capabilities
 
 ### 🎯 Symbol Ranking & Proposals
@@ -46,17 +54,27 @@ A semantic engine for exploring symbolic relationships through **context-conditi
 ---
 
 ## Quickstart
+
 ```bash
-# create env (recommended)
-conda create -n delyrism python=3.10 -y
-conda activate delyrism
+# 1. Create env
+conda create -n delyrism python=3.10 -y && conda activate delyrism
 
-# install
-pip install -r requirements.txt
+# 2. Install
+pip install -r requirements.txt -r web/backend/requirements.txt
+cd web/frontend && npm install && cd ../..
 
-# run
-streamlit run app.py
+# 3. Run — two terminals
+uvicorn app.main:app --reload --port 8000 --app-dir web/backend
+NEXT_PUBLIC_API_BASE=http://localhost:8000 npm --prefix web/frontend run dev
+# open http://localhost:3000
 ```
+
+Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` for the Cloudflare
+embedder + story generator, or pick the local `sentence-transformer` backend in
+the sidebar for fully-offline use.
+
+For Railway deployment see [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md).
+
 ## How to Use
 
 ### 1️⃣ Define Your Symbol Space

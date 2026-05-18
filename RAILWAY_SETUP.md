@@ -1,143 +1,139 @@
 # Railway Deployment Guide
 
-This project uses a **two-service architecture**:
-- **Delyrism** (Streamlit) — The main explorer & story generator
-- **Egregore** (FastAPI) — Real-time archetype miner with WebSocket progress
+The new stack runs as **two Railway services** sharing the same GitHub repo:
 
-Both services can run **standalone** or **together**.
+| Service       | Role                                  | Nixpacks config            |
+|---------------|---------------------------------------|----------------------------|
+| `backend`     | FastAPI server wrapping the engine    | `nixpacks.toml` (root)     |
+| `frontend`    | Next.js 14 UI                         | `frontend.nixpacks.toml`   |
+| `egregore`    | (optional) Real-time archetype miner  | `egregore.nixpacks.toml`   |
 
----
-
-## Option 1: Single Service (Delyrism Only)
-
-Deploy only the main Streamlit app. The built-in "Classic Miner" tab will work, but you won't have real-time progress visualization.
-
-### Deploy Steps
-1. Create a new Railway project
-2. Connect your GitHub repo
-3. Railway will auto-detect `nixpacks.toml` and `Procfile`
-4. Done!
+The previous Streamlit deployment lives on the `old` branch — if you ever
+need to roll back, point a service at that branch.
 
 ---
 
-## Option 2: Two Services (Full Experience)
+## 1. Backend service
 
-Deploy both Delyrism and Egregore for the complete experience with real-time mining.
+1. Create a new Railway project, connect the GitHub repo.
+2. Railway picks up `nixpacks.toml` and `Procfile` automatically — no extra
+   configuration needed.
+3. **Environment variables** (Settings → Variables):
 
-### A. Create the Delyrism Service
-1. Create a new Railway project
-2. Add a service → Connect GitHub repo
-3. Name it `delyrism`
-4. Railway uses `nixpacks.toml` and `Procfile` (default)
+   | Variable                  | Required for                              |
+   |---------------------------|-------------------------------------------|
+   | `CLOUDFLARE_ACCOUNT_ID`   | Cloudflare embedder + story generator     |
+   | `CLOUDFLARE_API_TOKEN`    | Same                                      |
+   | `CLOUDFLARE_GATEWAY_ID`   | (optional) Cloudflare AI Gateway proxy    |
+   | `CLOUDFLARE_GATEWAY_TOKEN`| (optional) AI Gateway auth                |
+   | `CORS_ORIGINS`            | Comma-separated list of allowed origins.  |
+   |                           | Defaults to localhost; add your frontend  |
+   |                           | URL once deployed.                        |
+   | `EGREGORE_URL`            | (optional) URL of the Egregore service    |
 
-### B. Create the Egregore Service
-1. In the same project, click **+ New Service**
-2. Connect the **same** GitHub repo
-3. Name it `egregore`
-4. Go to **Settings** → **Build**:
-   - Set **Nixpacks Config Path** to `egregore.nixpacks.toml`
-   - Set **Custom Start Command** to:
-     ```
-     cd delyrism && uvicorn miner_server:app --host 0.0.0.0 --port $PORT
-     ```
+4. Click **Settings → Networking → Generate Domain** — note the URL, you'll
+   need it as `NEXT_PUBLIC_API_BASE` on the frontend.
 
-### C. Link the Services
-1. Go to **Delyrism** service → **Variables**
-2. Add:
+---
+
+## 2. Frontend service
+
+1. In the same project click **+ New Service → GitHub repo** (same repo).
+2. **Settings → Build**:
+   - **Nixpacks Config Path**: `frontend.nixpacks.toml`
+3. **Settings → Variables** (these must be set **before** the first build —
+   Next.js inlines `NEXT_PUBLIC_*` vars into the bundle at build time):
+
+   | Variable                 | Value                                                       |
+   |--------------------------|-------------------------------------------------------------|
+   | `NEXT_PUBLIC_API_BASE`   | `https://<backend-domain>.up.railway.app`                   |
+   | `NODE_ENV`               | `production` (Railway sets this by default)                 |
+
+4. **Settings → Networking → Generate Domain** — this is the public URL of
+   the app.
+5. Back on the **backend** service, add this URL to `CORS_ORIGINS` so the
+   browser can talk to the API.
+
+---
+
+## 3. (Optional) Egregore — real-time miner
+
+The Δ-graph and the rest of the explorer work without Egregore.  Egregore is
+only needed for the *Archetype Builder* tab's real-time PDF/image mining
+flow with WebSocket progress.
+
+1. **+ New Service** → same repo.
+2. **Settings → Build → Nixpacks Config Path**: `egregore.nixpacks.toml`
+3. **Settings → Build → Custom Start Command**:
    ```
-   EGREGORE_URL = https://${{egregore.RAILWAY_PUBLIC_DOMAIN}}
+   cd delyrism && uvicorn miner_server:app --host 0.0.0.0 --port $PORT
    ```
-   (Railway will auto-resolve this to egregore's public URL)
-
-3. Make sure **Egregore** has a public domain:
-   - Go to **Egregore** → **Settings** → **Networking**
-   - Click **Generate Domain**
+4. On the **backend** service, set `EGREGORE_URL` to this service's domain.
+   The frontend reads it via the `/miner` endpoint.
 
 ---
 
-## Persistent Volume Setup (Recommended)
+## Shared model cache (recommended)
 
-To avoid downloading models every time your app restarts:
+The backend downloads Hugging Face models on first use (Qwen3 embeddings,
+sentence-transformers, …).  Without a volume, Railway redownloads on every
+deploy.  Attach a single volume to **both** the backend and Egregore services:
 
-### 1. Create a Shared Volume
-1. Click **+ New Volume** in your Railway project
-2. Mount path: `/app/cache`
-3. Attach to **both** services (Delyrism and Egregore)
+1. **+ New Volume**, mount path `/app/cache`, attach to both services.
+2. Variables on each service:
 
-### 2. Configure Environment Variables
-Add these to **both** services (or use Railway's shared variables):
+   | Variable          | Value                       |
+   |-------------------|-----------------------------|
+   | `HF_HOME`         | `/app/cache/huggingface`    |
+   | `TORCH_HOME`      | `/app/cache/torch`          |
+   | `XDG_CACHE_HOME`  | `/app/cache`                |
 
-| Variable Name | Value | Description |
-|--------------|-------|-------------|
-| `HF_HOME` | `/app/cache/huggingface` | Hugging Face model cache |
-| `TORCH_HOME` | `/app/cache/torch` | PyTorch data cache |
-| `XDG_CACHE_HOME` | `/app/cache` | General cache directory |
-
-### 3. AI Service Credentials (Optional)
-If using Cloudflare Workers AI:
-
-| Variable Name | Description |
-|--------------|-------------|
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
-| `CLOUDFLARE_API_TOKEN` | API token with Workers AI permission |
+If you use only Cloudflare-hosted embedders (no local models) you don't need
+the volume at all.
 
 ---
 
-## Environment Variables Reference
-
-### Delyrism (Streamlit)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8501` | Streamlit port (Railway sets this) |
-| `EGREGORE_URL` | `http://localhost:8765` | URL to Egregore service |
-
-### Egregore (FastAPI)
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8765` | FastAPI port (Railway sets this) |
-
----
-
-## Local Development
-
-Run both services locally:
+## Local development
 
 ```bash
-# Terminal 1 - Egregore (miner)
-cd delyrism
-uvicorn miner_server:app --port 8765
+# Backend  (port 8000)
+pip install -r requirements.txt -r web/backend/requirements.txt
+uvicorn app.main:app --reload --port 8000 --app-dir web/backend
 
-# Terminal 2 - Delyrism (explorer)
-streamlit run delyrism/app.py
+# Frontend (port 3000)
+cd web/frontend
+NEXT_PUBLIC_API_BASE=http://localhost:8000 npm install
+NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
+
+# Optional: Egregore (port 8765)
+cd delyrism && uvicorn miner_server:app --port 8765
 ```
 
-Access:
-- Delyrism: http://localhost:8501
-- Egregore: http://localhost:8765
+Open <http://localhost:3000>.
 
 ---
 
-## Architecture Diagram
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Railway Project                       │
-│                                                          │
-│  ┌─────────────────┐      ┌─────────────────┐           │
-│  │    Delyrism     │      │    Egregore     │           │
-│  │   (Streamlit)   │ ←──→ │   (FastAPI)     │           │
-│  │                 │      │                 │           │
-│  │ • Explorer      │      │ • WebSocket     │           │
-│  │ • Story Gen     │      │ • Mining API    │           │
-│  │ • Classic Miner │      │ • Real-time UI  │           │
-│  └────────┬────────┘      └────────┬────────┘           │
-│           │                        │                     │
-│           └────────────┬───────────┘                     │
-│                        │                                 │
-│              ┌─────────▼─────────┐                       │
-│              │   Shared Volume   │                       │
-│              │   /app/cache      │                       │
-│              │   (HF models)     │                       │
-│              └───────────────────┘                       │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                       Railway project                         │
+│                                                               │
+│   ┌────────────┐    ┌────────────┐    ┌──────────────┐       │
+│   │  frontend  │───▶│  backend   │◀──▶│   egregore   │       │
+│   │ (Next.js)  │ JSON│ (FastAPI) │ HTTP│  (optional)  │       │
+│   └─────┬──────┘    └─────┬──────┘    └──────┬───────┘       │
+│         │                 │                  │                │
+│         ▼                 ▼                  ▼                │
+│     public domain    public domain      public domain         │
+│                                                               │
+│              ┌──────────────────────────────────┐             │
+│              │  Shared volume — /app/cache      │             │
+│              │  (HF model cache, optional)      │             │
+│              └──────────────────────────────────┘             │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+The backend keeps engine state in memory (SymbolSpace per session) and
+talks to Cloudflare Workers AI for embeddings + story generation.  The
+frontend is stateless — every interaction goes through the backend.

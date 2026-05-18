@@ -1,1 +1,1 @@
-web: streamlit run delyrism/app.py --server.port $PORT --server.address 0.0.0.0
+web: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir web/backend

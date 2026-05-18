@@ -1,11 +1,17 @@
+# Default Railway service — Delyrism FastAPI backend.
+# The Next.js frontend is a separate service that points at frontend.nixpacks.toml.
+
 [phases.setup]
 nixPkgs = ["python310", "libsndfile", "ffmpeg", "git"]
 
 [phases.install]
 cmds = [
+    "python -m pip install --upgrade pip",
+    # CPU-only torch wheels keep the image small for Railway free/hobby tier
     "python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu",
-    "python -m pip install -r requirements.txt"
+    "python -m pip install -r requirements.txt",
+    "python -m pip install -r web/backend/requirements.txt",
 ]
 
 [start]
-cmd = "streamlit run delyrism/app.py --server.port $PORT --server.address 0.0.0.0"
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir web/backend"
