@@ -68,41 +68,74 @@ _embedder_lock = threading.Lock()
 
 
 def _add_encode_cache(emb: TextEmbedder, max_entries: int = 512) -> None:
-    """Wrap `emb.encode` so single-text calls are memoized.
+    """Wrap `emb.encode` so single-text calls are deduplicated AND
+    single-flight across concurrent callers.
 
-    Every context-touching endpoint (propose, attention, subgraph, delta,
-    shift, similarity) ultimately calls `embedder.encode([sentence])` once or
-    twice through `space.ctx_vec()` / `_ppr_with_sentence()` / etc.  With a
-    remote backend (Cloudflare) each of those is a 200–500 ms round-trip, so a
-    single context change pays for the same sentence to be embedded ~6 times.
-    Memoizing the single-text path collapses that to one round-trip; every
-    subsequent endpoint reuses the cached vector.
+    Why both:
+    * Every context-touching endpoint (propose / attention / subgraph /
+      delta / shift / similarity) ultimately calls
+      `embedder.encode([sentence])`.  With a remote backend (Cloudflare)
+      each call is a 200–500 ms round-trip.
+    * On a sentence change, 6 endpoints fire in parallel — without
+      single-flight all six race past a plain "check cache, miss, fetch"
+      and we send 6 identical embed requests, blowing through the rate
+      limit.
+
+    The single-flight pattern: the first caller for an unseen text becomes
+    the leader and does the upstream call; everyone else for the same text
+    blocks on a `threading.Event` until the leader publishes the result.
+    One CF request per unique sentence regardless of how many endpoints
+    ask for it.
 
     Multi-text batches (descriptor encoding, reembed strategy) bypass the
-    cache and call the original implementation unchanged.
+    cache entirely and call the original implementation unchanged.
     """
     if getattr(emb, "_encode_cached", False):
         return
     original = emb.encode
     cache: Dict[Tuple[str, str, str], Any] = {}
+    in_flight: Dict[Tuple[str, str, str], threading.Event] = {}
     lock = threading.Lock()
 
     def wrapped(texts, instruction=None, context=None, batch_size: int = 32, **kw):
         if isinstance(texts, list) and len(texts) == 1 and not kw and context is None:
-            # cache key includes the (optional) instruction so qwen3 prompts
-            # don't collide with each other
             key = (texts[0], instruction or "", "")
             with lock:
-                hit = cache.get(key)
-            if hit is not None:
-                return hit
-            v = original(texts, instruction=instruction, context=context, batch_size=batch_size)
+                if key in cache:
+                    return cache[key]
+                ev = in_flight.get(key)
+                if ev is not None:
+                    leader = False
+                else:
+                    ev = threading.Event()
+                    in_flight[key] = ev
+                    leader = True
+
+            if not leader:
+                # wait for the leader to finish; cap at 60s so a stuck
+                # request can't hang us forever
+                ev.wait(timeout=60)
+                cached = cache.get(key)
+                if cached is not None:
+                    return cached
+                # leader failed and cleared its event without populating
+                # the cache — fall through and try ourselves
+                pass
+
+            try:
+                v = original(texts, instruction=instruction, context=context, batch_size=batch_size)
+            except Exception:
+                with lock:
+                    in_flight.pop(key, None)
+                    ev.set()
+                raise
             with lock:
                 if len(cache) >= max_entries:
-                    # crude FIFO trim
                     for k in list(cache.keys())[: max_entries // 4]:
                         cache.pop(k, None)
                 cache[key] = v
+                in_flight.pop(key, None)
+                ev.set()
             return v
         return original(texts, instruction=instruction, context=context, batch_size=batch_size, **kw)
 

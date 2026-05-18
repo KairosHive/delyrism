@@ -272,9 +272,24 @@ class TextEmbedder:
                 
             except requests.exceptions.HTTPError as e:
                 last_error = e
-                if response.status_code == 500 and attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2  # 2, 4, 6 seconds
-                    print(f"[Embedder] Cloudflare 500 error, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                status = response.status_code
+                # Retry on transient server errors AND rate limiting.  429
+                # is the common one when many endpoints share a single CF
+                # token — honour Retry-After if Cloudflare sends one.
+                if status in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = float(retry_after)
+                        except ValueError:
+                            wait_time = (2 ** attempt)
+                    else:
+                        wait_time = (2 ** attempt)  # 1, 2, 4 seconds
+                    # add jitter so concurrent workers don't re-collide
+                    import random
+                    wait_time += random.uniform(0, 0.5)
+                    print(f"[Embedder] Cloudflare {status}, retrying in {wait_time:.1f}s "
+                          f"(attempt {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     continue
                 raise
