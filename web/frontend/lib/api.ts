@@ -9,10 +9,14 @@
 // inlines NODE_ENV at build time, which lets us pick the right default
 // automatically without the developer setting any env var.
 //
+// We default to 127.0.0.1 (not localhost) because on Windows the browser
+// may resolve `localhost` to ::1 (IPv6) while uvicorn binds to IPv4 only
+// by default → ERR_CONNECTION_REFUSED.  127.0.0.1 is unambiguous.
+//
 // Override with NEXT_PUBLIC_API_BASE if the backend lives anywhere else.
 const BASE =
   process.env.NEXT_PUBLIC_API_BASE
-  || (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "");
+  || (process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : "");
 
 // Per-route timing log so the UI can surface "what was slow on the last call".
 // Keyed by path; updated on every successful request.

@@ -94,7 +94,6 @@ def backends():
             {"id": "qwen2", "label": "Local · Qwen2 Embedding", "remote": False, "audio": False, "dim": 1024},
             {"id": "sentence-transformer", "label": "Local · sentence-transformers", "remote": False, "audio": False, "dim": 384},
             {"id": "clap", "label": "Local · CLAP (audio+text)", "remote": False, "audio": True, "dim": 512},
-            {"id": "audioclip", "label": "Local · AudioCLIP", "remote": False, "audio": True, "dim": 512},
         ],
     }
 

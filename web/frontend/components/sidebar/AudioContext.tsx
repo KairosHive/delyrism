@@ -26,7 +26,10 @@ export function AudioContext() {
   const audioMaxSeconds = useSidebar((s) => s.audioMaxSeconds);
   const set = useSidebar((s) => s.set);
 
-  const audioCapable = backend === "clap" || backend === "audioclip";
+  // Only CLAP exposes the audio path in the UI (matches the old Streamlit
+  // app's behavior).  The engine technically supports audioclip too, but it
+  // was never surfaced.
+  const audioCapable = backend === "clap";
 
   const [status, setStatus] = React.useState<"idle" | "encoding" | "ok" | "error">("idle");
   const [error, setError] = React.useState<string | null>(null);
@@ -130,8 +133,8 @@ export function AudioContext() {
 
       {!audioCapable ? (
         <p className="text-[11px] text-ink-400">
-          Switch the Embedding Model to <span className="text-accent-300">CLAP</span> or{" "}
-          <span className="text-accent-300">AudioCLIP</span> and rebuild the space to enable audio context.
+          Switch the Embedding Model to <span className="text-accent-300">CLAP</span> and rebuild
+          the space to enable audio context.
         </p>
       ) : !spaceId ? (
         <p className="text-[11px] text-ink-400">Build the space first.</p>
