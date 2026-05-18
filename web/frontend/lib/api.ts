@@ -17,9 +17,14 @@ export interface Timing {
 }
 const _timings: Record<string, Timing> = {};
 const _listeners = new Set<() => void>();
-export function subscribeTimings(fn: () => void) {
+export function subscribeTimings(fn: () => void): () => void {
   _listeners.add(fn);
-  return () => _listeners.delete(fn);
+  // Wrap the delete (returns boolean) in a void-returning closure so this is
+  // compatible with React.useEffect's cleanup-function contract under strict
+  // TS (`next build` fails otherwise).
+  return () => {
+    _listeners.delete(fn);
+  };
 }
 export function getTimings(): Record<string, Timing> {
   return _timings;
