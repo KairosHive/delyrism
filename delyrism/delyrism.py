@@ -310,7 +310,7 @@ class TextEmbedder:
             self._clap.eval()
             with torch.no_grad():
                 dummy = np.zeros(48000, dtype=np.float32)  # 1s silence @48k
-                ain = self.clap_processor(audios=[dummy], sampling_rate=48000, return_tensors="pt")
+                ain = self._clap_process_audio([dummy], 48000)
                 ain = {k: v.to(self.device) for k, v in ain.items()}
                 a = self._clap.get_audio_features(**ain)
                 self.dim = int(a.shape[-1])
@@ -319,6 +319,22 @@ class TextEmbedder:
             print(f"[Embedder] CLAP loaded: {model_name} (dim={self.dim})")
         except Exception as e:
             raise RuntimeError(f"CLAP load failed: {e}")
+
+    def _clap_process_audio(self, wave_list, sampling_rate):
+        """Compat shim: ClapProcessor's kwarg was renamed from `audios=` to
+        `audio=` around transformers 4.50.  Try the new name first, fall
+        back to the old one — so the same code runs on both old (4.46) and
+        new transformers without a version pin."""
+        try:
+            return self.clap_processor(
+                audio=wave_list, sampling_rate=sampling_rate, return_tensors="pt"
+            )
+        except (TypeError, ValueError) as e:
+            if "audio" in str(e):
+                return self.clap_processor(
+                    audios=wave_list, sampling_rate=sampling_rate, return_tensors="pt"
+                )
+            raise
 
     def _init_audioclip(self, model_name: Optional[str] = None):
         """
@@ -377,7 +393,7 @@ class TextEmbedder:
             return z.detach().cpu().float().numpy()
 
         if self.backend_type == "clap" and hasattr(self, "_clap"):
-            ain = self.clap_processor(audios=[wave], sampling_rate=sr, return_tensors="pt")
+            ain = self._clap_process_audio([wave], sr)
             ain = {k: v.to(self.device) for k, v in ain.items()}
             z = self._clap.get_audio_features(**ain)[0]
             z = z / (z.norm() + 1e-8)
