@@ -79,6 +79,23 @@ export interface SidebarState {
   symbolFilter: string[];
   deltaSign: "up" | "down" | "both"; // strengthens / weakens / both
 
+  // ----- Story Generator -----
+  // Persisted across tab switches so settings + generated story aren't lost
+  // when the user flips back to Explorer.  All fields mirror the StoryRequest
+  // payload sent to /story/generate.
+  storyModel: string;
+  storyTone: string;
+  storyLanguage: "English" | "Français" | "Español";
+  storyPov: "first" | "third";
+  storyTense: "present" | "past";
+  storyLengthWords: number;
+  storyTemperature: number;
+  storyTopP: number;
+  storyPositiveOnly: boolean;
+  // Last-generated story and motifs (so they survive tab navigation).
+  storyResult: { story: string; motifs: string[]; model: string } | null;
+  storyError: string | null;
+
   // ----- audio context override -----
   // The backend stores a context vector on the cached space; we mirror just
   // enough state here to know it's active and to invalidate dependent queries.
@@ -161,6 +178,18 @@ export const useSidebar = create<SidebarState>((set) => ({
   audioActive: false,
   audioNonce: 0,
   audioMaxSeconds: 10,
+
+  storyModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  storyTone: "dreamy",
+  storyLanguage: "English",
+  storyPov: "third",
+  storyTense: "present",
+  storyLengthWords: 180,
+  storyTemperature: 0.85,
+  storyTopP: 0.9,
+  storyPositiveOnly: true,
+  storyResult: null,
+  storyError: null,
 
   set: (k, v) => set({ [k]: v } as any),
   setBulk: (patch) => set(patch as any),

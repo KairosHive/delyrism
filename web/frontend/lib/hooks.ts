@@ -90,6 +90,25 @@ function shiftPayload() {
   } as const;
 }
 
+/** Build a full /delta-graph request payload from the current sidebar
+ *  state.  Exported so the Story Generator can pass the SAME params into
+ *  motif extraction — otherwise the words in the generated story come
+ *  from a default-parametrized Δ-graph that doesn't match what the user
+ *  sees in Explorer. */
+export function deltaGraphPayload() {
+  const s = useSidebar.getState();
+  return {
+    ...shiftPayload(),
+    top_abs_edges: s.topAbsEdges,
+    min_abs_delta: s.minAbsDelta,
+    within_symbol: s.withinSymbolEdges,
+    connected_only: s.connectedOnly,
+    sym_filter: s.symbolFilter.length ? s.symbolFilter : null,
+    only_symbol: null,
+    sign_filter: s.deltaSign === "both" ? null : s.deltaSign,
+  } as const;
+}
+
 export function useShift() {
   const sid = useSidebar((s) => s.spaceId);
   const sentence = useSidebar((s) => s.contextSentence);
