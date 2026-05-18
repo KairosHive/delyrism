@@ -7,6 +7,7 @@ import { ArchetypeBuilder } from "@/components/miner/ArchetypeBuilder";
 import { Title } from "@/components/header/Title";
 import { Console } from "@/components/header/Console";
 import { TimingBadge } from "@/components/debug/TimingBadge";
+import { useSidebar } from "@/lib/store";
 
 type TabId = "explorer" | "story" | "miner";
 
@@ -18,6 +19,29 @@ const TABS: { id: TabId; label: string; hint: string }[] = [
 
 export default function Home() {
   const [tab, setTab] = React.useState<TabId>("explorer");
+  const spaceId = useSidebar((s) => s.spaceId);
+
+  // Plotly's autosize measures the container at first paint — which is
+  // often BEFORE the panels have settled their final dimensions on first
+  // build, leaving charts at the wrong size until the next render.  We
+  // nudge every chart on the page to re-measure by firing a few window
+  // resize events after the space appears.  Plotly listens (each Plot has
+  // `useResizeHandler`), so this snaps every panel to its true size.
+  React.useEffect(() => {
+    if (!spaceId) return;
+    const timers = [50, 250, 800].map((d) =>
+      setTimeout(() => window.dispatchEvent(new Event("resize")), d),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [spaceId]);
+
+  // Same trick on tab change — panels in the inactive tab don't lay out
+  // until the user actually visits them, so first paint can come up at
+  // the wrong size.  One nudge after a short delay snaps everything.
+  React.useEffect(() => {
+    const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+    return () => clearTimeout(t);
+  }, [tab]);
 
   return (
     <div className="grid h-screen grid-cols-[300px,1fr]">
