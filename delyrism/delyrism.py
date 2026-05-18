@@ -312,7 +312,7 @@ class TextEmbedder:
                 dummy = np.zeros(48000, dtype=np.float32)  # 1s silence @48k
                 ain = self._clap_process_audio([dummy], 48000)
                 ain = {k: v.to(self.device) for k, v in ain.items()}
-                a = self._clap.get_audio_features(**ain)
+                a = self._clap_audio_features(ain)
                 self.dim = int(a.shape[-1])
             self.audio_capable = True
             self._ac_sr = 48000
@@ -335,6 +335,41 @@ class TextEmbedder:
                     audios=wave_list, sampling_rate=sampling_rate, return_tensors="pt"
                 )
             raise
+
+    def _clap_audio_features(self, ain):
+        """Compat shim for `ClapModel.get_audio_features` return type.
+        * transformers 4.x: returns a (B, D) tensor (already projected).
+        * transformers 5.x: returns a BaseModelOutputWithPooling/-like
+          object — we just need to pull the right tensor out.
+
+        We don't re-apply the audio_projection ourselves: in both versions
+        get_audio_features is documented to return the FINAL projected
+        embedding.  The newer version just wraps it in a ModelOutput
+        instead of returning it raw.
+        """
+        out = self._clap.get_audio_features(**ain)
+        if isinstance(out, torch.Tensor):
+            return out
+        # In ModelOutput shapes the projected tensor typically lives under
+        # one of these attrs.  Try them in the order CLAP-family models
+        # actually use.
+        for attr in ("audio_embeds", "pooler_output"):
+            t = getattr(out, attr, None)
+            if isinstance(t, torch.Tensor):
+                return t
+        t = getattr(out, "last_hidden_state", None)
+        if isinstance(t, torch.Tensor):
+            return t.mean(dim=1) if t.dim() == 3 else t
+        # tuple-like fallback
+        try:
+            t = out[0]
+            if isinstance(t, torch.Tensor):
+                return t.mean(dim=1) if t.dim() == 3 else t
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Could not extract audio features from {type(out).__name__}"
+        )
 
     def _init_audioclip(self, model_name: Optional[str] = None):
         """
@@ -395,7 +430,7 @@ class TextEmbedder:
         if self.backend_type == "clap" and hasattr(self, "_clap"):
             ain = self._clap_process_audio([wave], sr)
             ain = {k: v.to(self.device) for k, v in ain.items()}
-            z = self._clap.get_audio_features(**ain)[0]
+            z = self._clap_audio_features(ain)[0]
             z = z / (z.norm() + 1e-8)
             return z.detach().cpu().float().numpy()
 
