@@ -172,6 +172,8 @@ class DeltaGraphRequest(ShiftRequest):
     only_symbol: Optional[str] = None
     sym_filter: Optional[List[str]] = None
     connected_only: bool = True
+    # "up" → strengthens only, "down" → weakens only, None → both
+    sign_filter: Optional[Literal["up", "down"]] = None
 
 
 class DeltaNode(BaseModel):

@@ -67,6 +67,12 @@ export function DeltaSection() {
 
       <div className="border-t border-ink-700/60 pt-3 space-y-2">
         <div className="sub-title">Graph display</div>
+        <Select label="Edge sign" value={s.deltaSign} onChange={(v) => s.set("deltaSign", v as any)}
+          options={[
+            { value: "up",   label: "↑ Strengthens only" },
+            { value: "down", label: "↓ Weakens only" },
+            { value: "both", label: "Both (mixed)" },
+          ]} />
         <Slider label="Top |Δ| edges" value={s.topAbsEdges} min={2} max={100} step={1}
           onChange={(v) => s.set("topAbsEdges", Math.round(v))} />
         <Slider label="Min |Δ| threshold" value={s.minAbsDelta} min={0.0001} max={0.1} step={0.0005}

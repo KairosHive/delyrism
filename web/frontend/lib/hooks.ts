@@ -135,13 +135,14 @@ export function useDeltaGraph() {
   const withinSym = useSidebar((s) => s.withinSymbolEdges);
   const conn = useSidebar((s) => s.connectedOnly);
   const symFilter = useSidebar((s) => s.symbolFilter);
+  const deltaSign = useSidebar((s) => s.deltaSign);
   const audioActive = useSidebar((s) => s.audioActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
 
   return useQuery({
     enabled: !!sid && (!!sentence.trim() || !!weights || audioActive),
     placeholderData: keepPreviousData,
-    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, audioNonce],
+    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce],
     queryFn: () =>
       api.post<DeltaGraphResponse>("/delta-graph", {
         ...shiftPayload(),
@@ -151,6 +152,7 @@ export function useDeltaGraph() {
         connected_only: conn,
         sym_filter: symFilter.length ? symFilter : null,
         only_symbol: null,
+        sign_filter: deltaSign === "both" ? null : deltaSign,
       }),
   });
 }

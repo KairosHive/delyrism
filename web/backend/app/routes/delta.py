@@ -142,6 +142,7 @@ def delta_graph(req: DeltaGraphRequest) -> DeltaGraphResponse:
         pool_type=req.pool_type,
         pool_w=req.pool_w,
         membership_alpha=req.membership_alpha,
+        sign_filter=req.sign_filter,
     )
     cmap = {k: to_hex(v) for k, v in space.get_symbol_color_dict(palette=engine_cache.get_palette(space)).items()}
     nodes = [

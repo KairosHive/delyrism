@@ -77,6 +77,7 @@ export interface SidebarState {
   withinSymbolEdges: boolean;
   connectedOnly: boolean;
   symbolFilter: string[];
+  deltaSign: "up" | "down" | "both"; // strengthens / weakens / both
 
   // ----- audio context override -----
   // The backend stores a context vector on the cached space; we mirror just
@@ -152,6 +153,8 @@ export const useSidebar = create<SidebarState>((set) => ({
   withinSymbolEdges: false,
   connectedOnly: true,
   symbolFilter: [],
+  // default to strengthens-only — most users want the positive associations
+  deltaSign: "up",
 
   selectedSymbol: null,
 

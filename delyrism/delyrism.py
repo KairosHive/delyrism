@@ -2193,8 +2193,12 @@ def context_delta_graph(
     min_abs_delta=0.02, within_symbol=True, only_symbol=None, connected_only=False,
     pool_type: str = "avg",
     pool_w: float = 0.7,
-    # NEW ▼
     membership_alpha: float = 0.0,
+    # Optional sign filter — keep only positive (strengthens) / negative
+    # (weakens) edges before applying the top-N cap, so `top_abs_edges`
+    # respects the filter (you always get N edges of the chosen sign rather
+    # than N mixed minus whatever didn't survive filtering).
+    sign_filter: Optional[str] = None,  # "up" | "down" | None
 ):
     D0 = space.D
     D1 = space.make_shifted_matrix(
@@ -2255,6 +2259,10 @@ def context_delta_graph(
             break
         d = float(vals[k])
         if abs(d) < min_abs_delta:
+            continue
+        if sign_filter == "up" and d <= 0:
+            continue
+        if sign_filter == "down" and d >= 0:
             continue
         i, j = tri[0][k], tri[1][k]
         if d == 0.0:
