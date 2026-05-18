@@ -3,6 +3,7 @@ import * as React from "react";
 import { Section } from "../ui/Section";
 import { Slider } from "../ui/Slider";
 import { Toggle } from "../ui/Toggle";
+import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS } from "@/lib/theme";
 import { AudioContext } from "./AudioContext";
@@ -29,7 +30,10 @@ export function ContextOptions() {
   return (
     <Section title="Context Options" color={SECTION_COLORS.context} defaultOpen={false}>
       <div className="space-y-1">
-        <div className="label-sm">Context sentence</div>
+        <div className="flex items-center label-sm">
+          Context sentence
+          <HelpTip text="Free-text prompt that defines the semantic context. The engine encodes this into a vector and uses it as the conditioning signal for every panel — rankings, attention, Δ-graph, etc. Same field as the big Context Prompt card in the main area." />
+        </div>
         <textarea
           className="input-base h-16"
           placeholder="(or type in the main Context Prompt card)"
@@ -39,7 +43,10 @@ export function ContextOptions() {
       </div>
 
       <div className="space-y-2">
-        <div className="label-sm">Symbol weights</div>
+        <div className="flex items-center label-sm">
+          Symbol weights
+          <HelpTip text="Manually bias the context toward specific archetypes. Click a symbol chip to add it, then slide its weight. The engine mixes these into the context vector alongside the sentence. Useful when you want 'fire + a touch of water' rather than guessing the right sentence." />
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {symbols.map((s) => {
             const active = selected.includes(s);
@@ -78,7 +85,7 @@ export function ContextOptions() {
       <div className="border-t border-ink-700/60 pt-3 space-y-2">
         <Toggle
           label="Alchemist mode (Context A → B)"
-          hint="Compare two contexts side by side"
+          help="Enable a second context (B) for side-by-side comparison. The main panels show context A; alchemist controls let you blend A and B to study trajectories between two semantic positions."
           value={alch}
           onChange={(v) => set("alchemistMode", v)}
         />

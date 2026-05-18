@@ -5,6 +5,7 @@ import { api, BackendsResponse } from "@/lib/api";
 import { Section } from "../ui/Section";
 import { Select } from "../ui/Select";
 import { Slider } from "../ui/Slider";
+import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS } from "@/lib/theme";
 
@@ -33,9 +34,13 @@ export function EmbeddingModel() {
         value={backend}
         onChange={(v) => set("embedderBackend", v)}
         options={(backends.data?.embedders ?? []).map((b) => ({ value: b.id, label: b.label }))}
+        help="The model used to embed descriptors and context. Cloudflare backends are remote API calls (fast, no GPU). Local backends run inside the container — slower first call, no per-request cost. CLAP is the only audio-capable backend."
       />
       <div className="space-y-1">
-        <div className="label-sm">Model override (optional)</div>
+        <div className="flex items-center label-sm">
+          Model override (optional)
+          <HelpTip text="Override the default model for the chosen backend (e.g. 'Qwen/Qwen3-Embedding-0.6B'). Leave empty to use the backend's default — most users don't need this." />
+        </div>
         <input
           className="input-base font-mono text-xs"
           placeholder="e.g. Qwen/Qwen3-Embedding-0.6B"
@@ -55,13 +60,17 @@ export function EmbeddingModel() {
             { value: "cls", label: "CLS" },
             { value: "last", label: "Last" },
           ]}
+          help="How the transformer's per-token outputs get pooled into a single vector. EOS = end-of-sequence token (best for Qwen). Mean = average of all tokens. CLS = first token (BERT-style). Last = final non-padding token."
         />
       )}
 
       {isQwen && (
         <>
           <div className="space-y-1">
-            <div className="label-sm">Qwen instruction (optional)</div>
+            <div className="flex items-center label-sm">
+              Qwen instruction (optional)
+              <HelpTip text="Qwen3 supports a natural-language instruction prepended to each embedding query. E.g. 'Represent the descriptor for semantic retrieval'. Tweak this to bias embeddings toward your task." />
+            </div>
             <textarea
               className="input-base h-16 text-xs"
               placeholder="Represent the descriptor for semantic retrieval"
@@ -78,6 +87,7 @@ export function EmbeddingModel() {
               { value: "global", label: "Global string" },
               { value: "per-descriptor", label: "Per-descriptor owner" },
             ]}
+            help="None = encode each descriptor in isolation. Global = prepend the same context string to every descriptor before encoding. Per-descriptor = prepend each descriptor's parent symbol name as context."
           />
           {ctxMode === "global" && (
             <input
@@ -97,7 +107,7 @@ export function EmbeddingModel() {
         max={0.5}
         step={0.02}
         onChange={(v) => set("descriptorThreshold", v)}
-        hint="Only descriptors with cosine > τ get connected"
+        help="Min cosine similarity required for two descriptors to be connected by an edge in the underlying graph. Higher = sparser graph (only strong associations), lower = denser graph (more associations but more noise). Affects PageRank, subgraph, and Δ-graph."
       />
     </Section>
   );

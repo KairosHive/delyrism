@@ -24,12 +24,17 @@ export function SemanticMap() {
           { value: "tsne", label: "t-SNE" },
           { value: "pca", label: "PCA" },
         ]}
+        help="How to flatten the high-dim descriptor cloud into 2D. UMAP preserves local neighborhoods (best for clusters), t-SNE emphasizes separation between groups, PCA is the fastest and most linear."
       />
       <div className="space-y-1.5">
-        <Toggle label="Draw convex hulls" value={hulls} onChange={(v) => set("drawHulls", v)} />
-        <Toggle label="Include centroids" value={cent} onChange={(v) => set("includeCentroids", v)} />
-        <Toggle label="Normalize centroids" value={ncent} onChange={(v) => set("normalizeCentroids", v)} />
-        <Toggle label="Show context arrows" value={arrows} onChange={(v) => set("showArrows", v)} />
+        <Toggle label="Draw convex hulls" value={hulls} onChange={(v) => set("drawHulls", v)}
+          help="Wrap each symbol's descriptor cluster in a translucent colored polygon. Helpful to see how clusters overlap." />
+        <Toggle label="Include centroids" value={cent} onChange={(v) => set("includeCentroids", v)}
+          help="Show each symbol's average position as a star — the visual 'center' of the archetype." />
+        <Toggle label="Normalize centroids" value={ncent} onChange={(v) => set("normalizeCentroids", v)}
+          help="Project centroids onto the unit sphere before reducing. Mostly affects spacing when descriptors have very different magnitudes." />
+        <Toggle label="Show context arrows" value={arrows} onChange={(v) => set("showArrows", v)}
+          help="When a context is active, draw small arrows from each descriptor to its context-shifted position." />
       </div>
     </Section>
   );

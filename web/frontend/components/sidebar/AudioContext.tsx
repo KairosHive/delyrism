@@ -156,7 +156,7 @@ export function AudioContext() {
             max={30}
             step={1}
             onChange={(v) => set("audioMaxSeconds", Math.round(v))}
-            hint="audio longer than this gets trimmed before embedding"
+            help="Length cap for both upload and recording. Audio longer than this gets trimmed before being embedded. CLAP works well on 5–15 s clips; longer clips are usually averaged anyway."
           />
 
           <div className="grid grid-cols-2 gap-2">

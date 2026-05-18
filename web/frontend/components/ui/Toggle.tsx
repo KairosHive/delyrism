@@ -1,23 +1,30 @@
 "use client";
 import * as React from "react";
+import { HelpTip } from "./HelpTip";
 
 export function Toggle({
   label,
   value,
   onChange,
   hint,
+  help,
   disabled,
 }: {
   label: string;
   value: boolean;
   onChange: (v: boolean) => void;
   hint?: string;
+  /** Tooltip text — shows a "?" icon next to the label. */
+  help?: string;
   disabled?: boolean;
 }) {
   return (
     <label className={`flex items-center justify-between gap-2 ${disabled ? "opacity-50" : ""}`}>
       <span>
-        <div className="text-sm text-ink-100">{label}</div>
+        <div className="flex items-center text-sm text-ink-100">
+          {label}
+          {help && <HelpTip text={help} />}
+        </div>
         {hint && <div className="text-[10px] text-ink-400">{hint}</div>}
       </span>
       <button

@@ -3,6 +3,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Section } from "../ui/Section";
+import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS, STRUCTURE_DISPLAY } from "@/lib/theme";
 
@@ -58,7 +59,10 @@ export function SymbolicStructure() {
     <Section title="Symbolic Structure" color={SECTION_COLORS.symbolic} defaultOpen={false}>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <div className="label-sm">Preset</div>
+          <div className="flex items-center label-sm">
+            Preset
+            <HelpTip text="A built-in {symbol: [descriptors]} map. Switch to load a different archetypal system. Mine your own via the Archetype Builder tab." />
+          </div>
           <select
             className="select-base"
             value={presetName ?? "(custom)"}
@@ -86,9 +90,10 @@ export function SymbolicStructure() {
               }}
             />
           </label>
-          <button className="btn" onClick={downloadJson} title="Download current map">
+          <button className="btn" onClick={downloadJson} title="Download the current symbol map as JSON">
             ↓
           </button>
+          <HelpTip text="Upload your own symbol map (JSON of {symbol: [descriptors...]}). Download exports the currently-loaded map — useful for backups or sharing." />
         </div>
       </div>
 
