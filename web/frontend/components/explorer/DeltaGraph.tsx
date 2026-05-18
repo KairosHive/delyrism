@@ -85,7 +85,7 @@ export function DeltaGraph() {
 
       {!q.data && (
         <div className="flex items-center justify-center text-sm text-ink-300" style={{ height }}>
-          Provide a context (sentence or weights) to compute Δ-edges.
+          Provide a context (sentence, symbol weights, or audio) to compute Δ-edges.
         </div>
       )}
       {q.data && w > 0 && (

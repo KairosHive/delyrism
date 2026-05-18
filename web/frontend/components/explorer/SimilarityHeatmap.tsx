@@ -25,15 +25,19 @@ export function SimilarityHeatmap() {
   const poolType = useSidebar((s) => s.poolType);
   const poolW = useSidebar((s) => s.poolW);
   const mAlpha = useSidebar((s) => s.membershipAlpha);
+  const audioActive = useSidebar((s) => s.audioActive);
+  const audioNonce = useSidebar((s) => s.audioNonce);
 
   const [symbol, setSymbol] = React.useState<string>("");
   React.useEffect(() => {
     if (!symbol && symbols.length) setSymbol(symbols[0]);
   }, [symbols, symbol]);
 
+  const hasContext = !!sentence.trim() || !!weights || audioActive;
+
   const q = useQuery({
-    enabled: !!sid && !!symbol && (!!sentence.trim() || !!weights),
-    queryKey: ["similarity", sid, symbol, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha],
+    enabled: !!sid && !!symbol && hasContext,
+    queryKey: ["similarity", sid, symbol, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, audioNonce],
     queryFn: () =>
       api.post<SimilarityResponse>("/similarity", {
         space_id: sid,
@@ -68,12 +72,12 @@ export function SimilarityHeatmap() {
         </select>
       </div>
 
-      {!sentence.trim() && !weights && (
+      {!hasContext && (
         <div className="p-6 text-sm text-ink-300">
-          Add a context sentence or symbol weights to compute the Δ matrix.
+          Add a context (sentence, symbol weights, or audio) to compute the Δ matrix.
         </div>
       )}
-      {q.isPending && (sentence.trim() || weights) && (
+      {q.isPending && hasContext && (
         <div className="p-6 text-sm text-ink-300">computing…</div>
       )}
       {q.data && (() => {

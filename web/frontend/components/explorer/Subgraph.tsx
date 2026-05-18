@@ -60,7 +60,7 @@ export function Subgraph() {
 
       {!q.data && (
         <div className="flex items-center justify-center text-sm text-ink-300" style={{ height }}>
-          Add a context sentence to compute the contextual subgraph.
+          Add a context (sentence or audio) to compute the contextual subgraph.
         </div>
       )}
       {q.data && width > 0 && (

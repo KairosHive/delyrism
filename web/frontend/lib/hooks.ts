@@ -104,10 +104,13 @@ export function useShift() {
   const poolW = useSidebar((s) => s.poolW);
   const mAlpha = useSidebar((s) => s.membershipAlpha);
   const reducer = useSidebar((s) => s.reducer);
+  const audioActive = useSidebar((s) => s.audioActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
 
   return useQuery({
-    enabled: !!sid && (!!sentence.trim() || !!weights),
+    // audio override counts as context — the engine's ctx_vec() honors it
+    // even when sentence is empty
+    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive),
     placeholderData: keepPreviousData,
     queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer, audioNonce],
     queryFn: () => api.post<ShiftResponse>("/shift", shiftPayload()),
@@ -132,10 +135,11 @@ export function useDeltaGraph() {
   const withinSym = useSidebar((s) => s.withinSymbolEdges);
   const conn = useSidebar((s) => s.connectedOnly);
   const symFilter = useSidebar((s) => s.symbolFilter);
+  const audioActive = useSidebar((s) => s.audioActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
 
   return useQuery({
-    enabled: !!sid && (!!sentence.trim() || !!weights),
+    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive),
     placeholderData: keepPreviousData,
     queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, audioNonce],
     queryFn: () =>
