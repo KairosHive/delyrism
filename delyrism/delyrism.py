@@ -336,6 +336,31 @@ class TextEmbedder:
                 )
             raise
 
+    def _clap_text_features(self, tin):
+        """Same compat shim as _clap_audio_features but for the text tower.
+        Some transformers builds return a ModelOutput from get_text_features
+        instead of the projected tensor — pull the right tensor out either
+        way."""
+        out = self._clap.get_text_features(**tin)
+        if isinstance(out, torch.Tensor):
+            return out
+        for attr in ("text_embeds", "pooler_output"):
+            t = getattr(out, attr, None)
+            if isinstance(t, torch.Tensor):
+                return t
+        t = getattr(out, "last_hidden_state", None)
+        if isinstance(t, torch.Tensor):
+            return t.mean(dim=1) if t.dim() == 3 else t
+        try:
+            t = out[0]
+            if isinstance(t, torch.Tensor):
+                return t.mean(dim=1) if t.dim() == 3 else t
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Could not extract text features from {type(out).__name__}"
+        )
+
     def _clap_audio_features(self, ain):
         """Compat shim for `ClapModel.get_audio_features` return type.
         * transformers 4.x: returns a (B, D) tensor (already projected).
@@ -615,7 +640,7 @@ class TextEmbedder:
             with torch.no_grad():
                 tin = self.clap_processor(text=texts, return_tensors="pt", padding=True)
                 tin = {k: v.to(self.device) for k, v in tin.items()}
-                z = self._clap.get_text_features(**tin)  # [B, D]
+                z = self._clap_text_features(tin)  # [B, D] — version-portable
                 z = z / (z.norm(dim=1, keepdim=True) + 1e-8)
             return z.detach().cpu().numpy().astype(np.float32)
 
