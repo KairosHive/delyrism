@@ -298,6 +298,20 @@ def invalidate_space(space_id: str) -> None:
                 _result_cache.pop(k, None)
 
 
+def invalidate_results(space_id: str) -> None:
+    """Drop only the result memo for a space — keep the SymbolSpace itself.
+
+    Used when an in-memory aspect of the space changes that ISN'T part of
+    any result-cache key — most importantly `context_override` (set by
+    /context/set-override).  Without this, /propose etc. keep returning
+    the previously-cached "no context" result after audio is applied.
+    """
+    with _result_lock:
+        for k in list(_result_cache.keys()):
+            if k.startswith(f"{space_id}:"):
+                _result_cache.pop(k, None)
+
+
 def cache_stats() -> Dict[str, int]:
     return {
         "embedders": len(_embedder_cache),

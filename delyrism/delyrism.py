@@ -753,13 +753,17 @@ class SymbolSpace:
 
     def _ppr_with_sentence(self, sentence: str, alpha: float = 0.85, tau: float = 0.2):
         """
-        Personalized PageRank: inject probability mass at descriptor nodes based on 
-        their semantic similarity to the input sentence. The closer the descriptor to 
+        Personalized PageRank: inject probability mass at descriptor nodes based on
+        their semantic similarity to the input sentence. The closer the descriptor to
         the sentence, the higher its initial mass.
+
+        If a `context_override` vector is set on the space (audio context), it
+        replaces the sentence — same path the rest of ctx_vec/_sent_vec take.
         """
-        # 1. Embed the sentence
-        sent_vec = self.embedder.encode([sentence])[0]
-        sent_vec = sent_vec / (np.linalg.norm(sent_vec) + 1e-9)
+        # 1. Embed the sentence (or pull the override if active)
+        sent_vec = self._sent_vec(sentence or "")
+        if np.linalg.norm(sent_vec) < 1e-9:
+            return {s: 0.0 for s in self.symbols}
 
         # 2. Compute cosine similarity to every descriptor
         sims = self.D @ sent_vec
@@ -785,11 +789,12 @@ class SymbolSpace:
             for s, v in weights.items():
                 if v > 0 and f"S:{s}" in self.G:
                     pers_syms[f"S:{s}"] = v / tot
-        # Get personalization for descriptors (if sentence)
+        # Get personalization for descriptors — use _sent_vec which honors
+        # context_override (audio).  Returns zeros if neither sentence nor
+        # override is set, in which case desc pers stays at 0.
         pers_descs = {n: 0.0 for n in self.G.nodes}
-        if sentence:
-            sent_vec = self.embedder.encode([sentence])[0]
-            sent_vec = sent_vec / (np.linalg.norm(sent_vec) + 1e-9)
+        sent_vec = self._sent_vec(sentence or "")
+        if np.linalg.norm(sent_vec) > 1e-9:
             sims = self.D @ sent_vec
             desc_weights = softmax(sims, tau=tau)
             for i, d in enumerate(self.descriptors):
@@ -808,12 +813,18 @@ class SymbolSpace:
                 topk=5, tau=0.3, lam=0.6, alpha=0.85, use_ppr=True, blind_spot=False):
         vctx = self.ctx_vec(weights, sentence)
         pr = {s: 0.0 for s in self.symbols}
+        # `context_override` (audio) counts as context for PPR dispatch even
+        # when sentence/weights are both None — without this the audio path
+        # never reaches _ppr_with_sentence and PR stays at 0.
+        has_ctx = (sentence is not None and (isinstance(sentence, str) and sentence.strip())) \
+                  or self.context_override is not None
+        has_weights = bool(weights)
         if use_ppr:
-            if weights is not None and sentence is not None:
+            if has_weights and has_ctx:
                 pr = self._ppr_general(weights, sentence, alpha, tau, lam)
-            elif sentence is not None and weights is None:
+            elif has_ctx:
                 pr = self._ppr_with_sentence(sentence, alpha, tau)
-            elif weights is not None and sentence is None:
+            elif has_weights:
                 pr = self._ppr(weights, alpha)
         
         coh = {}

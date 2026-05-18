@@ -82,7 +82,9 @@ def set_context_override(req: SetOverrideRequest) -> dict:
                 detail=f"override dim {v.shape[0]} != embedder dim {space.embedder.dim}",
             )
         space.set_context_vec(v)
-    engine_cache.invalidate_space(req.space_id) if False else None
-    # we don't invalidate the *space*; we just invalidate cached results that
-    # depend on context_override.
+    # The result memo keys are derived from request params only — they do NOT
+    # include `context_override` (it lives on the cached space, not in the
+    # request).  Without this invalidation /propose etc. with sentence=null,
+    # weights=null would keep returning the pre-audio cached result forever.
+    engine_cache.invalidate_results(req.space_id)
     return {"ok": True}
