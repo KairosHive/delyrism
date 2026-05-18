@@ -78,6 +78,13 @@ export interface SidebarState {
   connectedOnly: boolean;
   symbolFilter: string[];
 
+  // ----- audio context override -----
+  // The backend stores a context vector on the cached space; we mirror just
+  // enough state here to know it's active and to invalidate dependent queries.
+  audioActive: boolean;
+  audioNonce: number;        // bumped each time the override changes
+  audioMaxSeconds: number;   // upload/record cap
+
   // ----- selected drill-down -----
   selectedSymbol: string | null;
 
@@ -147,6 +154,10 @@ export const useSidebar = create<SidebarState>((set) => ({
   symbolFilter: [],
 
   selectedSymbol: null,
+
+  audioActive: false,
+  audioNonce: 0,
+  audioMaxSeconds: 10,
 
   set: (k, v) => set({ [k]: v } as any),
   setBulk: (patch) => set(patch as any),

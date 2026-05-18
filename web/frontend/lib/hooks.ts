@@ -26,11 +26,12 @@ export function useRankings() {
   const usePPR = useSidebar((s) => s.usePPR);
   const blindSpot = useSidebar((s) => s.blindSpot);
   const topk = useSidebar((s) => s.topk);
+  const audioNonce = useSidebar((s) => s.audioNonce);
 
   return useQuery({
     enabled: !!sid,
     placeholderData: keepPreviousData,
-    queryKey: ["propose", sid, sentence, weights, tau, alpha, lam, usePPR, blindSpot, topk],
+    queryKey: ["propose", sid, sentence, weights, tau, alpha, lam, usePPR, blindSpot, topk, audioNonce],
     queryFn: () =>
       api.post<ProposeResponse>("/propose", {
         space_id: sid,
@@ -103,11 +104,12 @@ export function useShift() {
   const poolW = useSidebar((s) => s.poolW);
   const mAlpha = useSidebar((s) => s.membershipAlpha);
   const reducer = useSidebar((s) => s.reducer);
+  const audioNonce = useSidebar((s) => s.audioNonce);
 
   return useQuery({
     enabled: !!sid && (!!sentence.trim() || !!weights),
     placeholderData: keepPreviousData,
-    queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer],
+    queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer, audioNonce],
     queryFn: () => api.post<ShiftResponse>("/shift", shiftPayload()),
   });
 }
@@ -130,11 +132,12 @@ export function useDeltaGraph() {
   const withinSym = useSidebar((s) => s.withinSymbolEdges);
   const conn = useSidebar((s) => s.connectedOnly);
   const symFilter = useSidebar((s) => s.symbolFilter);
+  const audioNonce = useSidebar((s) => s.audioNonce);
 
   return useQuery({
     enabled: !!sid && (!!sentence.trim() || !!weights),
     placeholderData: keepPreviousData,
-    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter],
+    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, audioNonce],
     queryFn: () =>
       api.post<DeltaGraphResponse>("/delta-graph", {
         ...shiftPayload(),
@@ -156,10 +159,13 @@ export function useSubgraph() {
   const method = useSidebar((s) => s.subMethod);
   const alpha = useSidebar((s) => s.subAlpha);
   const tau = useSidebar((s) => s.subTau);
+  const audioActive = useSidebar((s) => s.audioActive);
+  const audioNonce = useSidebar((s) => s.audioNonce);
   return useQuery({
-    enabled: !!sid && !!sentence.trim(),
+    // subgraph needs *some* form of context — sentence or audio override
+    enabled: !!sid && (!!sentence.trim() || audioActive),
     placeholderData: keepPreviousData,
-    queryKey: ["subgraph", sid, sentence, ts, td, method, alpha, tau],
+    queryKey: ["subgraph", sid, sentence, ts, td, method, alpha, tau, audioNonce],
     queryFn: () =>
       api.post<SubgraphResponse>("/subgraph", {
         space_id: sid,
@@ -178,9 +184,11 @@ export function useAttention(symbol: string | null) {
   const sentence = useSidebar((s) => s.contextSentence);
   const weights = useSidebar(buildContextWeights);
   const tau = useSidebar((s) => s.tau);
+  const audioNonce = useSidebar((s) => s.audioNonce);
   return useQuery({
     enabled: !!sid && !!symbol,
-    queryKey: ["attention", sid, symbol, sentence, weights, tau],
+    placeholderData: keepPreviousData,
+    queryKey: ["attention", sid, symbol, sentence, weights, tau, audioNonce],
     queryFn: () =>
       api.post<AttentionResponse>("/attention", {
         space_id: sid,

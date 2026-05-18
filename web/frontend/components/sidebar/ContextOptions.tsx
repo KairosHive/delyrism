@@ -5,6 +5,7 @@ import { Slider } from "../ui/Slider";
 import { Toggle } from "../ui/Toggle";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS } from "@/lib/theme";
+import { AudioContext } from "./AudioContext";
 
 export function ContextOptions() {
   const symbols = useSidebar((s) => s.symbols);
@@ -68,6 +69,10 @@ export function ContextOptions() {
             onChange={(v) => setWeight(s, v)}
           />
         ))}
+      </div>
+
+      <div className="border-t border-ink-700/60 pt-3">
+        <AudioContext />
       </div>
 
       <div className="border-t border-ink-700/60 pt-3 space-y-2">

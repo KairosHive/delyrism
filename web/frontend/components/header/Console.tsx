@@ -20,6 +20,7 @@ export function Console() {
   const presetName = useSidebar((s) => s.presetName);
   const set = useSidebar((s) => s.set);
   const sentence = useSidebar((s) => s.contextSentence);
+  const audioActive = useSidebar((s) => s.audioActive);
 
   const presets = useQuery({
     queryKey: ["presets"],
@@ -68,16 +69,25 @@ export function Console() {
         data-accent
         style={{ boxShadow: `0 0 0 1px ${SECTION_COLORS.context}33, 0 8px 28px -16px ${SECTION_COLORS.context}` }}
       >
-        <div className="console-label" style={{ color: SECTION_COLORS.context }}>
-          <span style={{ width: 8, height: 8, borderRadius: 999, background: SECTION_COLORS.context }} />
-          Context Prompt
+        <div className="flex items-center justify-between gap-2">
+          <div className="console-label" style={{ color: SECTION_COLORS.context }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: SECTION_COLORS.context }} />
+            Context Prompt
+          </div>
+          {audioActive && (
+            <span className="pill !text-[10px] border-accent-500/60 bg-accent-600/15 text-accent-200">
+              ♪ audio override — text is ignored
+            </span>
+          )}
         </div>
         <textarea
-          className="h-[68px] w-full resize-none rounded-lg border border-ink-700 bg-ink-900/70 px-4 py-3 text-base text-ink-100
-                     placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40"
+          className={`h-[68px] w-full resize-none rounded-lg border border-ink-700 bg-ink-900/70 px-4 py-3 text-base text-ink-100
+                     placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40
+                     ${audioActive ? "opacity-50" : ""}`}
           placeholder="e.g. flooding spirits dancing around floating suns…"
           value={sentence}
           onChange={(e) => set("contextSentence", e.target.value)}
+          disabled={audioActive}
         />
       </div>
     </div>
