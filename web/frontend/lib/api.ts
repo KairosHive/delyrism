@@ -2,11 +2,17 @@
 // All routes accept JSON bodies; responses are JSON.  Errors throw with the
 // HTTP status + the detail string the backend returns.
 
-// Empty BASE → fetch falls back to the current origin (production, where
-// FastAPI serves the static export at the same host).  In local dev, set
-// NEXT_PUBLIC_API_BASE=http://localhost:8000 to point at the standalone
-// uvicorn server.
-const BASE = process.env.NEXT_PUBLIC_API_BASE || "";
+// In production the FastAPI process serves both the API and the static
+// export at the same origin, so BASE stays empty and fetch resolves to
+// relative URLs.  In local dev the frontend (Next.js) runs on :3000 and
+// the backend (uvicorn) on :8000, so we need an absolute base — Next.js
+// inlines NODE_ENV at build time, which lets us pick the right default
+// automatically without the developer setting any env var.
+//
+// Override with NEXT_PUBLIC_API_BASE if the backend lives anywhere else.
+const BASE =
+  process.env.NEXT_PUBLIC_API_BASE
+  || (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "");
 
 // Per-route timing log so the UI can surface "what was slow on the last call".
 // Keyed by path; updated on every successful request.
