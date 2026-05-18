@@ -3,6 +3,7 @@ import * as React from "react";
 import { api } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Slider } from "../ui/Slider";
+import { blobToWav } from "@/lib/audioToWav";
 
 /**
  * Audio context override.
@@ -37,14 +38,22 @@ export function AudioContext() {
   const recorderRef = React.useRef<MediaRecorder | null>(null);
   const stopTimerRef = React.useRef<number | null>(null);
 
-  async function uploadFile(file: File) {
+  async function uploadFile(file: Blob) {
     if (!spaceId) return;
     setStatus("encoding");
     setError(null);
     try {
+      // Re-encode whatever format the user gave us (webm from MediaRecorder,
+      // mp3/wav/m4a/flac/ogg from upload) into a 16-bit PCM WAV in the
+      // browser.  libsndfile on the server only natively reads wav/flac/ogg —
+      // converting client-side means the server never needs ffmpeg for the
+      // codec fallback path.
+      const wavBlob = await blobToWav(file);
+      const wavFile = new File([wavBlob], "audio.wav", { type: "audio/wav" });
+
       const fd = new FormData();
       fd.append("space_id", spaceId);
-      fd.append("file", file);
+      fd.append("file", wavFile);
       fd.append("max_seconds", String(audioMaxSeconds));
       const enc = await api.upload<{ vector: number[]; dim: number }>(
         "/context/encode-audio",
