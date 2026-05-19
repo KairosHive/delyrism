@@ -60,8 +60,15 @@ export function Sidebar() {
   return (
     <aside className="flex h-full flex-col">
       <div className="border-b border-ink-700/60 p-4">
-        <div className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded-md bg-gradient-to-br from-accent-400 to-accent-700 shadow-glow" />
+        <div className="flex items-center gap-2.5">
+          {/* eslint-disable-next-line @next/next/no-img-element — static file
+              served by FastAPI in prod, by Next's public/ in dev.  No need
+              for next/image's optimizer here (static export + small asset). */}
+          <img
+            src="/delyrism-logo.png"
+            alt="delyrism"
+            className="h-8 w-8 rounded-md object-contain"
+          />
           <div>
             <div className="font-display text-lg leading-tight">delyrism</div>
             <div className="text-[10px] uppercase tracking-widest text-ink-400">
