@@ -24,7 +24,10 @@ class BuilderInfo(BaseModel):
 
 
 def _info() -> BuilderInfo:
-    url = os.environ.get("EGREGORE_URL") or "http://localhost:8765"
+    # Default to the public hosted instance so the "open ↗" link works out of
+    # the box on prod (Railway etc.). Local dev / self-hosters can override
+    # with EGREGORE_URL=http://localhost:8765.
+    url = os.environ.get("EGREGORE_URL") or "https://egregore.kairos-hive.org"
     return BuilderInfo(url=url, available=True)
 
 
