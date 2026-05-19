@@ -10,7 +10,6 @@ endpoints that:
 - set/clear a context vector override on a cached space
 """
 from __future__ import annotations
-import base64
 import io
 import os
 import numpy as np
@@ -162,13 +161,16 @@ def _cf_extract_text(data: dict) -> str:
         return ""
 
 
-def _call_cloudflare_vision(image_b64: str, prompt: str, model: str) -> str:
+def _call_cloudflare_vision(image_bytes: bytes, prompt: str, model: str) -> str:
     """One-shot call to a CF vision LLM, returns the model's text response.
 
-    Uses the NATIVE /ai/run/{model} endpoint with the documented payload
-    shape: messages + image as a top-level base64 data URL.  Not the
-    OpenAI-compat /v1/chat/completions endpoint (which has different vision
-    message conventions and isn't what CF's own tutorial uses).
+    Uses the NATIVE /ai/run/{model} endpoint.  Payload format follows the
+    working sample from cloudflare/cloudflare-docs#19185 (the docs page's
+    code samples don't actually work):
+      - `image` is an ARRAY OF INTEGER BYTES, not a base64 string and not
+        a data URL.  CF's own JS example uses `[...new Uint8Array(blob)]`.
+      - `prompt` is a single top-level string.  Do NOT send both `prompt`
+        and `messages` — the model accepts one or the other.
 
     On a license-agreement error (first use per account), automatically
     sends the "agree" prompt and retries the real request — so users don't
@@ -184,8 +186,8 @@ def _call_cloudflare_vision(image_b64: str, prompt: str, model: str) -> str:
     url = _cf_vision_url(account_id, model)
     headers = _cf_headers(api_token)
     payload = {
-        "messages": [{"role": "user", "content": prompt}],
-        "image": f"data:image/jpeg;base64,{image_b64}",
+        "prompt": prompt,
+        "image": list(image_bytes),
         "max_tokens": 300,
         "temperature": 0.5,
     }
@@ -260,10 +262,9 @@ async def encode_image(
         raise HTTPException(status_code=413, detail="image too large (>25MB)")
 
     blob = _resize_image_bytes(blob, max_pixels)
-    image_b64 = base64.b64encode(blob).decode("ascii")
 
     description = _call_cloudflare_vision(
-        image_b64=image_b64,
+        image_bytes=blob,
         prompt=prompt or DEFAULT_VISION_PROMPT,
         model=model,
     )
