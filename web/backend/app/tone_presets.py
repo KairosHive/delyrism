@@ -120,16 +120,6 @@ SIMPLE_TONE_EXTRAS: Dict[str, Dict[str, str]] = {
         "fr": "flou doux, transitions hypnagogiques, synesthésie sensorielle, ellipses de motifs.",
         "es": "foco suave, transiciones hipnagógicas, sinestesia sensorial, elipsis de motivos.",
     },
-    "eerie": {
-        "en": "quiet dread, negative space, mundane objects made numinous, withheld explanations, sparse adjectives.",
-        "fr": "crainte silencieuse, vides, banal devenu numineux, explications retenues.",
-        "es": "temor silencioso, espacios vacíos, lo banal hecho numinoso, explicaciones retenidas.",
-    },
-    "warm": {
-        "en": "humane, grounded, gentle precision; small physical details carrying emotion; no irony.",
-        "fr": "humain, ancré, précision douce ; petits détails physiques porteurs d'émotion.",
-        "es": "humano, anclado, precisión amable; pequeños detalles físicos cargados de emoción.",
-    },
 }
 
 

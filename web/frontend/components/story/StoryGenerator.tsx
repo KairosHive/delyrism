@@ -10,7 +10,7 @@ import { Select } from "../ui/Select";
 import { Toggle } from "../ui/Toggle";
 
 const TONES = [
-  "dreamy", "eerie", "warm",
+  "dreamy",
   "pynchon", "blake", "mystic-baroque", "gnostic-techno",
 ];
 
@@ -102,8 +102,12 @@ export function StoryGenerator() {
             options={[{ value: "first", label: "First person" }, { value: "third", label: "Third person" }]}
             help="Narrative perspective. First-person feels more intimate; third gives more authorial distance." />
           <Select label="Tense" value={tense} onChange={(v) => set("storyTense", v as any)}
-            options={[{ value: "present", label: "Present" }, { value: "past", label: "Past" }]}
-            help="Present tense reads immediate / dreamlike; past tense reads mythic / recounted." />
+            options={[
+              { value: "present", label: "Present" },
+              { value: "past", label: "Past" },
+              { value: "future", label: "Future" },
+            ]}
+            help="Present tense reads immediate / dreamlike; past tense reads mythic / recounted; future tense reads prophetic / oracular — the events are still to come." />
           <Slider label="Length (words)" value={length} min={80} max={500} step={10}
             onChange={(v) => set("storyLengthWords", Math.round(v))}
             help="Target word count. The prompt asks for length≈[low, high] = target ± 40 words. Longer stories get more motifs woven in but also drift more." />

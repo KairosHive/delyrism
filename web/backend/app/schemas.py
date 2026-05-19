@@ -261,7 +261,7 @@ class StoryRequest(BaseModel):
     tone: str = "dreamy"
     language: Literal["English", "Français", "Español"] = "English"
     pov: Literal["first", "third"] = "third"
-    tense: Literal["present", "past"] = "present"
+    tense: Literal["present", "past", "future"] = "present"
     length_words: int = 180
     temperature: float = 0.85
     top_p: float = 0.9

@@ -87,7 +87,7 @@ export interface SidebarState {
   storyTone: string;
   storyLanguage: "English" | "Français" | "Español";
   storyPov: "first" | "third";
-  storyTense: "present" | "past";
+  storyTense: "present" | "past" | "future";
   storyLengthWords: number;
   storyTemperature: number;
   storyTopP: number;

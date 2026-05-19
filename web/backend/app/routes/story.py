@@ -79,9 +79,9 @@ def _build_prompt(
     pov_loc = {"en": {"first": "first person", "third": "third person"},
                "fr": {"first": "à la première personne", "third": "à la troisième personne"},
                "es": {"first": "en primera persona", "third": "en tercera persona"}}[lang_code].get(pov, pov)
-    tense_loc = {"en": {"present": "present", "past": "past"},
-                 "fr": {"present": "au présent", "past": "au passé"},
-                 "es": {"present": "en presente", "past": "en pasado"}}[lang_code].get(tense, tense)
+    tense_loc = {"en": {"present": "present", "past": "past", "future": "future"},
+                 "fr": {"present": "au présent", "past": "au passé", "future": "au futur"},
+                 "es": {"present": "en presente", "past": "en pasado", "future": "en futuro"}}[lang_code].get(tense, tense)
     low, high = max(60, target_words - 40), target_words + 40
     if lang_code == "en":
         style = (f"tone={tone}; POV={pov_loc}; tense={tense_loc} tense; "
