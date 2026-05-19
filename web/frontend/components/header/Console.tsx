@@ -21,6 +21,8 @@ export function Console() {
   const set = useSidebar((s) => s.set);
   const sentence = useSidebar((s) => s.contextSentence);
   const audioActive = useSidebar((s) => s.audioActive);
+  const imageActive = useSidebar((s) => s.imageActive);
+  const overrideActive = audioActive || imageActive;
 
   const presets = useQuery({
     queryKey: ["presets"],
@@ -79,15 +81,20 @@ export function Console() {
               ♪ audio override — text is ignored
             </span>
           )}
+          {imageActive && (
+            <span className="pill !text-[10px] border-accent-500/60 bg-accent-600/15 text-accent-200">
+              🖼 image override — text is ignored
+            </span>
+          )}
         </div>
         <textarea
           className={`h-[68px] w-full resize-none rounded-lg border border-ink-700 bg-ink-900/70 px-4 py-3 text-base text-ink-100
                      placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40
-                     ${audioActive ? "opacity-50" : ""}`}
+                     ${overrideActive ? "opacity-50" : ""}`}
           placeholder="e.g. flooding spirits dancing around floating suns…"
           value={sentence}
           onChange={(e) => set("contextSentence", e.target.value)}
-          disabled={audioActive}
+          disabled={overrideActive}
         />
       </div>
     </div>

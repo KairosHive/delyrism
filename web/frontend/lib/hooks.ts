@@ -27,11 +27,12 @@ export function useRankings() {
   const blindSpot = useSidebar((s) => s.blindSpot);
   const topk = useSidebar((s) => s.topk);
   const audioNonce = useSidebar((s) => s.audioNonce);
+  const imageNonce = useSidebar((s) => s.imageNonce);
 
   return useQuery({
     enabled: !!sid,
     placeholderData: keepPreviousData,
-    queryKey: ["propose", sid, sentence, weights, tau, alpha, lam, usePPR, blindSpot, topk, audioNonce],
+    queryKey: ["propose", sid, sentence, weights, tau, alpha, lam, usePPR, blindSpot, topk, audioNonce, imageNonce],
     queryFn: () =>
       api.post<ProposeResponse>("/propose", {
         space_id: sid,
@@ -124,14 +125,16 @@ export function useShift() {
   const mAlpha = useSidebar((s) => s.membershipAlpha);
   const reducer = useSidebar((s) => s.reducer);
   const audioActive = useSidebar((s) => s.audioActive);
+  const imageActive = useSidebar((s) => s.imageActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
+  const imageNonce = useSidebar((s) => s.imageNonce);
 
   return useQuery({
     // audio override counts as context — the engine's ctx_vec() honors it
     // even when sentence is empty
-    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive),
+    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive),
     placeholderData: keepPreviousData,
-    queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer, audioNonce],
+    queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer, audioNonce, imageNonce],
     queryFn: () => api.post<ShiftResponse>("/shift", shiftPayload()),
   });
 }
@@ -156,12 +159,14 @@ export function useDeltaGraph() {
   const symFilter = useSidebar((s) => s.symbolFilter);
   const deltaSign = useSidebar((s) => s.deltaSign);
   const audioActive = useSidebar((s) => s.audioActive);
+  const imageActive = useSidebar((s) => s.imageActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
+  const imageNonce = useSidebar((s) => s.imageNonce);
 
   return useQuery({
-    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive),
+    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive),
     placeholderData: keepPreviousData,
-    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce],
+    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce, imageNonce],
     queryFn: () =>
       api.post<DeltaGraphResponse>("/delta-graph", {
         ...shiftPayload(),
@@ -185,12 +190,14 @@ export function useSubgraph() {
   const alpha = useSidebar((s) => s.subAlpha);
   const tau = useSidebar((s) => s.subTau);
   const audioActive = useSidebar((s) => s.audioActive);
+  const imageActive = useSidebar((s) => s.imageActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
+  const imageNonce = useSidebar((s) => s.imageNonce);
   return useQuery({
     // subgraph needs *some* form of context — sentence or audio override
-    enabled: !!sid && (!!sentence.trim() || audioActive),
+    enabled: !!sid && (!!sentence.trim() || audioActive || imageActive),
     placeholderData: keepPreviousData,
-    queryKey: ["subgraph", sid, sentence, ts, td, method, alpha, tau, audioNonce],
+    queryKey: ["subgraph", sid, sentence, ts, td, method, alpha, tau, audioNonce, imageNonce],
     queryFn: () =>
       api.post<SubgraphResponse>("/subgraph", {
         space_id: sid,
@@ -210,10 +217,11 @@ export function useAttention(symbol: string | null) {
   const weights = useSidebar(buildContextWeights);
   const tau = useSidebar((s) => s.tau);
   const audioNonce = useSidebar((s) => s.audioNonce);
+  const imageNonce = useSidebar((s) => s.imageNonce);
   return useQuery({
     enabled: !!sid && !!symbol,
     placeholderData: keepPreviousData,
-    queryKey: ["attention", sid, symbol, sentence, weights, tau, audioNonce],
+    queryKey: ["attention", sid, symbol, sentence, weights, tau, audioNonce, imageNonce],
     queryFn: () =>
       api.post<AttentionResponse>("/attention", {
         space_id: sid,

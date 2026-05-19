@@ -60,6 +60,16 @@ export function AudioContext() {
         fd,
       );
       await api.post("/context/set-override", { space_id: spaceId, vector: enc.vector });
+      // Image and audio share one slot on the backend — flipping audio on
+      // means any image override just got replaced.  Sync UI state to match.
+      const st = useSidebar.getState();
+      if (st.imageActive) {
+        if (st.imageThumbnail) URL.revokeObjectURL(st.imageThumbnail);
+        set("imageActive", false);
+        set("imageDescription", "");
+        set("imageThumbnail", null);
+        set("imageNonce", Date.now());
+      }
       set("audioActive", true);
       set("audioNonce", Date.now());
       setStatus("ok");

@@ -109,6 +109,15 @@ export interface SidebarState {
   audioNonce: number;        // bumped each time the override changes
   audioMaxSeconds: number;   // upload/record cap
 
+  // ----- image context override (vision-LLM shim) -----
+  // Same single-slot context_override on the backend — image and audio are
+  // mutually exclusive.  The description is what the vision LLM "read" from
+  // the image; surfaced in the UI for interpretability.
+  imageActive: boolean;
+  imageNonce: number;
+  imageDescription: string;
+  imageThumbnail: string | null;   // object-URL for the selected file
+
   // ----- selected drill-down -----
   selectedSymbol: string | null;
 
@@ -184,6 +193,11 @@ export const useSidebar = create<SidebarState>((set) => ({
   audioActive: false,
   audioNonce: 0,
   audioMaxSeconds: 10,
+
+  imageActive: false,
+  imageNonce: 0,
+  imageDescription: "",
+  imageThumbnail: null,
 
   storyModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   storyTone: "dreamy",

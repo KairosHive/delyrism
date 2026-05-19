@@ -7,6 +7,7 @@ import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS } from "@/lib/theme";
 import { AudioContext } from "./AudioContext";
+import { ImageContext } from "./ImageContext";
 
 export function ContextOptions() {
   const symbols = useSidebar((s) => s.symbols);
@@ -78,8 +79,9 @@ export function ContextOptions() {
         ))}
       </div>
 
-      <div className="border-t border-ink-700/60 pt-3">
+      <div className="space-y-2 border-t border-ink-700/60 pt-3">
         <AudioContext />
+        <ImageContext />
       </div>
 
       <div className="border-t border-ink-700/60 pt-3 space-y-2">

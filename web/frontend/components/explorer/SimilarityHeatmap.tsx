@@ -27,17 +27,19 @@ export function SimilarityHeatmap() {
   const mAlpha = useSidebar((s) => s.membershipAlpha);
   const audioActive = useSidebar((s) => s.audioActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
+  const imageActive = useSidebar((s) => s.imageActive);
+  const imageNonce = useSidebar((s) => s.imageNonce);
 
   const [symbol, setSymbol] = React.useState<string>("");
   React.useEffect(() => {
     if (!symbol && symbols.length) setSymbol(symbols[0]);
   }, [symbols, symbol]);
 
-  const hasContext = !!sentence.trim() || !!weights || audioActive;
+  const hasContext = !!sentence.trim() || !!weights || audioActive || imageActive;
 
   const q = useQuery({
     enabled: !!sid && !!symbol && hasContext,
-    queryKey: ["similarity", sid, symbol, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, audioNonce],
+    queryKey: ["similarity", sid, symbol, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, audioNonce, imageNonce],
     queryFn: () =>
       api.post<SimilarityResponse>("/similarity", {
         space_id: sid,

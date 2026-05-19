@@ -248,6 +248,16 @@ class EncodeAudioResponse(BaseModel):
     dim: int
 
 
+class EncodeImageResponse(BaseModel):
+    vector: List[float]
+    dim: int
+    # The vision-LLM's reading of the image — exposed to the UI so the user
+    # can see what symbolic field the engine "saw" in their image.
+    description: str
+    # Which CF vision model produced the description.
+    model: str
+
+
 # ----------------------- story generator -----------------------
 
 class StoryRequest(BaseModel):

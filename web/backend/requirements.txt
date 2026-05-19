@@ -4,5 +4,8 @@ uvicorn[standard]>=0.27
 pydantic>=2.6
 python-multipart>=0.0.9
 requests>=2.31
+# Pillow for /context/encode-image — server-side resize before shipping to
+# the Cloudflare vision LLM (caps 25 MB inputs at 1024px on the long side).
+pillow>=10.0
 # The engine itself reuses dependencies from ../../requirements.txt
 # (numpy, scikit-learn, networkx, sentence-transformers, transformers, torch...)
