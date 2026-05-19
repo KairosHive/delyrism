@@ -9,6 +9,7 @@ from ..schemas import (
     DeltaGraphRequest, DeltaGraphResponse, DeltaNode, DeltaEdge,
     SubgraphRequest, SubgraphResponse, SubgraphNode, SubgraphEdge,
     SimilarityRequest, SimilarityResponse,
+    SymbolSimilarityRequest, SymbolSimilarityResponse,
 )
 from .. import engine_cache
 from ..util import to_hex
@@ -281,6 +282,64 @@ def similarity_matrices(req: SimilarityRequest) -> SimilarityResponse:
         before=block["S_before"].tolist(),
         after=block["S_after"].tolist(),
         delta=block["S_delta"].tolist(),
+    )
+    engine_cache.memo_put(key, out)
+    return out
+
+
+@router.post("/similarity-symbols", response_model=SymbolSimilarityResponse)
+def symbol_centroid_similarity(req: SymbolSimilarityRequest) -> SymbolSimilarityResponse:
+    """Symbol-by-symbol centroid-cosine matrices (Before / After / Δ).
+
+    Same context plumbing as /similarity, but rolled up: for each symbol we
+    take the L2-normalized mean of its descriptor vectors before and after
+    the shift, then form the S×S cosine matrix.  Answers 'does context make
+    symbol A look more like symbol B?' rather than 'do these two descriptors
+    inside A look more alike?'.
+    """
+    space = _require(req.space_id)
+    key = engine_cache.memo_key(req.space_id, "similarity-symbols", req.model_dump(exclude={"space_id"}))
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    D_after = space.make_shifted_matrix(
+        weights=req.weights,
+        sentence=req.sentence,
+        strategy=req.strategy,
+        beta=req.beta,
+        gate=req.gate,
+        tau=req.tau,
+        within_symbol_softmax=req.within_symbol_softmax,
+        gamma=req.gamma,
+        prompt_template=req.prompt_template,
+        pool_type=req.pool_type,
+        pool_w=req.pool_w,
+        membership_alpha=req.membership_alpha,
+    )
+
+    symbols = list(space.symbols)
+
+    def _centroid_matrix(D: np.ndarray) -> np.ndarray:
+        # L2-normalized mean per symbol → S×dim, then cosine via the gram matrix.
+        rows = []
+        for s in symbols:
+            idx = space.symbol_to_idx[s]
+            c = D[idx].mean(axis=0) if len(idx) else np.zeros(D.shape[1], dtype=D.dtype)
+            n = float(np.linalg.norm(c))
+            rows.append(c / n if n > 1e-9 else c)
+        C = np.stack(rows)
+        return C @ C.T
+
+    S_before = _centroid_matrix(space.D)
+    S_after = _centroid_matrix(D_after)
+    S_delta = S_after - S_before
+
+    out = SymbolSimilarityResponse(
+        symbols=symbols,
+        before=S_before.tolist(),
+        after=S_after.tolist(),
+        delta=S_delta.tolist(),
     )
     engine_cache.memo_put(key, out)
     return out

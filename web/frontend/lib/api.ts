@@ -172,6 +172,13 @@ export interface SimilarityResponse {
   delta: number[][];
 }
 
+export interface SymbolSimilarityResponse {
+  symbols: string[];
+  before: number[][];
+  after: number[][];
+  delta: number[][];
+}
+
 export interface StoryResponse {
   story: string;
   motifs: string[];

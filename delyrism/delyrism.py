@@ -950,6 +950,15 @@ class SymbolSpace:
     ):
         ...
         vctx = self.ctx_vec(weights=weights, sentence=sentence)
+        # `reembed` / `hybrid` need a *text* sentence to feed the embedder.
+        # If the user has an audio/image override active but no typed sentence,
+        # there's no text to re-embed against — silently returning D unchanged
+        # produces a zero Δ matrix and the user thinks the engine is broken.
+        # Fall back to `gate` (which uses ctx_vec → honors the override) so the
+        # Δ pipeline still produces signal.
+        _sentence_is_empty = not (isinstance(sentence, str) and sentence.strip())
+        if strategy in ("reembed", "hybrid") and _sentence_is_empty and self.context_override is not None:
+            strategy = "gate"
         # --- pooling ---
         if strategy == "pooling":
             Dtmp = self._pool_with_context(self.D, vctx, pool_type=pool_type, pool_w=pool_w)

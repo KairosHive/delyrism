@@ -210,6 +210,19 @@ class SimilarityResponse(BaseModel):
     delta: List[List[float]]
 
 
+class SymbolSimilarityRequest(ShiftRequest):
+    """Same context inputs as the per-symbol matrix; no `symbol` field needed —
+    the response is a single symbol×symbol matrix."""
+    pass
+
+
+class SymbolSimilarityResponse(BaseModel):
+    symbols: List[str]
+    before: List[List[float]]
+    after: List[List[float]]
+    delta: List[List[float]]
+
+
 # ----------------------- contextual subgraph -----------------------
 
 class SubgraphRequest(BaseModel):
