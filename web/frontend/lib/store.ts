@@ -88,10 +88,16 @@ export interface SidebarState {
   storyLanguage: "English" | "Français" | "Español";
   storyPov: "first" | "third";
   storyTense: "present" | "past" | "future";
+  storyForm: "prose" | "short-story" | "poem" | "myth" | "incantation" | "vignette";
   storyLengthWords: number;
   storyTemperature: number;
   storyTopP: number;
   storyPositiveOnly: boolean;
+  // Anchor archetype: "" → none, "auto" → top-ranked, "EARTH"/"WATER"/… → explicit.
+  storyAnchor: string;
+  // Motif controls — number of motif words and where they come from.
+  storyMotifDensity: number;
+  storyMotifSource: "delta-graph" | "top-attention" | "mixed";
   // Last-generated story and motifs (so they survive tab navigation).
   storyResult: { story: string; motifs: string[]; model: string } | null;
   storyError: string | null;
@@ -184,10 +190,14 @@ export const useSidebar = create<SidebarState>((set) => ({
   storyLanguage: "English",
   storyPov: "third",
   storyTense: "present",
+  storyForm: "prose",
   storyLengthWords: 180,
   storyTemperature: 0.85,
   storyTopP: 0.9,
   storyPositiveOnly: true,
+  storyAnchor: "",
+  storyMotifDensity: 12,
+  storyMotifSource: "delta-graph",
   storyResult: null,
   storyError: null,
 

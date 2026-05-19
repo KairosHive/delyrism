@@ -262,10 +262,27 @@ class StoryRequest(BaseModel):
     language: Literal["English", "Français", "Español"] = "English"
     pov: Literal["first", "third"] = "third"
     tense: Literal["present", "past", "future"] = "present"
+    # Output form / shape — separate from tone (which is register).
+    form: Literal["prose", "short-story", "poem", "myth", "incantation", "vignette"] = "prose"
     length_words: int = 180
     temperature: float = 0.85
     top_p: float = 0.9
     positive_delta_only: bool = True
+
+    # ---- explorer-aware story controls ----
+    # Anchor archetype — pin one symbol as the story's center.
+    #   None / "" → no anchor
+    #   "auto"    → backend picks the top-ranked symbol via propose()
+    #   "EARTH"   → use that specific symbol
+    anchor_archetype: Optional[str] = None
+    # How many motif words to weave explicitly into the prompt.
+    motif_density: int = 12
+    # Where motifs come from:
+    #   "delta-graph"   — words from the Δ-graph (current behavior)
+    #   "top-attention" — top-attended descriptors of the anchor (or top-ranked
+    #                     symbol if no anchor), via conditioned_symbol()
+    #   "mixed"         — half-and-half, deduped
+    motif_source: Literal["delta-graph", "top-attention", "mixed"] = "delta-graph"
 
     # delta graph params used to extract motifs
     delta_params: Optional[DeltaGraphRequest] = None

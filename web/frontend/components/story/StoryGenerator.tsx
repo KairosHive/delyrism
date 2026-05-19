@@ -9,9 +9,33 @@ import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
 import { Toggle } from "../ui/Toggle";
 
+// In alphabetical order so the dropdown is scannable. `dreamy` first as a
+// neutral default; the rest are named literary registers.
 const TONES = [
   "dreamy",
-  "pynchon", "blake", "mystic-baroque", "gnostic-techno",
+  "angela-carter",
+  "blake",
+  "borges",
+  "calvino",
+  "cosmic-horror",
+  "garcia-marquez",
+  "gnostic-techno",
+  "homeric",
+  "kafkaesque",
+  "murakami",
+  "mystic-baroque",
+  "psalmic",
+  "pynchon",
+  "tarkovsky",
+];
+
+const FORMS: { value: string; label: string }[] = [
+  { value: "prose",       label: "Prose (one paragraph)" },
+  { value: "short-story", label: "Short story (2–4 paragraphs)" },
+  { value: "poem",        label: "Poem (free verse)" },
+  { value: "myth",        label: "Myth (cosmic / etiological)" },
+  { value: "incantation", label: "Incantation (ritual / 2nd-person)" },
+  { value: "vignette",    label: "Vignette (single held scene)" },
 ];
 
 interface ModelsResp { cloudflare: Record<string, string>; }
@@ -27,10 +51,15 @@ export function StoryGenerator() {
   const language = useSidebar((s) => s.storyLanguage);
   const pov = useSidebar((s) => s.storyPov);
   const tense = useSidebar((s) => s.storyTense);
+  const form = useSidebar((s) => s.storyForm);
   const length = useSidebar((s) => s.storyLengthWords);
   const temperature = useSidebar((s) => s.storyTemperature);
   const topP = useSidebar((s) => s.storyTopP);
   const positiveOnly = useSidebar((s) => s.storyPositiveOnly);
+  const anchor = useSidebar((s) => s.storyAnchor);
+  const motifDensity = useSidebar((s) => s.storyMotifDensity);
+  const motifSource = useSidebar((s) => s.storyMotifSource);
+  const symbols = useSidebar((s) => s.symbols);
   const storyResult = useSidebar((s) => s.storyResult);
   const storyError = useSidebar((s) => s.storyError);
   const set = useSidebar((s) => s.set);
@@ -55,10 +84,14 @@ export function StoryGenerator() {
         language,
         pov,
         tense,
+        form,
         length_words: length,
         temperature,
         top_p: topP,
         positive_delta_only: positiveOnly,
+        anchor_archetype: anchor || null,
+        motif_density: motifDensity,
+        motif_source: motifSource,
         delta_params,
       });
     },
@@ -111,6 +144,29 @@ export function StoryGenerator() {
           <Slider label="Length (words)" value={length} min={80} max={500} step={10}
             onChange={(v) => set("storyLengthWords", Math.round(v))}
             help="Target word count. The prompt asks for length≈[low, high] = target ± 40 words. Longer stories get more motifs woven in but also drift more." />
+          <Select label="Form" value={form} onChange={(v) => set("storyForm", v as any)}
+            options={FORMS}
+            help="Output shape — separate from Tone (register/style). Prose = one paragraph. Short story = 2–4 paragraphs with a turn. Poem = line breaks and stanzas. Myth = cosmic/etiological. Incantation = ritual repetition with 2nd-person address. Vignette = a single held scene." />
+        </Section>
+
+        <Section title="Anchor & Motifs" defaultOpen>
+          <Select label="Anchor archetype" value={anchor} onChange={(v) => set("storyAnchor", v)}
+            options={[
+              { value: "",     label: "— none —" },
+              { value: "auto", label: "(auto) top-ranked under current context" },
+              ...symbols.map((s) => ({ value: s, label: s })),
+            ]}
+            help="Pin one archetype as the story's center. 'auto' picks whichever symbol scored highest in the Ranked Archetypes panel for the current context. A specific symbol forces the story to embody it regardless of ranking. None = no anchor line in the prompt." />
+          <Slider label="Motif density" value={motifDensity} min={4} max={24} step={1}
+            onChange={(v) => set("storyMotifDensity", Math.round(v))}
+            help="How many motif words the prompt explicitly asks the model to weave in. More = richer texture but harder for the LLM to integrate naturally. 8–14 is the sweet spot." />
+          <Select label="Motif source" value={motifSource} onChange={(v) => set("storyMotifSource", v as any)}
+            options={[
+              { value: "delta-graph",   label: "Δ-graph nodes (relational shift)" },
+              { value: "top-attention", label: "Top-attention descriptors (sharp focus)" },
+              { value: "mixed",         label: "Mixed (half-and-half)" },
+            ]}
+            help="Where motif words come from. Δ-graph = words from descriptor pairs whose similarity changed most under context (the relational view). Top-attention = the descriptors most strongly aligned with the context for the anchor (or top-ranked) symbol — sharper, less 'movement'-driven. Mixed interleaves both." />
         </Section>
 
         <Section title="Atmosphere" defaultOpen>
