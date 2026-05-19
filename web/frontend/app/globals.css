@@ -79,6 +79,13 @@
   text-align: center;
   overflow: visible;
 }
+@media (max-width: 767px) {
+  /* phones: tighter header so the title doesn't crowd out the controls */
+  .delyrism-header { padding: 1rem 0 1.4rem; }
+  .delyrism-title  { font-size: clamp(2rem, 11vw, 3rem) !important; letter-spacing: 0.14em; }
+  .delyrism-subtitle { font-size: 0.7rem; letter-spacing: 0.3em; }
+  .drip-container { height: 40px; }
+}
 .delyrism-title-container {
   position: relative;
   display: inline-block;
