@@ -124,8 +124,56 @@ def _resize_image_bytes(blob: bytes, max_side: int) -> bytes:
         return blob  # best-effort — fall through with the original bytes
 
 
+def _cf_vision_url(account_id: str, model: str) -> str:
+    """Native CF /ai/run/ URL (with optional AI Gateway prefix)."""
+    gateway = os.environ.get("CLOUDFLARE_GATEWAY_ID")
+    if gateway:
+        return f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai/{model}"
+    return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
+
+
+def _cf_headers(api_token: str) -> dict:
+    h = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
+    gateway = os.environ.get("CLOUDFLARE_GATEWAY_ID")
+    if gateway:
+        gtok = os.environ.get("CLOUDFLARE_GATEWAY_TOKEN")
+        if gtok:
+            h["cf-aig-authorization"] = f"Bearer {gtok}"
+    return h
+
+
+def _cf_extract_text(data: dict) -> str:
+    """CF vision responses come back as either {success, result} where result
+    is a string OR {success, result:{response: "..."}}. Be defensive."""
+    if not isinstance(data, dict):
+        return ""
+    result = data.get("result")
+    if isinstance(result, str):
+        return result.strip()
+    if isinstance(result, dict):
+        for key in ("response", "description", "text", "output"):
+            v = result.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    # OpenAI-compat fallback (in case CF starts routing through that shape)
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return ""
+
+
 def _call_cloudflare_vision(image_b64: str, prompt: str, model: str) -> str:
-    """One-shot call to a CF vision LLM, returns the model's text response."""
+    """One-shot call to a CF vision LLM, returns the model's text response.
+
+    Uses the NATIVE /ai/run/{model} endpoint with the documented payload
+    shape: messages + image as a top-level base64 data URL.  Not the
+    OpenAI-compat /v1/chat/completions endpoint (which has different vision
+    message conventions and isn't what CF's own tutorial uses).
+
+    On a license-agreement error (first use per account), automatically
+    sends the "agree" prompt and retries the real request — so users don't
+    hit a confusing 502 on day one.
+    """
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
     if not account_id or not api_token:
@@ -133,49 +181,57 @@ def _call_cloudflare_vision(image_b64: str, prompt: str, model: str) -> str:
             status_code=500,
             detail="CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN env vars not set",
         )
-    # CF's OpenAI-compatible chat completions endpoint accepts the standard
-    # vision message format (content as an array of text + image_url parts).
-    gateway = os.environ.get("CLOUDFLARE_GATEWAY_ID")
-    if gateway:
-        url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai/v1/chat/completions"
-    else:
-        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_token}",
-        "Content-Type": "application/json",
-    }
-    if gateway:
-        gtok = os.environ.get("CLOUDFLARE_GATEWAY_TOKEN")
-        if gtok:
-            headers["cf-aig-authorization"] = f"Bearer {gtok}"
+    url = _cf_vision_url(account_id, model)
+    headers = _cf_headers(api_token)
     payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                ],
-            }
-        ],
+        "messages": [{"role": "user", "content": prompt}],
+        "image": f"data:image/jpeg;base64,{image_b64}",
         "max_tokens": 300,
         "temperature": 0.5,
     }
+
+    def _post(p):
+        try:
+            r = requests.post(url, json=p, headers=headers, timeout=60)
+        except requests.RequestException as e:
+            raise HTTPException(status_code=502, detail=f"Cloudflare vision call failed: {e}")
+        return r
+
+    r = _post(payload)
+    if r.status_code >= 400:
+        body = r.text[:500]
+        # First-use license dance for Llama-3.2-Vision: CF returns a 4xx with
+        # the word "license"/"agreement" in the body; one "agree" call unblocks
+        # all future requests for this account.
+        if any(k in body.lower() for k in ("license", "agreement", "terms", "policy")):
+            try:
+                _post({"prompt": "agree"})
+            except Exception:
+                pass
+            r = _post(payload)
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Cloudflare vision error {r.status_code}: {body}",
+            )
+
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=60)
-        r.raise_for_status()
         data = r.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Cloudflare vision call failed: {e}")
-    # OpenAI-compatible response shape
-    try:
-        return data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
+    except ValueError:
+        raise HTTPException(status_code=502, detail=f"Cloudflare vision: non-JSON response ({r.text[:200]})")
+
+    if not data.get("success", True):
+        raise HTTPException(status_code=502, detail=f"Cloudflare vision error: {data.get('errors')}")
+
+    text = _cf_extract_text(data)
+    if not text:
+        # Surface the actual payload to make debugging tractable instead of
+        # a generic 502 with a bare message.
         raise HTTPException(
             status_code=502,
-            detail=f"Unexpected Cloudflare response shape: {str(data)[:300]}",
+            detail=f"Cloudflare vision returned no text. Raw response: {str(data)[:400]}",
         )
+    return text
 
 
 @router.post("/encode-image", response_model=EncodeImageResponse)
