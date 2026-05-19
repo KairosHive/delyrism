@@ -45,8 +45,8 @@ A semantic engine for exploring symbolic relationships through **context-conditi
 - **Multi-Language**: Generate in English, French, or Spanish
 - **Auto-Prompt**: Extract motifs from delta graph for narrative seeds
 
-### 🏗️ Egregore - Archetype Miner
-- **Unsupervised Discovery**: Mine archetypes from PDFs, images, or raw text
+### 🏗️ Egregore - Archetype Builder
+- **Unsupervised Composition**: Compose archetypes from PDFs, images, or raw text
 - **Semantic Clustering**: HDBSCAN + UMAP for pattern detection
 - **LLM Refinement**: Optional GPT-based naming and descriptor extraction
 - **Interactive Builder**: Visual space exploration with cluster selection
@@ -80,7 +80,7 @@ For Railway deployment see [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md).
 ### 1️⃣ Define Your Symbol Space
 - **Upload JSON**: Load a pre-defined `{symbol: [descriptors...]}` structure
 - **Use Presets**: Start with included sets (Elements, Chakras, Jungian, etc.)
-- **Mine New Archetypes**: Use Egregore to discover symbols from your corpus
+- **Compose New Archetypes**: Use Egregore to gather symbols from your corpus
 
 ### 2️⃣ Choose Embedding Backend
 - **Qwen3** (recommended): Fast, high-quality embeddings with optional context prompting
@@ -387,7 +387,7 @@ fig = plot_delta_graph(G, space, palette="Nord")
 ### 3. Cultural Studies & Semiotics
 - Analyze how cultural contexts shift symbolic meanings
 - Compare symbol systems across languages/cultures
-- Mine archetypes from historical texts or image corpora
+- Compose archetypes from historical texts or image corpora
 - Visualize semantic evolution over time
 
 ### 4. Music & Audio Analysis
@@ -425,7 +425,7 @@ fig = plot_delta_graph(G, space, palette="Nord")
 - Increase `descriptor_threshold` to 0.25–0.3
 - Use `connected_only=True` in delta graph
 - Apply `symbol_filter` to focus on subsets
-- Consider mining sub-spaces with Egregore
+- Consider composing sub-spaces with Egregore
 
 ---
 
@@ -454,7 +454,7 @@ Pillow >= 9.0          # for image handling
 streamlit-mic-recorder  # for live audio recording
 ```
 
-### For Egregore (archetype mining)
+### For Egregore (archetype composition)
 ```
 hdbscan >= 0.8
 PyPDF2 or pypdf        # for PDF parsing

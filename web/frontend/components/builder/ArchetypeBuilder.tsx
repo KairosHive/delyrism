@@ -4,11 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 
-interface MinerInfo { url: string; available: boolean; }
+interface BuilderInfo { url: string; available: boolean; }
 
 export function ArchetypeBuilder() {
   const set = useSidebar((s) => s.set);
-  const info = useQuery({ queryKey: ["miner"], queryFn: () => api.get<MinerInfo>("/miner") });
+  const info = useQuery({ queryKey: ["builder"], queryFn: () => api.get<BuilderInfo>("/builder") });
   const [imported, setImported] = React.useState<string | null>(null);
 
   async function importFromText(text: string) {
@@ -27,7 +27,7 @@ export function ArchetypeBuilder() {
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.5fr,1fr]">
       <div className="panel p-0 overflow-hidden">
         <div className="flex items-center justify-between border-b border-ink-700/60 px-4 py-2.5">
-          <div className="section-title">Egregore · real-time miner</div>
+          <div className="section-title">Egregore · real-time archetype builder</div>
           {info.data && (
             <a
               className="text-xs text-accent-300 hover:underline"
@@ -44,7 +44,7 @@ export function ArchetypeBuilder() {
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
           />
         ) : (
-          <div className="p-6 text-sm text-ink-300">Connecting to miner…</div>
+          <div className="p-6 text-sm text-ink-300">Connecting to the builder service…</div>
         )}
       </div>
       <div className="space-y-3">
@@ -70,9 +70,9 @@ export function ArchetypeBuilder() {
         <div className="panel-pad text-xs text-ink-300 space-y-2">
           <div className="section-title text-ink-100">Notes</div>
           <p>
-            Egregore is the existing FastAPI miner (lives at{" "}
+            Egregore is the companion FastAPI builder service (lives at{" "}
             <code className="font-mono text-accent-300">{info.data?.url ?? "EGREGORE_URL"}</code>).
-            Real-time mining, clustering and LLM refinement happen there; once you have a
+            Real-time composition, clustering and LLM refinement happen there; once you have a
             satisfying archetype set, export the JSON and paste it here to drop straight into
             the Explorer.
           </p>

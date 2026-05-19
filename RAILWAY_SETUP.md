@@ -32,7 +32,7 @@ No build-command, start-command or root-directory overrides needed.
 | `CLOUDFLARE_API_TOKEN`    | Same                                      |
 | `CLOUDFLARE_GATEWAY_ID`   | (optional) Cloudflare AI Gateway proxy    |
 | `CLOUDFLARE_GATEWAY_TOKEN`| (optional) AI Gateway auth                |
-| `EGREGORE_URL`            | (optional) URL of an Egregore miner       |
+| `EGREGORE_URL`            | (optional) URL of an Egregore builder     |
 | `CORS_ORIGINS`            | Unused in single-service mode             |
 
 If you skip the Cloudflare vars the Cloudflare embedder dropdown will
@@ -41,10 +41,10 @@ sidebar for offline operation.
 
 ---
 
-## (Optional) Egregore — real-time miner
+## (Optional) Egregore — real-time builder
 
 Egregore is only needed for the *Archetype Builder* tab's real-time
-PDF/image mining flow.  The rest of the explorer works without it.
+PDF/image composition flow.  The rest of the explorer works without it.
 
 1. **+ New Service** → same repo.
 2. **Settings → Build → Nixpacks Config Path**: `egregore.nixpacks.toml`
@@ -117,7 +117,7 @@ docker run --rm -p 8000:8000 \
   │     /spaces        /propose         /attention              │
   │     /reduce-2d     /shift           /delta-graph            │
   │     /subgraph      /similarity      /context/*              │
-  │     /story/*       /miner           /backends               │
+  │     /story/*       /builder         /backends               │
   │     /healthz       /api                                     │
   │                                                             │
   │   ↓  (everything else)                                      │

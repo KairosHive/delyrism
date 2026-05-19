@@ -3,18 +3,18 @@ import * as React from "react";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { Explorer } from "@/components/explorer/Explorer";
 import { StoryGenerator } from "@/components/story/StoryGenerator";
-import { ArchetypeBuilder } from "@/components/miner/ArchetypeBuilder";
+import { ArchetypeBuilder } from "@/components/builder/ArchetypeBuilder";
 import { Title } from "@/components/header/Title";
 import { Console } from "@/components/header/Console";
 import { TimingBadge } from "@/components/debug/TimingBadge";
 import { useSidebar } from "@/lib/store";
 
-type TabId = "explorer" | "story" | "miner";
+type TabId = "explorer" | "story" | "builder";
 
 const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "explorer", label: "Explorer",          hint: "context-conditioned embeddings" },
   { id: "story",    label: "Story Generator",   hint: "weave motifs into micro-fiction" },
-  { id: "miner",    label: "Archetype Builder", hint: "mine new symbol sets" },
+  { id: "builder",  label: "Archetype Builder", hint: "compose new symbol sets" },
 ];
 
 export default function Home() {
@@ -61,7 +61,7 @@ export default function Home() {
         <section className="flex-1 px-8 pb-10 pt-6">
           {tab === "explorer" && <Explorer />}
           {tab === "story" && <StoryGenerator />}
-          {tab === "miner" && <ArchetypeBuilder />}
+          {tab === "builder" && <ArchetypeBuilder />}
         </section>
       </main>
       <TimingBadge />

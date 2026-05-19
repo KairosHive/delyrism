@@ -36,7 +36,7 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
 # open http://localhost:3000
 ```
 
-### 3. (Optional) Egregore miner
+### 3. (Optional) Egregore builder
 
 ```bash
 uvicorn miner_server:app --port 8765 --app-dir delyrism
@@ -87,7 +87,8 @@ POST /context/encode-audio    embed an uploaded audio file (CLAP/AudioCLIP)
 POST /context/set-override    push an external context vector into the space
 POST /story/generate          Cloudflare Workers AI story generation
 GET  /story/models            list supported provider models
-GET  /miner                   Egregore service URL for the frontend iframe
+GET  /builder                 Egregore service URL for the frontend iframe
+GET  /miner                   (legacy alias for /builder)
 GET  /backends                embedder catalog for the sidebar dropdown
 GET  /healthz                 health probe
 ```
