@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..schemas import StoryRequest, StoryResponse, DeltaGraphRequest
 from .. import engine_cache
+from ..tone_presets import build_tone_extras
 from delyrism import context_delta_graph
 
 router = APIRouter(prefix="/story", tags=["story"])
@@ -96,9 +97,17 @@ def _build_prompt(
               "es": ("Contexto", "Motivos a entretejer (úsalos explícitamente)")}[lang_code]
     ctx_line = f"{labels[0]}: {context_sentence.strip()}" if (context_sentence and context_sentence.strip()) else f"{labels[0]}: (—)"
     motif_line = f"{labels[1]}: " + (", ".join(motifs[:12]) if motifs else "—")
+
+    # Append per-tone style directives, avoid-lists and lexicons.  Without
+    # these the LLM only sees a bare label like "tone=pynchon" and falls
+    # back to its own stale caricature of the author — that's why every
+    # Pynchon story was starting with "As she navigates the labyrinthine".
+    extras = build_tone_extras(tone, lang_code)
+    extras_block = ("\n" + "\n".join(extras)) if extras else ""
+
     return [
         {"role": "system", "content": sys_by_lang[lang_code]},
-        {"role": "user", "content": f"{ctx_line}\n{motif_line}\nConstraints: {style}"},
+        {"role": "user", "content": f"{ctx_line}\n{motif_line}\nConstraints: {style}{extras_block}"},
     ]
 
 
