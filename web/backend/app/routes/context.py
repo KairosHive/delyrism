@@ -85,17 +85,15 @@ class SetOverrideRequest(BaseModel):
 
 DEFAULT_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
 
-# The prompt is tuned to delyrism's purpose — surface archetypal qualities,
-# mythic resonance, emotional register, symbolic motifs.  This is what gets
-# embedded; it's NOT a generic caption.
+# Plain descriptive prompt — the downstream pipeline (text embedder +
+# symbol PPR) is what does the archetypal mapping.  We just want a clean,
+# faithful description so that mapping has good signal to work from.
 DEFAULT_VISION_PROMPT = (
-    "You are a symbolic image reader. Render this image as a short, vivid "
-    "paragraph (2–4 sentences) that captures its archetypal qualities, "
-    "mythic resonance, emotional register, and symbolic motifs. Focus on "
-    "the inner field the image opens — what kinds of myths, dreams, or "
-    "elemental forces it evokes — rather than literal surface details "
-    "(brand names, furniture, exact colors). Flow as image. No analysis "
-    "or lists."
+    "Describe this image in 2–4 sentences. Cover the subjects and what "
+    "they are doing, the setting, the lighting and color palette, the "
+    "overall mood, and any notable objects, textures, or composition "
+    "details. Be concrete and faithful to what is visible. No "
+    "interpretation, no symbolism, no lists."
 )
 
 
