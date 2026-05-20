@@ -6,6 +6,7 @@ import { StoryGenerator } from "@/components/story/StoryGenerator";
 import { ArchetypeBuilder } from "@/components/builder/ArchetypeBuilder";
 import { Title } from "@/components/header/Title";
 import { Console } from "@/components/header/Console";
+import { BuildButton } from "@/components/header/BuildButton";
 import { TimingBadge } from "@/components/debug/TimingBadge";
 import { useSidebar } from "@/lib/store";
 
@@ -77,6 +78,7 @@ export default function Home() {
 
         <div className="px-3 pb-2 md:px-8">
           <Console />
+          <BuildButton />
         </div>
 
         <Tabs tab={tab} setTab={setTab} />
