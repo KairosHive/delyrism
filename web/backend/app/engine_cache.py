@@ -310,6 +310,50 @@ def invalidate_results(space_id: str) -> None:
         for k in list(_result_cache.keys()):
             if k.startswith(f"{space_id}:"):
                 _result_cache.pop(k, None)
+    # Shift-matrix cache is also keyed on (space_id, params) and depends on
+    # context_override via ctx_vec — same invalidation contract.
+    with _shift_lock:
+        for k in list(_shift_cache.keys()):
+            if k.startswith(f"{space_id}:"):
+                _shift_cache.pop(k, None)
+
+
+# ---- shifted-matrix cache ---------------------------------------------------
+# /shift, /delta-graph, /similarity, /similarity-symbols, /shift-spectrum all
+# call SymbolSpace.make_shifted_matrix with the same params on every keystroke
+# (after the debounced textarea settles, all five panels refire in parallel).
+# Without sharing they each recompute the same N×d matrix.  Cheap for `gate`
+# strategy but the per-endpoint duplicated work still costs ~5×.  For
+# `reembed` / `hybrid` it's N encoder calls × 5 endpoints = catastrophic.
+#
+# Cache a numpy ndarray keyed on the shift params.  Same invalidation rules
+# as the result memo (cleared when context_override changes).
+
+_shift_cache: Dict[str, Any] = {}
+_shift_lock = threading.Lock()
+_SHIFT_CACHE_MAX = 64  # ~50 MB at d=1024, N=400, float32
+
+
+def get_or_compute_shifted_matrix(space_id: str, space, params: Dict[str, Any]):
+    """Return the cached D' for these exact params, or compute + memoize.
+
+    `params` is the kwargs dict for SymbolSpace.make_shifted_matrix —
+    weights / sentence / strategy / beta / gate / tau / etc.  Keying on the
+    full dict means any change in any param invalidates the cache; identical
+    payloads collapse onto one computation.
+    """
+    key = f"{space_id}:shift:{_hash(params)}"
+    with _shift_lock:
+        cached = _shift_cache.get(key)
+        if cached is not None:
+            return cached
+    D = space.make_shifted_matrix(**params)
+    with _shift_lock:
+        if len(_shift_cache) > _SHIFT_CACHE_MAX:
+            for k in list(_shift_cache.keys())[: _SHIFT_CACHE_MAX // 4]:
+                _shift_cache.pop(k, None)
+        _shift_cache[key] = D
+    return D
 
 
 def cache_stats() -> Dict[str, int]:

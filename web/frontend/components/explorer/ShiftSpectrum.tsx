@@ -148,22 +148,21 @@ function AxisRow({
 }) {
   const pct = Math.max(2, Math.min(100, (axis.sigma / Math.max(topSigma, 1e-9)) * 100));
 
-  // Dominant archetypes for this axis — those whose |alignment| crosses a
-  // light threshold.  Up to 2 strong ones surfaced inline; everything else
-  // is in the tooltip.
-  const dom = axis.archetype_profile
-    .filter((p) => Math.abs(p.alignment) >= 0.2)
-    .slice(0, 2);
-  // Direction read off the top alignment's sign — positive means the axis
-  // points toward that archetype, negative means descriptors of that owner
-  // are moving the other way.
-  const sign = dom[0] ? Math.sign(dom[0].alignment) : 0;
-  const movers: SpectrumMoverEntry[] = sign >= 0 ? axis.positive_movers : axis.negative_movers;
+  // In archetype-space SVD, profile entries are signed coefficients of the
+  // axis itself.  Positive = the archetype is on the + side of the axis
+  // (descriptors with positive U[i,k] move toward it).  Negative = on the
+  // − side.  An axis with both signs IS a contrast — show both poles.
+  const sorted = [...axis.archetype_profile].sort(
+    (a, b) => Math.abs(b.alignment) - Math.abs(a.alignment),
+  );
+  const positives = sorted.filter((p) => p.alignment > 0.2).slice(0, 2);
+  const negatives = sorted.filter((p) => p.alignment < -0.2).slice(0, 2);
+  const isContrast = positives.length > 0 && negatives.length > 0;
 
   return (
-    <div className="flex items-center gap-2 text-[11px]">
-      <div className="w-12 shrink-0 font-mono text-ink-400">axis {idx + 1}</div>
-      <div className="h-2 w-24 shrink-0 overflow-hidden rounded-full bg-ink-800">
+    <div className="flex items-start gap-2 py-1 text-[11px]">
+      <div className="w-12 shrink-0 pt-0.5 font-mono text-ink-400">axis {idx + 1}</div>
+      <div className="mt-1 h-2 w-24 shrink-0 overflow-hidden rounded-full bg-ink-800">
         <div
           className="h-full rounded-full"
           style={{
@@ -172,43 +171,114 @@ function AxisRow({
           }}
         />
       </div>
-      <div className="font-mono text-[10px] tabular-nums text-ink-400">{axis.sigma.toFixed(2)}</div>
+      <div className="pt-0.5 font-mono text-[10px] tabular-nums text-ink-400">
+        {axis.sigma.toFixed(2)}
+      </div>
 
-      <div className="ml-2 flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-        <span className="text-ink-400">→</span>
-        {dom.length === 0 ? (
-          <span className="text-ink-500">no clear archetype</span>
-        ) : (
-          dom.map((p, i) => (
-            <React.Fragment key={p.symbol}>
+      <div className="ml-2 flex min-w-0 flex-1 flex-col gap-0.5">
+        {/* archetype contrast line */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {positives.length === 0 && negatives.length === 0 && (
+            <span className="text-ink-500">no clear contrast</span>
+          )}
+          {positives.map((p, i) => (
+            <React.Fragment key={"p" + p.symbol}>
               {i > 0 && <span className="text-ink-500">+</span>}
-              <span
-                className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium"
-                style={{
-                  color: colorMap[p.symbol] ?? "#cbd",
-                  borderColor: (colorMap[p.symbol] ?? "#888") + "55",
-                  background: (colorMap[p.symbol] ?? "#888") + "12",
-                }}
-                title={`alignment ${(p.alignment * 100).toFixed(0)}%`}
-              >
-                {p.symbol}
-              </span>
+              <ArchChip p={p} colorMap={colorMap} />
             </React.Fragment>
-          ))
-        )}
-        {movers.length > 0 && (
-          <span className="ml-1 truncate text-ink-300">
-            <span className="text-ink-500">·&nbsp;</span>
-            {movers.slice(0, 4).map((m, i) => (
-              <React.Fragment key={m.descriptor}>
-                {i > 0 && <span className="text-ink-600">, </span>}
-                <span style={{ color: colorMap[m.symbol] ?? "#cbd" }}>{m.descriptor}</span>
-              </React.Fragment>
-            ))}
-          </span>
-        )}
+          ))}
+          {isContrast && (
+            <span className="px-0.5 text-ink-500">vs</span>
+          )}
+          {negatives.map((p, i) => (
+            <React.Fragment key={"n" + p.symbol}>
+              {i > 0 && <span className="text-ink-500">+</span>}
+              <ArchChip p={p} colorMap={colorMap} variant="against" />
+            </React.Fragment>
+          ))}
+        </div>
+        {/* movers */}
+        <Movers
+          positives={positives}
+          negatives={negatives}
+          isContrast={isContrast}
+          axis={axis}
+          colorMap={colorMap}
+        />
       </div>
     </div>
+  );
+}
+
+function ArchChip({
+  p, colorMap, variant = "toward",
+}: {
+  p: { symbol: string; alignment: number };
+  colorMap: Record<string, string>;
+  variant?: "toward" | "against";
+}) {
+  const c = colorMap[p.symbol] ?? "#888";
+  const dashed = variant === "against";
+  return (
+    <span
+      className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${dashed ? "border-dashed" : ""}`}
+      style={{
+        color: c,
+        borderColor: c + (dashed ? "88" : "55"),
+        background: c + "12",
+      }}
+      title={`signed coefficient ${(p.alignment * 100).toFixed(0)}%`}
+    >
+      {p.symbol}
+    </span>
+  );
+}
+
+function Movers({
+  positives, negatives, isContrast, axis, colorMap,
+}: {
+  positives: { symbol: string; alignment: number }[];
+  negatives: { symbol: string; alignment: number }[];
+  isContrast: boolean;
+  axis: SpectrumAxis;
+  colorMap: Record<string, string>;
+}) {
+  if (isContrast) {
+    // Bipolar axis: show + movers on the "positive" side and − movers on the
+    // "negative" side, with a thin separator.  Tells the user how the axis
+    // actually splits the descriptor cloud.
+    return (
+      <div className="grid grid-cols-2 gap-2 text-[10px] text-ink-300">
+        <MoverInline movers={axis.positive_movers} colorMap={colorMap} side="+" />
+        <MoverInline movers={axis.negative_movers} colorMap={colorMap} side="−" />
+      </div>
+    );
+  }
+  // Monopolar axis: pick the side whose archetypes are dominant.
+  const list = positives.length >= negatives.length ? axis.positive_movers : axis.negative_movers;
+  return <MoverInline movers={list} colorMap={colorMap} side="" />;
+}
+
+function MoverInline({
+  movers, colorMap, side,
+}: {
+  movers: SpectrumMoverEntry[];
+  colorMap: Record<string, string>;
+  side: string;
+}) {
+  if (movers.length === 0) {
+    return <span className="text-ink-600">—</span>;
+  }
+  return (
+    <span className="truncate text-[10px] text-ink-300">
+      {side && <span className="text-ink-500">{side}&nbsp;</span>}
+      {movers.slice(0, 4).map((m, i) => (
+        <React.Fragment key={m.descriptor}>
+          {i > 0 && <span className="text-ink-600">, </span>}
+          <span style={{ color: colorMap[m.symbol] ?? "#cbd" }}>{m.descriptor}</span>
+        </React.Fragment>
+      ))}
+    </span>
   );
 }
 
@@ -276,40 +346,59 @@ function buildHeadline(
 }
 
 function describeAxis(a: SpectrumAxis): {
-  archetypes: { symbol: string; sign: number }[];
+  positives: { symbol: string }[];
+  negatives: { symbol: string }[];
   movers: string[];
 } {
-  const dom = a.archetype_profile.filter((p) => Math.abs(p.alignment) >= 0.2).slice(0, 2);
-  const sign = dom[0] ? Math.sign(dom[0].alignment) : 0;
-  const movers = (sign >= 0 ? a.positive_movers : a.negative_movers)
-    .slice(0, 3)
-    .map((m) => m.descriptor);
-  return {
-    archetypes: dom.map((p) => ({ symbol: p.symbol, sign: Math.sign(p.alignment) })),
-    movers,
-  };
+  const sorted = [...a.archetype_profile].sort(
+    (x, y) => Math.abs(y.alignment) - Math.abs(x.alignment),
+  );
+  const positives = sorted.filter((p) => p.alignment > 0.2).slice(0, 2);
+  const negatives = sorted.filter((p) => p.alignment < -0.2).slice(0, 2);
+  // Choose the mover list whose side has more archetypal mass.
+  const list = positives.length >= negatives.length ? a.positive_movers : a.negative_movers;
+  const movers = list.slice(0, 3).map((m) => m.descriptor);
+  return { positives, negatives, movers };
 }
 
 function Phrase({
-  archetypes, movers,
+  positives, negatives, movers,
 }: {
-  archetypes: { symbol: string; sign: number }[];
+  positives: { symbol: string }[];
+  negatives: { symbol: string }[];
   movers: string[];
 }) {
   const colorMap = useSidebar((s) => s.colorMap);
+  const isContrast = positives.length > 0 && negatives.length > 0;
+
+  const renderList = (items: { symbol: string }[]) =>
+    items.map((a, i) => (
+      <React.Fragment key={a.symbol}>
+        {i > 0 && <span className="text-ink-400"> + </span>}
+        <strong style={{ color: colorMap[a.symbol] ?? "#cbd" }}>{a.symbol}</strong>
+      </React.Fragment>
+    ));
+
+  if (positives.length === 0 && negatives.length === 0) {
+    return <span className="text-ink-300">an unlabeled direction</span>;
+  }
+  if (isContrast) {
+    return (
+      <>
+        contrasting {renderList(positives)} <span className="text-ink-400">against</span>{" "}
+        {renderList(negatives)}
+        {movers.length > 0 && (
+          <>
+            {" "}
+            <span className="text-ink-400">({movers.join(", ")})</span>
+          </>
+        )}
+      </>
+    );
+  }
   return (
     <>
-      toward{" "}
-      {archetypes.length === 0 ? (
-        <span className="text-ink-300">an unlabeled direction</span>
-      ) : (
-        archetypes.map((a, i) => (
-          <React.Fragment key={a.symbol}>
-            {i > 0 && <span className="text-ink-400"> + </span>}
-            <strong style={{ color: colorMap[a.symbol] ?? "#cbd" }}>{a.symbol}</strong>
-          </React.Fragment>
-        ))
-      )}
+      toward {renderList(positives.length ? positives : negatives)}
       {movers.length > 0 && (
         <>
           {" "}
