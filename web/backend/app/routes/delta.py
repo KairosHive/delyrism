@@ -528,11 +528,20 @@ def contextual_transformations(req: TransformationsRequest) -> TransformationsRe
     - migrations: descriptors whose *nearest archetype* flipped under
       context (e.g. "ash: FIRE → WATER under quiet grief").  Each row is
       scored by (gain at destination + loss at source) and sorted desc.
+      A migration is a strict definition: argmax of cosine to centroids
+      actually changed.
     - identities: per-archetype before/after top-K descriptor lists.
-      Both lists are computed by cosine to the *original* centroid — a
-      fixed reference frame — so an archetype's "identity" under context
-      can include foreign descriptors that drifted in.  The owner field
-      preserves the descriptor's home archetype for colouring.
+      ▸ "before" = THIS archetype's home descriptors, sorted by sim to
+        its original centroid (its native prototypes).
+      ▸ "after" = ALL descriptors sorted by sim to the SHIFTED centroid
+        of this archetype.  Foreign descriptors that drifted close to
+        the new centroid show up here — without necessarily being a
+        migration (their own home archetype may still win the argmax
+        race overall).
+
+    Both lists are deduplicated by descriptor name — presets sometimes
+    list the same word under multiple archetypes, which would otherwise
+    produce literal duplicates in the displayed lists.
     """
     space = _require(req.space_id)
     key = engine_cache.memo_key(req.space_id, "transformations", req.model_dump(exclude={"space_id"}))
@@ -579,7 +588,11 @@ def contextual_transformations(req: TransformationsRequest) -> TransformationsRe
     owners = [space.owner.get(d, "") for d in descriptor_names]
 
     # ── migrations ──
-    migrations: list[MigrationEntry] = []
+    # Dedupe by (name, from, to) — when the preset lists the same word under
+    # multiple archetypes, each row migrates independently but the user
+    # doesn't want to see "memory · EARTH → AIR" twice.  Keep the highest-
+    # scoring instance for each unique triple.
+    seen_migrations: dict[tuple[str, str, str], MigrationEntry] = {}
     for i, d in enumerate(descriptor_names):
         if int(nearest_before[i]) == int(nearest_after[i]):
             continue
@@ -590,7 +603,8 @@ def contextual_transformations(req: TransformationsRequest) -> TransformationsRe
         score = gain + loss
         if score < float(req.min_migration_score):
             continue
-        migrations.append(MigrationEntry(
+        triple = (d, symbols[from_idx], symbols[to_idx])
+        entry = MigrationEntry(
             descriptor=d,
             from_archetype=symbols[from_idx],
             to_archetype=symbols[to_idx],
@@ -599,37 +613,73 @@ def contextual_transformations(req: TransformationsRequest) -> TransformationsRe
             sim_after_from=float(sims_after[i, from_idx]),
             sim_after_to=float(sims_after[i, to_idx]),
             score=score,
-        ))
-    migrations.sort(key=lambda m: -m.score)
-    migrations = migrations[:25]
+        )
+        prev = seen_migrations.get(triple)
+        if prev is None or entry.score > prev.score:
+            seen_migrations[triple] = entry
+    migrations = sorted(seen_migrations.values(), key=lambda m: -m.score)[:25]
 
     # ── identity cards ──
+    # "before" = home descriptors of this archetype, sorted by sim to its
+    # original centroid (native prototypes).  "after" = ALL descriptors
+    # sorted by sim to the SHIFTED centroid (the new prototypes of this
+    # archetype-under-context, foreign drifters welcome).  Dedupe by name.
     K = max(1, int(req.topk))
     identities: list[ArchetypeIdentityCard] = []
     for s_idx, sym in enumerate(symbols):
-        before_order = np.argsort(-sims_before[:, s_idx])[:K]
-        after_order = np.argsort(-sims_after[:, s_idx])[:K]
+        home_indices = [i for i, o in enumerate(owners) if o == sym]
 
-        before_list = [
-            IdentityEntry(
-                descriptor=descriptor_names[i],
-                owner=owners[i],
-                score=float(sims_before[i, s_idx]),
-            )
-            for i in before_order
-        ]
-        after_list = [
-            IdentityEntry(
-                descriptor=descriptor_names[i],
-                owner=owners[i],
-                score=float(sims_after[i, s_idx]),
-            )
-            for i in after_order
-        ]
+        # ── before: home descriptors only, deduped by name ──
+        if home_indices:
+            home_sims = sims_before[home_indices, s_idx]
+            home_order = np.argsort(-home_sims)
+        else:
+            home_order = np.array([], dtype=int)
+        seen_b: set[str] = set()
+        before_list: list[IdentityEntry] = []
+        for j in home_order:
+            idx = home_indices[int(j)]
+            name = descriptor_names[idx]
+            if name in seen_b:
+                continue
+            seen_b.add(name)
+            before_list.append(IdentityEntry(
+                descriptor=name,
+                owner=owners[idx],
+                score=float(sims_before[idx, s_idx]),
+            ))
+            if len(before_list) >= K:
+                break
+
+        # ── after: shifted centroid, all descriptors, deduped by name ──
+        if home_indices:
+            c_after = D_after[home_indices].mean(axis=0)
+            n = float(np.linalg.norm(c_after))
+            c_after_unit = c_after / n if n > 1e-9 else cents[s_idx]
+        else:
+            c_after_unit = cents[s_idx]
+        sims_after_shifted = D_after @ c_after_unit  # N
+        after_order = np.argsort(-sims_after_shifted)
+        seen_a: set[str] = set()
+        after_list: list[IdentityEntry] = []
+        for j in after_order:
+            idx = int(j)
+            name = descriptor_names[idx]
+            if name in seen_a:
+                continue
+            seen_a.add(name)
+            after_list.append(IdentityEntry(
+                descriptor=name,
+                owner=owners[idx],
+                score=float(sims_after_shifted[idx]),
+            ))
+            if len(after_list) >= K:
+                break
+
         before_set = {e.descriptor for e in before_list}
         after_set = {e.descriptor for e in after_list}
-        emerged = [descriptor_names[i] for i in after_order if descriptor_names[i] not in before_set]
-        faded = [descriptor_names[i] for i in before_order if descriptor_names[i] not in after_set]
+        emerged = [e.descriptor for e in after_list if e.descriptor not in before_set]
+        faded = [e.descriptor for e in before_list if e.descriptor not in after_set]
 
         identities.append(ArchetypeIdentityCard(
             symbol=sym,

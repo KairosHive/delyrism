@@ -217,8 +217,17 @@ function IdentityGrid({
 }) {
   return (
     <div>
-      <div className="mb-1.5 text-[10px] uppercase tracking-widest text-ink-400">
+      <div
+        className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-ink-400"
+        title={
+          "originally = this archetype's home descriptors, sorted by similarity to its original centroid.\n" +
+          "under context = ALL descriptors sorted by similarity to the SHIFTED centroid (where this archetype lives now).\n" +
+          "Foreign descriptors (other archetype colours) can appear in 'under context' WITHOUT being a migration — " +
+          "they're close to this archetype now but their own home archetype may still win the argmax race overall."
+        }
+      >
         What each archetype looks like now
+        <span className="text-ink-600">ⓘ</span>
       </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {identities.map((card) => (
@@ -261,6 +270,7 @@ function IdentityCard({
               <DescriptorLine
                 key={e.descriptor}
                 entry={e}
+                cardArchetype={card.symbol}
                 colorMap={colorMap}
                 strike={fadedSet.has(e.descriptor)}
               />
@@ -276,6 +286,7 @@ function IdentityCard({
               <DescriptorLine
                 key={e.descriptor}
                 entry={e}
+                cardArchetype={card.symbol}
                 colorMap={colorMap}
                 emerged={emergedSet.has(e.descriptor)}
               />
@@ -315,22 +326,25 @@ function IdentityCard({
 }
 
 function DescriptorLine({
-  entry, colorMap, strike = false, emerged = false,
+  entry, cardArchetype, colorMap, strike = false, emerged = false,
 }: {
   entry: IdentityEntry;
+  cardArchetype: string;
   colorMap: Record<string, string>;
   strike?: boolean;
   emerged?: boolean;
 }) {
   // Colour by HOME archetype.  When a foreign descriptor shows up in
-  // another card, its colour gives it away — that's the whole point.
+  // another card, its colour gives it away — and we tag it with a
+  // small "← HOME" pill so the relationship is unambiguous.
   const c = colorMap[entry.owner] ?? "#cbd";
+  const isForeign = entry.owner && entry.owner !== cardArchetype;
   return (
     <li className="flex items-center gap-1 leading-tight">
       {emerged && (
         <span
           className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-accent-400"
-          title="new in top under this context"
+          title="new top descriptor under this context"
         />
       )}
       <span
@@ -339,6 +353,19 @@ function DescriptorLine({
       >
         {entry.descriptor}
       </span>
+      {isForeign && !strike && (
+        <span
+          className="shrink-0 rounded border px-1 text-[8px] font-medium uppercase tracking-wider"
+          style={{
+            color: c,
+            borderColor: c + "55",
+            background: c + "0d",
+          }}
+          title={`home archetype: ${entry.owner}`}
+        >
+          {entry.owner}
+        </span>
+      )}
       <span className="ml-auto shrink-0 font-mono text-[9px] tabular-nums text-ink-500">
         {entry.score.toFixed(2)}
       </span>
