@@ -198,6 +198,11 @@ export interface SpectrumAxis {
 }
 
 export interface ShiftSpectrumResponse {
+  // Rank-1 component of the shift in archetype space — same info as
+  // the rankings panel ("where does context pull on average").
+  mean_shift: SpectrumProfileEntry[];
+  // Singular values / axes of the *residual* (mean-subtracted) shift —
+  // patterns of differential motion across descriptors.
   sigma: number[];
   axes: SpectrumAxis[];
   dominance_ratio: number | null;

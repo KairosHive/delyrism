@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, ShiftSpectrumResponse, SpectrumAxis, SpectrumMoverEntry } from "@/lib/api";
+import { api, ShiftSpectrumResponse, SpectrumAxis, SpectrumMoverEntry, SpectrumProfileEntry } from "@/lib/api";
 import { useSidebar, buildContextWeights } from "@/lib/store";
 
 /**
@@ -75,7 +75,7 @@ export function ShiftSpectrum() {
             )}
           </div>
           <div className="text-[11px] text-ink-400">
-            how many independent directions of pull does this context have?
+            primary pull + how context affects different descriptors differently
           </div>
         </div>
       </div>
@@ -99,43 +99,89 @@ function SpectrumContent({
   data: ShiftSpectrumResponse;
   colorMap: Record<string, string>;
 }) {
-  const headline = buildHeadline(data, colorMap);
   const topSigma = data.axes[0]?.sigma ?? 1;
+  const meanDominant = topMeanArchetypes(data.mean_shift);
+  const subKind = classifySub(data);
 
   return (
     <div className="space-y-3">
-      {/* ── one-line narrative ── */}
+      {/* ── primary pull (mean shift) ── */}
       <div className="rounded-lg border border-ink-700/60 bg-ink-900/40 p-3 leading-relaxed">
         <div className="mb-0.5 text-[10px] uppercase tracking-widest text-ink-400">
-          {headline.kind}
+          Primary pull · what the rankings panel sees
         </div>
-        <div className="text-sm text-ink-100">{headline.sentence}</div>
+        <div className="text-sm text-ink-100">
+          {meanDominant.length === 0 ? (
+            <span className="text-ink-400">no net pull — context-orthogonal to every archetype</span>
+          ) : (
+            <>
+              context pulls everything toward{" "}
+              {meanDominant.map((p, i) => (
+                <React.Fragment key={p.symbol}>
+                  {i > 0 && <span className="text-ink-400"> + </span>}
+                  <strong style={{ color: colorMap[p.symbol] ?? "#cbd" }}>{p.symbol}</strong>
+                </React.Fragment>
+              ))}
+            </>
+          )}
+        </div>
       </div>
 
-      {/* ── stacked σ-bars with inline archetype + mover labels ── */}
-      <div className="space-y-1.5">
-        {data.axes.map((ax, i) => (
-          <AxisRow
-            key={i}
-            idx={i}
-            axis={ax}
-            topSigma={topSigma}
-            colorMap={colorMap}
-          />
-        ))}
+      {/* ── differential / residual structure ── */}
+      <div>
+        <div className="mb-1.5 text-[10px] uppercase tracking-widest text-ink-400">
+          Beyond that · {subKind}
+        </div>
+        {data.axes.length === 0 ? (
+          <div className="text-[11px] text-ink-500">
+            no measurable secondary structure — context affects every descriptor in the same direction
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {data.axes.map((ax, i) => (
+              <AxisRow
+                key={i}
+                idx={i}
+                axis={ax}
+                topSigma={topSigma}
+                colorMap={colorMap}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── small footer for the actually-curious ── */}
       <div className="flex items-center gap-3 text-[10px] text-ink-500">
-        <span title="σ₁/σ₂ — ratio of the two largest singular values. High = one direction dominates; ~1 = several independent axes.">
+        <span title="σ₁/σ₂ of the residual — high = one sub-pattern dominates; ~1 = several comparable sub-patterns.">
           σ₁/σ₂ {data.dominance_ratio == null ? "—" : data.dominance_ratio.toFixed(2)}
         </span>
-        <span title="Participation ratio of σ² values. ~1 = a single axis carries the shift; ~k = k axes share the load.">
-          effective axes {data.effective_rank.toFixed(2)}
+        <span title="Participation ratio — fractional number of sub-patterns actually doing work.">
+          effective sub-axes {data.effective_rank.toFixed(2)}
         </span>
       </div>
     </div>
   );
+}
+
+function topMeanArchetypes(mean: SpectrumProfileEntry[]): SpectrumProfileEntry[] {
+  // The mean axis is a unit vector in archetype space; surface entries with
+  // |coef| ≥ 0.25, up to 2 of them.  Sign is meaningful here (negative =
+  // context pushes things AWAY from that archetype on average) but in the
+  // common case the top-symbol all have positive sign.
+  return [...mean]
+    .filter((p) => Math.abs(p.alignment) >= 0.25)
+    .sort((a, b) => Math.abs(b.alignment) - Math.abs(a.alignment))
+    .slice(0, 2);
+}
+
+function classifySub(data: ShiftSpectrumResponse): string {
+  if (!data.axes.length) return "no sub-structure";
+  const er = data.effective_rank;
+  const dom = data.dominance_ratio;
+  if (er <= 1.2 || (dom != null && dom >= 3.5)) return "one differential sub-pattern";
+  if (er <= 1.9 || (dom != null && dom >= 1.6)) return "primary sub-pattern + secondary";
+  return "multiple comparable sub-patterns";
 }
 
 function AxisRow({
@@ -282,129 +328,3 @@ function MoverInline({
   );
 }
 
-// ───────────────────────── headline narration ─────────────────────────
-
-function buildHeadline(
-  data: ShiftSpectrumResponse,
-  _colorMap: Record<string, string>,
-): { kind: string; sentence: React.ReactNode } {
-  const axes = data.axes;
-  if (!axes.length) {
-    return { kind: "no shift", sentence: "Context produces no measurable displacement." };
-  }
-
-  const a1 = axes[0];
-  const a2 = axes[1];
-
-  // Classification thresholds — tuned for typical cosine-similarity shifts.
-  const dom = data.dominance_ratio;
-  const er = data.effective_rank;
-
-  // How many axes are "real" — count axes whose σ is above 30% of σ₁.
-  const realAxes = axes.filter((a) => a.sigma >= 0.3 * a1.sigma).length;
-
-  const a1Phrase = describeAxis(a1);
-  const a2Phrase = a2 ? describeAxis(a2) : null;
-
-  // Three regimes, picked by a combination of dominance and participation.
-  if ((dom != null && dom >= 3.5) || er <= 1.25 || realAxes <= 1) {
-    return {
-      kind: "narrow · single-axis context",
-      sentence: (
-        <>
-          One direction of pull — <Phrase {...a1Phrase} />.
-        </>
-      ),
-    };
-  }
-  if ((dom != null && dom >= 1.6) || er <= 1.9) {
-    return {
-      kind: "primary axis + secondary",
-      sentence: (
-        <>
-          Primary pull <Phrase {...a1Phrase} />
-          {a2Phrase && (
-            <>
-              , with a secondary axis <Phrase {...a2Phrase} />
-            </>
-          )}
-          .
-        </>
-      ),
-    };
-  }
-  // Roughly equal top axes — polarizing.
-  return {
-    kind: "polarising · multi-axis context",
-    sentence: (
-      <>
-        Two roughly equal directions of pull — <Phrase {...a1Phrase} /> and{" "}
-        {a2Phrase && <Phrase {...a2Phrase} />}.
-      </>
-    ),
-  };
-}
-
-function describeAxis(a: SpectrumAxis): {
-  positives: { symbol: string }[];
-  negatives: { symbol: string }[];
-  movers: string[];
-} {
-  const sorted = [...a.archetype_profile].sort(
-    (x, y) => Math.abs(y.alignment) - Math.abs(x.alignment),
-  );
-  const positives = sorted.filter((p) => p.alignment > 0.2).slice(0, 2);
-  const negatives = sorted.filter((p) => p.alignment < -0.2).slice(0, 2);
-  // Choose the mover list whose side has more archetypal mass.
-  const list = positives.length >= negatives.length ? a.positive_movers : a.negative_movers;
-  const movers = list.slice(0, 3).map((m) => m.descriptor);
-  return { positives, negatives, movers };
-}
-
-function Phrase({
-  positives, negatives, movers,
-}: {
-  positives: { symbol: string }[];
-  negatives: { symbol: string }[];
-  movers: string[];
-}) {
-  const colorMap = useSidebar((s) => s.colorMap);
-  const isContrast = positives.length > 0 && negatives.length > 0;
-
-  const renderList = (items: { symbol: string }[]) =>
-    items.map((a, i) => (
-      <React.Fragment key={a.symbol}>
-        {i > 0 && <span className="text-ink-400"> + </span>}
-        <strong style={{ color: colorMap[a.symbol] ?? "#cbd" }}>{a.symbol}</strong>
-      </React.Fragment>
-    ));
-
-  if (positives.length === 0 && negatives.length === 0) {
-    return <span className="text-ink-300">an unlabeled direction</span>;
-  }
-  if (isContrast) {
-    return (
-      <>
-        contrasting {renderList(positives)} <span className="text-ink-400">against</span>{" "}
-        {renderList(negatives)}
-        {movers.length > 0 && (
-          <>
-            {" "}
-            <span className="text-ink-400">({movers.join(", ")})</span>
-          </>
-        )}
-      </>
-    );
-  }
-  return (
-    <>
-      toward {renderList(positives.length ? positives : negatives)}
-      {movers.length > 0 && (
-        <>
-          {" "}
-          <span className="text-ink-400">({movers.join(", ")})</span>
-        </>
-      )}
-    </>
-  );
-}

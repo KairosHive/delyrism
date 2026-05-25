@@ -349,31 +349,29 @@ def symbol_centroid_similarity(req: SymbolSimilarityRequest) -> SymbolSimilarity
 
 @router.post("/shift-spectrum", response_model=ShiftSpectrumResponse)
 def shift_spectrum(req: SpectrumRequest) -> ShiftSpectrumResponse:
-    """Principal *archetype contrasts* of the context-induced shift.
+    """Mean shift + principal *deviation patterns* of the context shift.
 
-    Originally the SVD was taken in embedding space (Δ ∈ ℝᴺˣᵈ).  Problem:
-    with the default `gate` strategy the shift is additive in v_ctx, so the
-    first singular vector is essentially v_ctx and σ₁ ≫ σ₂ for every
-    context.  The decomposition told the user almost nothing the rankings
-    panel didn't already.
+    History: a previous version took SVD of Δ in embedding space, then of
+    Δ projected onto archetype centroids.  Both still produced σ₁ ≫ σ₂
+    because the gate strategy is additive in v_ctx — every descriptor moves
+    toward the same vector, so the projection is essentially rank-1 with a
+    huge first singular value (= v_ctx projected onto archetypes) and tiny
+    noise after.  The "movers" stayed the same across contexts because
+    U[:, 0] ∝ ⟨D_i, v_ctx⟩ and the descriptors most aligned with any
+    reasonable v_ctx tend to be the same archetype-spanning ones.
 
-    Instead we project Δ onto the *archetype centroids* first:
+    Real fix: subtract the mean shift before SVD.
 
         Δ_arch[i, s] = (D'_i - D_i) · c_s        (N × S)
+        m           = mean over descriptors of Δ_arch          (S)
+        residual    = Δ_arch − m                                (N × S)
+        SVD(residual)
 
-    — how each descriptor's similarity to each archetype changed.  SVD of
-    that:
-
-      • lives in archetype space, so axes are signed mixtures of archetypes
-        (e.g. axis 1 = +FIRE − WATER) — directly interpretable as
-        *contrasts*, not arbitrary embedding-space directions
-      • naturally surfaces multi-axis structure (the gate-additivity
-        collapse doesn't happen here because we're measuring change in
-        archetype-cosine space, not in raw embedding space)
-      • is ~1000× faster (S=4-12 vs d=768-1024)
-
-    σ₁/σ₂ is the headline scalar: high = one direction of pull dominates;
-    ~1 = a polarising / multi-contrast context.
+    The mean m IS the rank-1 component (and is the same info the rankings
+    panel shows — "where does this context point on average").  Surfaced
+    separately as `mean_shift`.  The residual axes capture *how context
+    affects different descriptors differently* — a genuinely multi-axis
+    object that varies sharply with v_ctx.
     """
     space = _require(req.space_id)
     key = engine_cache.memo_key(req.space_id, "shift-spectrum", req.model_dump(exclude={"space_id"}))
@@ -383,7 +381,9 @@ def shift_spectrum(req: SpectrumRequest) -> ShiftSpectrumResponse:
 
     symbols = list(space.symbols)
     if not symbols:
-        out = ShiftSpectrumResponse(sigma=[], axes=[], dominance_ratio=None, effective_rank=0.0)
+        out = ShiftSpectrumResponse(
+            mean_shift=[], sigma=[], axes=[], dominance_ratio=None, effective_rank=0.0,
+        )
         engine_cache.memo_put(key, out)
         return out
 
@@ -414,8 +414,26 @@ def shift_spectrum(req: SpectrumRequest) -> ShiftSpectrumResponse:
     # that archetype.  The whole interesting story lives in S dimensions.
     delta_arch = delta @ cents.T  # N × S
 
-    # Thin SVD on the small N×S matrix.
-    U, s, Vt = np.linalg.svd(delta_arch, full_matrices=False)
+    # Mean shift — the rank-1 component that the additive `gate` strategy
+    # forces onto Δ.  Same info as top-symbols / rankings, exposed
+    # separately so the residual SVD below shows real structure.
+    mean_arch = delta_arch.mean(axis=0)  # S
+    mean_norm = float(np.linalg.norm(mean_arch))
+    if mean_norm > 1e-12:
+        mean_axis = mean_arch / mean_norm
+    else:
+        mean_axis = np.zeros_like(mean_arch)
+    mean_order = np.argsort(-np.abs(mean_axis))[: min(6, len(symbols))]
+    mean_shift_profile = [
+        SpectrumProfileEntry(symbol=symbols[i], alignment=float(mean_axis[i]))
+        for i in mean_order
+    ]
+
+    # SVD on the mean-subtracted residual.  Now the first axis is the
+    # strongest *deviation* from the mean — i.e. genuine secondary
+    # structure, not v_ctx in disguise.
+    residual = delta_arch - mean_arch[None, :]
+    U, s, Vt = np.linalg.svd(residual, full_matrices=False)
 
     # SVD signs are arbitrary (flipping U[:,k] and Vt[k] together leaves the
     # decomposition unchanged).  Pin them so the largest-magnitude archetype
@@ -491,6 +509,7 @@ def shift_spectrum(req: SpectrumRequest) -> ShiftSpectrumResponse:
         ))
 
     out = ShiftSpectrumResponse(
+        mean_shift=mean_shift_profile,
         sigma=[float(x) for x in s[: max(K, len(symbols))]],
         axes=axes_out,
         dominance_ratio=dominance,
