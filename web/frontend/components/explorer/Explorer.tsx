@@ -7,7 +7,6 @@ import { AttentionHeatmap } from "./AttentionHeatmap";
 import { Subgraph } from "./Subgraph";
 import { DeltaGraph } from "./DeltaGraph";
 import { SimilarityHeatmap } from "./SimilarityHeatmap";
-import { ShiftSpectrum } from "./ShiftSpectrum";
 import { ContextualTransformations } from "./ContextualTransformations";
 import { useSidebar } from "@/lib/store";
 
@@ -22,12 +21,7 @@ export function Explorer() {
         <Rankings />
       </div>
 
-      {/* Row 2 — Contextual transformations: narrative view of what context
-          actually changes (migrations + identity cards). The most concrete
-          "what does context do?" panel; surfaced early on purpose. */}
-      <ContextualTransformations />
-
-      {/* Row 3 — Ambiguity (narrow) and Attention (wide) */}
+      {/* Row 2 — Ambiguity (narrow) and Attention (wide) */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr,1.4fr]">
         <AmbiguityChart />
         <AttentionHeatmap />
@@ -39,11 +33,14 @@ export function Explorer() {
         <SimilarityHeatmap />
       </div>
 
-      {/* Row 4 — Shift spectrum (SVD of Δ): orthogonal axes of context effect */}
-      <ShiftSpectrum />
-
-      {/* Row 5 — Δ graph: tall and full-width, the headline visual */}
+      {/* Row 4 — Δ graph: tall and full-width, the headline relational view */}
       <DeltaGraph />
+
+      {/* Row 5 — Contextual transformations: narrative migrations +
+          per-archetype identity cards.  Placed at the bottom as a
+          summary-narrative view of what the whole panel set just
+          said in math. */}
+      <ContextualTransformations />
     </div>
   );
 }
