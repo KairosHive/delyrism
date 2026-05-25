@@ -12,6 +12,8 @@ from ..schemas import (
     SymbolSimilarityRequest, SymbolSimilarityResponse,
     SpectrumRequest, ShiftSpectrumResponse, SpectrumAxis,
     SpectrumProfileEntry, SpectrumMoverEntry,
+    TransformationsRequest, TransformationsResponse,
+    MigrationEntry, ArchetypeIdentityCard, IdentityEntry,
 )
 from .. import engine_cache
 from ..util import to_hex
@@ -515,5 +517,128 @@ def shift_spectrum(req: SpectrumRequest) -> ShiftSpectrumResponse:
         dominance_ratio=dominance,
         effective_rank=effective_rank,
     )
+    engine_cache.memo_put(key, out)
+    return out
+
+
+@router.post("/transformations", response_model=TransformationsResponse)
+def contextual_transformations(req: TransformationsRequest) -> TransformationsResponse:
+    """Concrete, narrative view of how context rewires the cloud:
+
+    - migrations: descriptors whose *nearest archetype* flipped under
+      context (e.g. "ash: FIRE → WATER under quiet grief").  Each row is
+      scored by (gain at destination + loss at source) and sorted desc.
+    - identities: per-archetype before/after top-K descriptor lists.
+      Both lists are computed by cosine to the *original* centroid — a
+      fixed reference frame — so an archetype's "identity" under context
+      can include foreign descriptors that drifted in.  The owner field
+      preserves the descriptor's home archetype for colouring.
+    """
+    space = _require(req.space_id)
+    key = engine_cache.memo_key(req.space_id, "transformations", req.model_dump(exclude={"space_id"}))
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    symbols = list(space.symbols)
+    if not symbols:
+        out = TransformationsResponse(migrations=[], identities=[])
+        engine_cache.memo_put(key, out)
+        return out
+
+    D_before = space.D
+    D_after = engine_cache.get_or_compute_shifted_matrix(req.space_id, space, dict(
+        weights=req.weights,
+        sentence=req.sentence,
+        strategy=req.strategy,
+        beta=req.beta,
+        gate=req.gate,
+        tau=req.tau,
+        within_symbol_softmax=req.within_symbol_softmax,
+        gamma=req.gamma,
+        prompt_template=req.prompt_template,
+        pool_type=req.pool_type,
+        pool_w=req.pool_w,
+        membership_alpha=req.membership_alpha,
+    ))
+
+    # Original centroids — fixed reference frame for "which archetype is
+    # this descriptor closest to."  Using shifted centroids would smear
+    # the migration signal because the centroids would chase the
+    # descriptors.
+    cents = np.stack([space.symbol_centroids[sym] for sym in symbols])
+    cents = cents / (np.linalg.norm(cents, axis=1, keepdims=True) + 1e-9)
+
+    sims_before = D_before @ cents.T  # N × S
+    sims_after = D_after @ cents.T    # N × S
+
+    nearest_before = np.argmax(sims_before, axis=1)
+    nearest_after = np.argmax(sims_after, axis=1)
+
+    descriptor_names = list(space.descriptors)
+    owners = [space.owner.get(d, "") for d in descriptor_names]
+
+    # ── migrations ──
+    migrations: list[MigrationEntry] = []
+    for i, d in enumerate(descriptor_names):
+        if int(nearest_before[i]) == int(nearest_after[i]):
+            continue
+        from_idx = int(nearest_before[i])
+        to_idx = int(nearest_after[i])
+        gain = float(sims_after[i, to_idx] - sims_before[i, to_idx])
+        loss = float(sims_before[i, from_idx] - sims_after[i, from_idx])
+        score = gain + loss
+        if score < float(req.min_migration_score):
+            continue
+        migrations.append(MigrationEntry(
+            descriptor=d,
+            from_archetype=symbols[from_idx],
+            to_archetype=symbols[to_idx],
+            sim_before_from=float(sims_before[i, from_idx]),
+            sim_before_to=float(sims_before[i, to_idx]),
+            sim_after_from=float(sims_after[i, from_idx]),
+            sim_after_to=float(sims_after[i, to_idx]),
+            score=score,
+        ))
+    migrations.sort(key=lambda m: -m.score)
+    migrations = migrations[:25]
+
+    # ── identity cards ──
+    K = max(1, int(req.topk))
+    identities: list[ArchetypeIdentityCard] = []
+    for s_idx, sym in enumerate(symbols):
+        before_order = np.argsort(-sims_before[:, s_idx])[:K]
+        after_order = np.argsort(-sims_after[:, s_idx])[:K]
+
+        before_list = [
+            IdentityEntry(
+                descriptor=descriptor_names[i],
+                owner=owners[i],
+                score=float(sims_before[i, s_idx]),
+            )
+            for i in before_order
+        ]
+        after_list = [
+            IdentityEntry(
+                descriptor=descriptor_names[i],
+                owner=owners[i],
+                score=float(sims_after[i, s_idx]),
+            )
+            for i in after_order
+        ]
+        before_set = {e.descriptor for e in before_list}
+        after_set = {e.descriptor for e in after_list}
+        emerged = [descriptor_names[i] for i in after_order if descriptor_names[i] not in before_set]
+        faded = [descriptor_names[i] for i in before_order if descriptor_names[i] not in after_set]
+
+        identities.append(ArchetypeIdentityCard(
+            symbol=sym,
+            before=before_list,
+            after=after_list,
+            emerged=emerged,
+            faded=faded,
+        ))
+
+    out = TransformationsResponse(migrations=migrations, identities=identities)
     engine_cache.memo_put(key, out)
     return out

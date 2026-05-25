@@ -270,6 +270,48 @@ class ShiftSpectrumResponse(BaseModel):
     effective_rank: float
 
 
+# ---------------- Contextual transformations (migrations + identity) ----------------
+
+class TransformationsRequest(ShiftRequest):
+    # How many top descriptors per archetype to show on each side of an
+    # identity card.  6 is a good fit for the typical UI width.
+    topk: int = 6
+    # Migrations below this combined score are filtered out as noise.
+    min_migration_score: float = 0.04
+
+
+class MigrationEntry(BaseModel):
+    descriptor: str
+    from_archetype: str
+    to_archetype: str
+    # Cosines to original centroids — diagnostic for the migration.
+    sim_before_from: float
+    sim_before_to: float
+    sim_after_from: float
+    sim_after_to: float
+    # Gain at destination + loss at source.
+    score: float
+
+
+class IdentityEntry(BaseModel):
+    descriptor: str
+    owner: str  # original archetype — drives the color in the UI
+    score: float
+
+
+class ArchetypeIdentityCard(BaseModel):
+    symbol: str
+    before: List[IdentityEntry]   # original top-K, sorted by cosine to fixed centroid
+    after: List[IdentityEntry]    # top-K under context (foreign descriptors allowed)
+    emerged: List[str]            # descriptors in `after` but not in `before`
+    faded: List[str]              # descriptors in `before` but not in `after`
+
+
+class TransformationsResponse(BaseModel):
+    migrations: List[MigrationEntry]
+    identities: List[ArchetypeIdentityCard]
+
+
 # ----------------------- contextual subgraph -----------------------
 
 class SubgraphRequest(BaseModel):

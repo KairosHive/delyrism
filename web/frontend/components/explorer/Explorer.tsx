@@ -8,6 +8,7 @@ import { Subgraph } from "./Subgraph";
 import { DeltaGraph } from "./DeltaGraph";
 import { SimilarityHeatmap } from "./SimilarityHeatmap";
 import { ShiftSpectrum } from "./ShiftSpectrum";
+import { ContextualTransformations } from "./ContextualTransformations";
 import { useSidebar } from "@/lib/store";
 
 export function Explorer() {
@@ -21,7 +22,12 @@ export function Explorer() {
         <Rankings />
       </div>
 
-      {/* Row 2 — Ambiguity (narrow) and Attention (wide) */}
+      {/* Row 2 — Contextual transformations: narrative view of what context
+          actually changes (migrations + identity cards). The most concrete
+          "what does context do?" panel; surfaced early on purpose. */}
+      <ContextualTransformations />
+
+      {/* Row 3 — Ambiguity (narrow) and Attention (wide) */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr,1.4fr]">
         <AmbiguityChart />
         <AttentionHeatmap />

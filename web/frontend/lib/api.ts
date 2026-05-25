@@ -209,6 +209,36 @@ export interface ShiftSpectrumResponse {
   effective_rank: number;
 }
 
+export interface MigrationEntry {
+  descriptor: string;
+  from_archetype: string;
+  to_archetype: string;
+  sim_before_from: number;
+  sim_before_to: number;
+  sim_after_from: number;
+  sim_after_to: number;
+  score: number;
+}
+
+export interface IdentityEntry {
+  descriptor: string;
+  owner: string;            // home archetype (drives the chip colour)
+  score: number;
+}
+
+export interface ArchetypeIdentityCard {
+  symbol: string;
+  before: IdentityEntry[];
+  after: IdentityEntry[];
+  emerged: string[];        // names of descriptors new in `after`
+  faded: string[];          // names of descriptors that dropped out
+}
+
+export interface TransformationsResponse {
+  migrations: MigrationEntry[];
+  identities: ArchetypeIdentityCard[];
+}
+
 export interface StoryResponse {
   story: string;
   motifs: string[];
