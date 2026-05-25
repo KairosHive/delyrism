@@ -223,6 +223,45 @@ class SymbolSimilarityResponse(BaseModel):
     delta: List[List[float]]
 
 
+# ----------------------- shift spectrum (SVD of D' − D) -----------------------
+
+class SpectrumRequest(ShiftRequest):
+    """Top-K principal axes of the context-induced shift matrix Δ = D' − D."""
+    topk: int = 3
+
+
+class SpectrumProfileEntry(BaseModel):
+    symbol: str
+    # signed cosine of the axis direction v_k with the symbol's centroid.
+    # +1 = axis points fully toward this archetype; -1 = points away.
+    alignment: float
+
+
+class SpectrumMoverEntry(BaseModel):
+    descriptor: str
+    symbol: str  # owning symbol
+    # signed contribution along this axis = σ_k · U[i, k].  Positive movers
+    # travel in the + direction of the axis; negative in the − direction.
+    score: float
+
+
+class SpectrumAxis(BaseModel):
+    sigma: float
+    archetype_profile: List[SpectrumProfileEntry]
+    positive_movers: List[SpectrumMoverEntry]
+    negative_movers: List[SpectrumMoverEntry]
+
+
+class ShiftSpectrumResponse(BaseModel):
+    # full sigma vector (descending), useful for the ratio bar at the top
+    sigma: List[float]
+    axes: List[SpectrumAxis]
+    # σ₁ / σ₂ — high = single-axis context, ~1 = multi-axis / polarizing
+    dominance_ratio: Optional[float] = None
+    # Participation ratio (Σσ²)² / Σσ⁴ — fractional effective number of axes
+    effective_rank: float
+
+
 # ----------------------- contextual subgraph -----------------------
 
 class SubgraphRequest(BaseModel):

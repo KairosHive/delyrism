@@ -7,6 +7,7 @@ import { AttentionHeatmap } from "./AttentionHeatmap";
 import { Subgraph } from "./Subgraph";
 import { DeltaGraph } from "./DeltaGraph";
 import { SimilarityHeatmap } from "./SimilarityHeatmap";
+import { ShiftSpectrum } from "./ShiftSpectrum";
 import { useSidebar } from "@/lib/store";
 
 export function Explorer() {
@@ -32,7 +33,10 @@ export function Explorer() {
         <SimilarityHeatmap />
       </div>
 
-      {/* Row 4 — Δ graph: tall and full-width, the headline visual */}
+      {/* Row 4 — Shift spectrum (SVD of Δ): orthogonal axes of context effect */}
+      <ShiftSpectrum />
+
+      {/* Row 5 — Δ graph: tall and full-width, the headline visual */}
       <DeltaGraph />
     </div>
   );

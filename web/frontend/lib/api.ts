@@ -179,6 +179,31 @@ export interface SymbolSimilarityResponse {
   delta: number[][];
 }
 
+export interface SpectrumProfileEntry {
+  symbol: string;
+  alignment: number;       // signed cosine of axis direction with the centroid
+}
+
+export interface SpectrumMoverEntry {
+  descriptor: string;
+  symbol: string;          // owning symbol (color lookup)
+  score: number;           // σ · U[i,k]  (signed displacement along the axis)
+}
+
+export interface SpectrumAxis {
+  sigma: number;
+  archetype_profile: SpectrumProfileEntry[];
+  positive_movers: SpectrumMoverEntry[];
+  negative_movers: SpectrumMoverEntry[];
+}
+
+export interface ShiftSpectrumResponse {
+  sigma: number[];
+  axes: SpectrumAxis[];
+  dominance_ratio: number | null;
+  effective_rank: number;
+}
+
 export interface StoryResponse {
   story: string;
   motifs: string[];

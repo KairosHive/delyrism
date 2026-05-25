@@ -10,6 +10,8 @@ from ..schemas import (
     SubgraphRequest, SubgraphResponse, SubgraphNode, SubgraphEdge,
     SimilarityRequest, SimilarityResponse,
     SymbolSimilarityRequest, SymbolSimilarityResponse,
+    SpectrumRequest, ShiftSpectrumResponse, SpectrumAxis,
+    SpectrumProfileEntry, SpectrumMoverEntry,
 )
 from .. import engine_cache
 from ..util import to_hex
@@ -340,6 +342,135 @@ def symbol_centroid_similarity(req: SymbolSimilarityRequest) -> SymbolSimilarity
         before=S_before.tolist(),
         after=S_after.tolist(),
         delta=S_delta.tolist(),
+    )
+    engine_cache.memo_put(key, out)
+    return out
+
+
+@router.post("/shift-spectrum", response_model=ShiftSpectrumResponse)
+def shift_spectrum(req: SpectrumRequest) -> ShiftSpectrumResponse:
+    """Top-K principal axes of the context-induced shift Δ = D' − D.
+
+    Decomposes the per-descriptor displacement field into orthogonal
+    'rewriting axes', each interpretable as a direction in embedding space
+    that some descriptors are dragged along.  For each axis we surface:
+      - σ_k (magnitude of motion along the axis)
+      - archetype profile (which symbol centroids the axis points toward)
+      - top positive movers / top negative movers (descriptors moving along
+        +axis vs −axis)
+
+    σ₁ / σ₂ is the headline scalar: high values mean 'narrow context, one
+    direction of pull'; values near 1 mean 'multi-axis / polarizing context'.
+    """
+    space = _require(req.space_id)
+    key = engine_cache.memo_key(req.space_id, "shift-spectrum", req.model_dump(exclude={"space_id"}))
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    D0 = space.D
+    D1 = space.make_shifted_matrix(
+        weights=req.weights,
+        sentence=req.sentence,
+        strategy=req.strategy,
+        beta=req.beta,
+        gate=req.gate,
+        tau=req.tau,
+        within_symbol_softmax=req.within_symbol_softmax,
+        gamma=req.gamma,
+        prompt_template=req.prompt_template,
+        pool_type=req.pool_type,
+        pool_w=req.pool_w,
+        membership_alpha=req.membership_alpha,
+    )
+    delta = D1 - D0  # N × d
+    # Thin SVD — Δ = U · diag(s) · Vᵀ.  U is N × r, Vᵀ is r × d, where
+    # r = min(N, d).  Singular values are sorted descending by numpy.
+    U, s, Vt = np.linalg.svd(delta, full_matrices=False)
+
+    # Participation ratio: smooth scalar in [1, r] saying 'how many axes are
+    # actually doing the work'.  Single-axis context → ~1; uniform across k
+    # axes → ~k.
+    s_sq = s ** 2
+    energy = float(s_sq.sum())
+    if energy > 1e-18:
+        effective_rank = float(energy * energy / float((s_sq ** 2).sum() + 1e-18))
+    else:
+        effective_rank = 0.0
+
+    # σ₁ / σ₂ — high = narrow / single-direction context, ~1 = polarizing.
+    if s.shape[0] >= 2 and s[1] > 1e-9:
+        dominance = float(s[0] / s[1])
+    else:
+        dominance = None
+
+    K = min(int(req.topk), int(s.shape[0]))
+
+    # Pre-compute L2-normalized symbol centroids for the archetype-profile dot.
+    symbols = list(space.symbols)
+    if symbols:
+        cents = np.stack([space.symbol_centroids[sym] for sym in symbols])
+        cents = cents / (np.linalg.norm(cents, axis=1, keepdims=True) + 1e-9)
+    else:
+        cents = np.zeros((0, D0.shape[1]), dtype=D0.dtype)
+
+    descriptor_names = list(space.descriptors)
+    owners = [space.owner.get(d, "") for d in descriptor_names]
+
+    axes_out: list[SpectrumAxis] = []
+    for k in range(K):
+        sigma_k = float(s[k])
+        u_k = U[:, k]            # N — descriptor loadings
+        v_k = Vt[k, :]           # d — direction in embedding space
+        v_norm = float(np.linalg.norm(v_k))
+        v_unit = v_k / (v_norm + 1e-9)
+
+        # Archetype profile: signed cosine of axis direction with each centroid.
+        if cents.shape[0] > 0:
+            alignments = cents @ v_unit            # S
+            prof_order = np.argsort(-np.abs(alignments))[:6]
+            profile = [
+                SpectrumProfileEntry(symbol=symbols[i], alignment=float(alignments[i]))
+                for i in prof_order
+            ]
+        else:
+            profile = []
+
+        # Mover contributions along this axis = σ · u_k.  Same units as the
+        # original Δ — i.e. cosine displacement per descriptor.
+        contrib = sigma_k * u_k
+        # Top 8 each side, dropping the wrong-signed entries.
+        pos_order = np.argsort(-contrib)[:8]
+        neg_order = np.argsort(contrib)[:8]
+        positive_movers = [
+            SpectrumMoverEntry(
+                descriptor=descriptor_names[i],
+                symbol=owners[i],
+                score=float(contrib[i]),
+            )
+            for i in pos_order if contrib[i] > 1e-6
+        ]
+        negative_movers = [
+            SpectrumMoverEntry(
+                descriptor=descriptor_names[i],
+                symbol=owners[i],
+                score=float(contrib[i]),
+            )
+            for i in neg_order if contrib[i] < -1e-6
+        ]
+
+        axes_out.append(SpectrumAxis(
+            sigma=sigma_k,
+            archetype_profile=profile,
+            positive_movers=positive_movers,
+            negative_movers=negative_movers,
+        ))
+
+    out = ShiftSpectrumResponse(
+        sigma=[float(x) for x in s[: max(K, 6)]],
+        axes=axes_out,
+        dominance_ratio=dominance,
+        effective_rank=effective_rank,
     )
     engine_cache.memo_put(key, out)
     return out
