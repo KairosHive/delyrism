@@ -1,18 +1,16 @@
 "use client";
 import * as React from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, ShiftSpectrumResponse, SpectrumAxis, SpectrumProfileEntry, SpectrumMoverEntry } from "@/lib/api";
+import { api, ShiftSpectrumResponse, SpectrumAxis, SpectrumMoverEntry } from "@/lib/api";
 import { useSidebar, buildContextWeights } from "@/lib/store";
 
 /**
  * Shift spectrum — top-K principal axes of Δ = D' − D, computed via SVD.
  *
- * Complements the Rankings panel (which answers "where does this context
- * point?") with the orthogonal question: "how many independent ways is the
- * context rewriting the cloud, and which descriptors move along each axis?"
- *
- *   σ₁/σ₂ near 1   → multi-axial / polarizing context
- *   σ₁/σ₂ ≫ 1     → narrow / single-direction context
+ * Reads as a one-line narrative ("This context is …, pulling … toward …")
+ * with a small bar chart of σ values + per-axis mover chips as supporting
+ * evidence.  The bare math (signed alignment percentages, raw sigma values)
+ * is shown only on hover or expansion — the headline is plain prose.
  */
 export function ShiftSpectrum() {
   const sid = useSidebar((s) => s.spaceId);
@@ -62,63 +60,74 @@ export function ShiftSpectrum() {
 
   return (
     <div className="panel-tight">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-2 flex items-baseline justify-between gap-3">
         <div>
           <div className="section-title">Shift spectrum</div>
           <div className="text-[11px] text-ink-400">
-            principal axes of Δ = D' − D · how many independent ways the context rewires the cloud
+            how many independent directions of pull does this context have?
           </div>
         </div>
-        {q.data && <HeaderBadges data={q.data} />}
       </div>
 
       {!hasCtx && (
         <div className="p-6 text-sm text-ink-300">
-          Add a context (sentence, weights, audio, image, or alchemist blend) to compute the spectrum.
+          Add a context (sentence, weights, audio, image, or alchemist blend) to see the spectrum.
         </div>
       )}
-      {hasCtx && q.isPending && (
+      {hasCtx && q.isPending && !q.data && (
         <div className="p-6 text-sm text-ink-300">computing…</div>
       )}
-      {q.data && (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          {q.data.axes.map((ax, i) => (
-            <AxisCard key={i} idx={i} axis={ax} topSigma={q.data.axes[0]?.sigma ?? 1} colorMap={colorMap} />
-          ))}
-        </div>
-      )}
+      {q.data && <SpectrumContent data={q.data} colorMap={colorMap} />}
     </div>
   );
 }
 
-function HeaderBadges({ data }: { data: ShiftSpectrumResponse }) {
-  const dom = data.dominance_ratio;
-  const er = data.effective_rank;
-  // Heuristic colour: narrow = teal-ish, polarising = warm
-  const domLabel =
-    dom == null ? "—" :
-    dom >= 4 ? "single-axis" :
-    dom >= 1.8 ? "primary axis" :
-    "multi-axis";
+function SpectrumContent({
+  data, colorMap,
+}: {
+  data: ShiftSpectrumResponse;
+  colorMap: Record<string, string>;
+}) {
+  const headline = buildHeadline(data, colorMap);
+  const topSigma = data.axes[0]?.sigma ?? 1;
+
   return (
-    <div className="flex items-center gap-1.5">
-      <span
-        className="pill !text-[10px]"
-        title="σ₁/σ₂ — ratio of the largest two singular values.  High = a single direction dominates the shift.  ~1 = several independent rewriting axes."
-      >
-        σ₁/σ₂ {dom == null ? "—" : dom.toFixed(2)} · {domLabel}
-      </span>
-      <span
-        className="pill !text-[10px]"
-        title="Participation ratio of σ² values.  1 = one axis carries everything.  3 = three axes share the load equally."
-      >
-        eff. rank {er.toFixed(2)}
-      </span>
+    <div className="space-y-3">
+      {/* ── one-line narrative ── */}
+      <div className="rounded-lg border border-ink-700/60 bg-ink-900/40 p-3 leading-relaxed">
+        <div className="mb-0.5 text-[10px] uppercase tracking-widest text-ink-400">
+          {headline.kind}
+        </div>
+        <div className="text-sm text-ink-100">{headline.sentence}</div>
+      </div>
+
+      {/* ── stacked σ-bars with inline archetype + mover labels ── */}
+      <div className="space-y-1.5">
+        {data.axes.map((ax, i) => (
+          <AxisRow
+            key={i}
+            idx={i}
+            axis={ax}
+            topSigma={topSigma}
+            colorMap={colorMap}
+          />
+        ))}
+      </div>
+
+      {/* ── small footer for the actually-curious ── */}
+      <div className="flex items-center gap-3 text-[10px] text-ink-500">
+        <span title="σ₁/σ₂ — ratio of the two largest singular values. High = one direction dominates; ~1 = several independent axes.">
+          σ₁/σ₂ {data.dominance_ratio == null ? "—" : data.dominance_ratio.toFixed(2)}
+        </span>
+        <span title="Participation ratio of σ² values. ~1 = a single axis carries the shift; ~k = k axes share the load.">
+          effective axes {data.effective_rank.toFixed(2)}
+        </span>
+      </div>
     </div>
   );
 }
 
-function AxisCard({
+function AxisRow({
   idx, axis, topSigma, colorMap,
 }: {
   idx: number;
@@ -126,17 +135,24 @@ function AxisCard({
   topSigma: number;
   colorMap: Record<string, string>;
 }) {
-  // σ-bar — width proportional to this axis's σ relative to axis 1
   const pct = Math.max(2, Math.min(100, (axis.sigma / Math.max(topSigma, 1e-9)) * 100));
+
+  // Dominant archetypes for this axis — those whose |alignment| crosses a
+  // light threshold.  Up to 2 strong ones surfaced inline; everything else
+  // is in the tooltip.
+  const dom = axis.archetype_profile
+    .filter((p) => Math.abs(p.alignment) >= 0.2)
+    .slice(0, 2);
+  // Direction read off the top alignment's sign — positive means the axis
+  // points toward that archetype, negative means descriptors of that owner
+  // are moving the other way.
+  const sign = dom[0] ? Math.sign(dom[0].alignment) : 0;
+  const movers: SpectrumMoverEntry[] = sign >= 0 ? axis.positive_movers : axis.negative_movers;
+
   return (
-    <div className="rounded-lg border border-ink-700/70 bg-ink-900/50 p-3">
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <div className="text-[11px] font-medium uppercase tracking-wider text-ink-300">
-          Axis {idx + 1}
-        </div>
-        <div className="font-mono text-[11px] text-ink-200">σ = {axis.sigma.toFixed(3)}</div>
-      </div>
-      <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-ink-800">
+    <div className="flex items-center gap-2 text-[11px]">
+      <div className="w-12 shrink-0 font-mono text-ink-400">axis {idx + 1}</div>
+      <div className="h-2 w-24 shrink-0 overflow-hidden rounded-full bg-ink-800">
         <div
           className="h-full rounded-full"
           style={{
@@ -145,93 +161,150 @@ function AxisCard({
           }}
         />
       </div>
+      <div className="font-mono text-[10px] tabular-nums text-ink-400">{axis.sigma.toFixed(2)}</div>
 
-      <div className="mb-2">
-        <div className="sub-title mb-1">Archetype profile</div>
-        <ArchetypeProfile entries={axis.archetype_profile} colorMap={colorMap} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <MoverList title="+ movers" movers={axis.positive_movers} colorMap={colorMap} sign="+" />
-        <MoverList title="− movers" movers={axis.negative_movers} colorMap={colorMap} sign="-" />
+      <div className="ml-2 flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        <span className="text-ink-400">→</span>
+        {dom.length === 0 ? (
+          <span className="text-ink-500">no clear archetype</span>
+        ) : (
+          dom.map((p, i) => (
+            <React.Fragment key={p.symbol}>
+              {i > 0 && <span className="text-ink-500">+</span>}
+              <span
+                className="rounded-md border px-1.5 py-0.5 text-[10px] font-medium"
+                style={{
+                  color: colorMap[p.symbol] ?? "#cbd",
+                  borderColor: (colorMap[p.symbol] ?? "#888") + "55",
+                  background: (colorMap[p.symbol] ?? "#888") + "12",
+                }}
+                title={`alignment ${(p.alignment * 100).toFixed(0)}%`}
+              >
+                {p.symbol}
+              </span>
+            </React.Fragment>
+          ))
+        )}
+        {movers.length > 0 && (
+          <span className="ml-1 truncate text-ink-300">
+            <span className="text-ink-500">·&nbsp;</span>
+            {movers.slice(0, 4).map((m, i) => (
+              <React.Fragment key={m.descriptor}>
+                {i > 0 && <span className="text-ink-600">, </span>}
+                <span style={{ color: colorMap[m.symbol] ?? "#cbd" }}>{m.descriptor}</span>
+              </React.Fragment>
+            ))}
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-function ArchetypeProfile({
-  entries, colorMap,
-}: {
-  entries: SpectrumProfileEntry[];
-  colorMap: Record<string, string>;
-}) {
-  // Render each archetype as a centered horizontal bar: positive alignment
-  // extends right, negative extends left.  Width = |alignment|, max ~0.9.
-  if (!entries.length) {
-    return <div className="text-[11px] text-ink-500">—</div>;
+// ───────────────────────── headline narration ─────────────────────────
+
+function buildHeadline(
+  data: ShiftSpectrumResponse,
+  _colorMap: Record<string, string>,
+): { kind: string; sentence: React.ReactNode } {
+  const axes = data.axes;
+  if (!axes.length) {
+    return { kind: "no shift", sentence: "Context produces no measurable displacement." };
   }
-  return (
-    <div className="space-y-1">
-      {entries.map((e) => {
-        const c = colorMap[e.symbol] ?? "#888";
-        const abs = Math.min(1, Math.abs(e.alignment));
-        const w = `${abs * 50}%`; // half the row, centered
-        return (
-          <div key={e.symbol} className="flex items-center gap-2 text-[11px]">
-            <div className="w-16 truncate text-ink-200" style={{ color: c }}>{e.symbol}</div>
-            <div className="relative h-3 flex-1 rounded bg-ink-800/70">
-              <div className="absolute left-1/2 top-0 h-full w-px bg-ink-600/60" />
-              {e.alignment >= 0 ? (
-                <div
-                  className="absolute left-1/2 top-0 h-full rounded-r"
-                  style={{ width: w, background: c, opacity: 0.85 }}
-                />
-              ) : (
-                <div
-                  className="absolute right-1/2 top-0 h-full rounded-l"
-                  style={{ width: w, background: c, opacity: 0.85 }}
-                />
-              )}
-            </div>
-            <div className="w-12 text-right font-mono text-ink-300">
-              {(e.alignment * 100).toFixed(0)}%
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+
+  const a1 = axes[0];
+  const a2 = axes[1];
+
+  // Classification thresholds — tuned for typical cosine-similarity shifts.
+  const dom = data.dominance_ratio;
+  const er = data.effective_rank;
+
+  // How many axes are "real" — count axes whose σ is above 30% of σ₁.
+  const realAxes = axes.filter((a) => a.sigma >= 0.3 * a1.sigma).length;
+
+  const a1Phrase = describeAxis(a1);
+  const a2Phrase = a2 ? describeAxis(a2) : null;
+
+  // Three regimes, picked by a combination of dominance and participation.
+  if ((dom != null && dom >= 3.5) || er <= 1.25 || realAxes <= 1) {
+    return {
+      kind: "narrow · single-axis context",
+      sentence: (
+        <>
+          One direction of pull — <Phrase {...a1Phrase} />.
+        </>
+      ),
+    };
+  }
+  if ((dom != null && dom >= 1.6) || er <= 1.9) {
+    return {
+      kind: "primary axis + secondary",
+      sentence: (
+        <>
+          Primary pull <Phrase {...a1Phrase} />
+          {a2Phrase && (
+            <>
+              , with a secondary axis <Phrase {...a2Phrase} />
+            </>
+          )}
+          .
+        </>
+      ),
+    };
+  }
+  // Roughly equal top axes — polarizing.
+  return {
+    kind: "polarising · multi-axis context",
+    sentence: (
+      <>
+        Two roughly equal directions of pull — <Phrase {...a1Phrase} /> and{" "}
+        {a2Phrase && <Phrase {...a2Phrase} />}.
+      </>
+    ),
+  };
 }
 
-function MoverList({
-  title, movers, colorMap, sign,
+function describeAxis(a: SpectrumAxis): {
+  archetypes: { symbol: string; sign: number }[];
+  movers: string[];
+} {
+  const dom = a.archetype_profile.filter((p) => Math.abs(p.alignment) >= 0.2).slice(0, 2);
+  const sign = dom[0] ? Math.sign(dom[0].alignment) : 0;
+  const movers = (sign >= 0 ? a.positive_movers : a.negative_movers)
+    .slice(0, 3)
+    .map((m) => m.descriptor);
+  return {
+    archetypes: dom.map((p) => ({ symbol: p.symbol, sign: Math.sign(p.alignment) })),
+    movers,
+  };
+}
+
+function Phrase({
+  archetypes, movers,
 }: {
-  title: string;
-  movers: SpectrumMoverEntry[];
-  colorMap: Record<string, string>;
-  sign: "+" | "-";
+  archetypes: { symbol: string; sign: number }[];
+  movers: string[];
 }) {
+  const colorMap = useSidebar((s) => s.colorMap);
   return (
-    <div>
-      <div className="sub-title mb-1">{title}</div>
-      {movers.length === 0 ? (
-        <div className="text-[11px] text-ink-500">—</div>
+    <>
+      toward{" "}
+      {archetypes.length === 0 ? (
+        <span className="text-ink-300">an unlabeled direction</span>
       ) : (
-        <ul className="space-y-0.5">
-          {movers.slice(0, 6).map((m) => {
-            const c = colorMap[m.symbol] ?? "#888";
-            return (
-              <li key={m.descriptor + sign} className="flex items-center gap-1.5 text-[11px]">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: c }} />
-                <span className="truncate text-ink-200">{m.descriptor}</span>
-                <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-400">
-                  {m.score.toFixed(2)}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        archetypes.map((a, i) => (
+          <React.Fragment key={a.symbol}>
+            {i > 0 && <span className="text-ink-400"> + </span>}
+            <strong style={{ color: colorMap[a.symbol] ?? "#cbd" }}>{a.symbol}</strong>
+          </React.Fragment>
+        ))
       )}
-    </div>
+      {movers.length > 0 && (
+        <>
+          {" "}
+          <span className="text-ink-400">({movers.join(", ")})</span>
+        </>
+      )}
+    </>
   );
 }
