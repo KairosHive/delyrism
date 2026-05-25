@@ -8,6 +8,7 @@ import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS } from "@/lib/theme";
 import { AudioContext } from "./AudioContext";
 import { ImageContext } from "./ImageContext";
+import { DebouncedTextarea } from "../ui/DebouncedTextarea";
 
 export function ContextOptions() {
   const symbols = useSidebar((s) => s.symbols);
@@ -34,11 +35,11 @@ export function ContextOptions() {
           Context sentence
           <HelpTip text="Free-text prompt that defines the semantic context. The engine encodes this into a vector and uses it as the conditioning signal for every panel — rankings, attention, Δ-graph, etc. Same field as the big Context Prompt card in the main area." />
         </div>
-        <textarea
+        <DebouncedTextarea
           className="input-base h-16"
           placeholder="(or type in the main Context Prompt card)"
           value={sentence}
-          onChange={(e) => set("contextSentence", e.target.value)}
+          onChange={(v) => set("contextSentence", v)}
         />
       </div>
 

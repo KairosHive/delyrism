@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS, STRUCTURE_DISPLAY } from "@/lib/theme";
+import { DebouncedTextarea } from "@/components/ui/DebouncedTextarea";
 
 interface PresetsResp { presets: string[]; }
 interface PresetResp { name: string; symbols: Record<string, string[]>; }
@@ -172,13 +173,13 @@ export function Console() {
         </div>
 
         {!alchemistMode ? (
-          <textarea
+          <DebouncedTextarea
             className={`h-[68px] w-full resize-none rounded-lg border border-ink-700 bg-ink-900/70 px-4 py-3 text-base text-ink-100
                        placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40
                        ${otherOverride ? "opacity-50" : ""}`}
             placeholder="e.g. flooding spirits dancing around floating suns…"
             value={sentence}
-            onChange={(e) => set("contextSentence", e.target.value)}
+            onChange={(v) => set("contextSentence", v)}
             disabled={otherOverride}
           />
         ) : (
@@ -210,12 +211,12 @@ function AlchemistMorph({
   const pct = Math.round(blend * 100);
   return (
     <div className="space-y-2">
-      <textarea
+      <DebouncedTextarea
         className="h-[56px] w-full resize-none rounded-lg border border-ink-700 bg-ink-900/70 px-3 py-2 text-sm text-ink-100
                    placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40"
         placeholder="context A — e.g. a quiet grief"
         value={sentence}
-        onChange={(e) => onA(e.target.value)}
+        onChange={onA}
       />
 
       <div className="flex items-center gap-2 px-0.5">
@@ -236,12 +237,12 @@ function AlchemistMorph({
         </span>
       </div>
 
-      <textarea
+      <DebouncedTextarea
         className="h-[56px] w-full resize-none rounded-lg border border-ink-700 bg-ink-900/70 px-3 py-2 text-sm text-ink-100
                    placeholder:text-ink-500 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40"
         placeholder="context B — e.g. a slow rage"
         value={sentenceB}
-        onChange={(e) => onB(e.target.value)}
+        onChange={onB}
       />
     </div>
   );

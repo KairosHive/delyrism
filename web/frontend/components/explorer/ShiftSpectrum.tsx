@@ -62,7 +62,18 @@ export function ShiftSpectrum() {
     <div className="panel-tight">
       <div className="mb-2 flex items-baseline justify-between gap-3">
         <div>
-          <div className="section-title">Shift spectrum</div>
+          <div className="section-title flex items-center gap-2">
+            Shift spectrum
+            {/* Subtle pulse while a refetch is in flight — keeps the user
+                oriented when the textarea is debounced and the panel value
+                comes in ~half a second after the last keystroke. */}
+            {q.isFetching && q.data && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-ink-400">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-400" />
+                refreshing
+              </span>
+            )}
+          </div>
           <div className="text-[11px] text-ink-400">
             how many independent directions of pull does this context have?
           </div>
