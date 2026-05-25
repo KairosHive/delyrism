@@ -15,6 +15,7 @@ import { useSidebar, buildContextWeights } from "@/lib/store";
 export function ShiftSpectrum() {
   const sid = useSidebar((s) => s.spaceId);
   const colorMap = useSidebar((s) => s.colorMap);
+  const symbols = useSidebar((s) => s.symbols);
   const sentence = useSidebar((s) => s.contextSentence);
   const weights = useSidebar(buildContextWeights);
   const strategy = useSidebar((s) => s.strategy);
@@ -88,16 +89,21 @@ export function ShiftSpectrum() {
       {hasCtx && q.isPending && !q.data && (
         <div className="p-6 text-sm text-ink-300">computing…</div>
       )}
-      {q.data && <SpectrumContent data={q.data} colorMap={colorMap} />}
+      {q.data && <SpectrumContent data={q.data} colorMap={colorMap} symbols={symbols} />}
     </div>
   );
 }
 
+// Distinct from any palette archetype colour so polygons read as "axes" not
+// "archetypes".  Order matters: axis 1 gets index 0.
+const AXIS_COLORS = ["#3bbdb0", "#d08770", "#c2a6fe", "#e6c068"] as const;
+
 function SpectrumContent({
-  data, colorMap,
+  data, colorMap, symbols,
 }: {
   data: ShiftSpectrumResponse;
   colorMap: Record<string, string>;
+  symbols: string[];
 }) {
   const topSigma = data.axes[0]?.sigma ?? 1;
   const meanDominant = topMeanArchetypes(data.mean_shift);
@@ -132,21 +138,33 @@ function SpectrumContent({
         <div className="mb-1.5 text-[10px] uppercase tracking-widest text-ink-400">
           Beyond that · {subKind}
         </div>
-        {data.axes.length === 0 ? (
+        {data.axes.length === 0 || symbols.length === 0 ? (
           <div className="text-[11px] text-ink-500">
             no measurable secondary structure — context affects every descriptor in the same direction
           </div>
         ) : (
-          <div className="space-y-1.5">
-            {data.axes.map((ax, i) => (
-              <AxisRow
-                key={i}
-                idx={i}
-                axis={ax}
-                topSigma={topSigma}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-[260px,1fr]">
+            <div className="flex justify-center">
+              <ArchetypeRosette
+                axes={data.axes}
+                symbols={symbols}
                 colorMap={colorMap}
+                axisColors={[...AXIS_COLORS]}
+                size={260}
               />
-            ))}
+            </div>
+            <div className="space-y-1.5">
+              {data.axes.map((ax, i) => (
+                <AxisRow
+                  key={i}
+                  idx={i}
+                  axis={ax}
+                  topSigma={topSigma}
+                  colorMap={colorMap}
+                  axisColor={AXIS_COLORS[i] ?? "#888"}
+                />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -185,35 +203,38 @@ function classifySub(data: ShiftSpectrumResponse): string {
 }
 
 function AxisRow({
-  idx, axis, topSigma, colorMap,
+  idx, axis, topSigma, colorMap, axisColor,
 }: {
   idx: number;
   axis: SpectrumAxis;
   topSigma: number;
   colorMap: Record<string, string>;
+  axisColor: string;
 }) {
   const pct = Math.max(2, Math.min(100, (axis.sigma / Math.max(topSigma, 1e-9)) * 100));
 
-  // In archetype-space SVD, profile entries are signed coefficients of the
-  // axis itself.  Positive = the archetype is on the + side of the axis
-  // (descriptors with positive U[i,k] move toward it).  Negative = on the
-  // − side.  An axis with both signs IS a contrast — show both poles.
-  const sorted = [...axis.archetype_profile].sort(
-    (a, b) => Math.abs(b.alignment) - Math.abs(a.alignment),
-  );
-  const positives = sorted.filter((p) => p.alignment > 0.2).slice(0, 2);
-  const negatives = sorted.filter((p) => p.alignment < -0.2).slice(0, 2);
+  // Determine whether to render bipolar (+ / −) or monopolar movers based on
+  // whether the axis has a meaningful negative pole.  Profile drives this.
+  const positives = axis.archetype_profile.filter((p) => p.alignment > 0.2);
+  const negatives = axis.archetype_profile.filter((p) => p.alignment < -0.2);
   const isContrast = positives.length > 0 && negatives.length > 0;
 
   return (
     <div className="flex items-start gap-2 py-1 text-[11px]">
-      <div className="w-12 shrink-0 pt-0.5 font-mono text-ink-400">axis {idx + 1}</div>
+      <div className="flex w-14 shrink-0 items-center gap-1.5 pt-0.5">
+        <span
+          className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+          style={{ background: axisColor }}
+        />
+        <span className="font-mono text-ink-400">{idx + 1}</span>
+      </div>
       <div className="mt-1 h-2 w-24 shrink-0 overflow-hidden rounded-full bg-ink-800">
         <div
           className="h-full rounded-full"
           style={{
             width: `${pct}%`,
-            background: "linear-gradient(90deg, #3bbdb0 0%, #5fcfc4 100%)",
+            background: axisColor,
+            opacity: 0.85,
           }}
         />
       </div>
@@ -222,31 +243,7 @@ function AxisRow({
       </div>
 
       <div className="ml-2 flex min-w-0 flex-1 flex-col gap-0.5">
-        {/* archetype contrast line */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {positives.length === 0 && negatives.length === 0 && (
-            <span className="text-ink-500">no clear contrast</span>
-          )}
-          {positives.map((p, i) => (
-            <React.Fragment key={"p" + p.symbol}>
-              {i > 0 && <span className="text-ink-500">+</span>}
-              <ArchChip p={p} colorMap={colorMap} />
-            </React.Fragment>
-          ))}
-          {isContrast && (
-            <span className="px-0.5 text-ink-500">vs</span>
-          )}
-          {negatives.map((p, i) => (
-            <React.Fragment key={"n" + p.symbol}>
-              {i > 0 && <span className="text-ink-500">+</span>}
-              <ArchChip p={p} colorMap={colorMap} variant="against" />
-            </React.Fragment>
-          ))}
-        </div>
-        {/* movers */}
         <Movers
-          positives={positives}
-          negatives={negatives}
           isContrast={isContrast}
           axis={axis}
           colorMap={colorMap}
@@ -256,35 +253,139 @@ function AxisRow({
   );
 }
 
-function ArchChip({
-  p, colorMap, variant = "toward",
+/* ─── Archetype rosette — overlaid polygons per residual axis ──────────
+ * One polygon per axis k.  Vertex radius = baseline + (σ_k / σ_max) ×
+ * v_k[s] × maxOffset.  Positive coefficients push outward, negative push
+ * inward — so an axis that contrasts two archetypes appears as a polygon
+ * that's bulged out on one side and dented in on the other.
+ *
+ * Multiple axes overlay with low opacity so their orthogonal structure
+ * reads at a glance: single-axis context = one bulge; polarising context
+ * = two roughly equal polygons pointing different directions; etc. */
+function ArchetypeRosette({
+  axes, symbols, colorMap, axisColors, size,
 }: {
-  p: { symbol: string; alignment: number };
+  axes: SpectrumAxis[];
+  symbols: string[];
   colorMap: Record<string, string>;
-  variant?: "toward" | "against";
+  axisColors: string[];
+  size: number;
 }) {
-  const c = colorMap[p.symbol] ?? "#888";
-  const dashed = variant === "against";
+  const cx = size / 2;
+  const cy = size / 2;
+  const baseR = size * 0.30;
+  const maxOffset = size * 0.18;
+
+  // Archetypes evenly placed on the circle, starting at the top (-π/2).
+  const angles = symbols.map((_, i) =>
+    (2 * Math.PI * i) / symbols.length - Math.PI / 2
+  );
+  const archDots = angles.map((a) => ({
+    x: cx + baseR * Math.cos(a),
+    y: cy + baseR * Math.sin(a),
+  }));
+  // Label position pushes a bit further out than the maximum polygon
+  // extent so labels don't overlap polygon vertices.
+  const labelR = baseR + maxOffset + 14;
+  const labels = angles.map((a, i) => {
+    const x = cx + labelR * Math.cos(a);
+    const y = cy + labelR * Math.sin(a);
+    const c = Math.cos(a);
+    // anchor: left if archetype is on the right side, right if on left
+    const anchor: "start" | "middle" | "end" =
+      Math.abs(c) < 0.25 ? "middle" : c > 0 ? "start" : "end";
+    return { x, y, anchor, sym: symbols[i] };
+  });
+
+  const sigmaMax = Math.max(...axes.map((a) => a.sigma), 1e-9);
+
+  // Build polygon points for each axis.
+  const polygons = axes.map((axis, idx) => {
+    const lookup = new Map(axis.archetype_profile.map((p) => [p.symbol, p.alignment]));
+    const sigmaScale = axis.sigma / sigmaMax;
+    const points = symbols.map((sym, i) => {
+      const v = lookup.get(sym) ?? 0;
+      const r = baseR + sigmaScale * v * maxOffset;
+      const a = angles[i];
+      return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    });
+    return {
+      points: points.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" "),
+      color: axisColors[idx] ?? "#888",
+    };
+  });
+
   return (
-    <span
-      className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${dashed ? "border-dashed" : ""}`}
-      style={{
-        color: c,
-        borderColor: c + (dashed ? "88" : "55"),
-        background: c + "12",
-      }}
-      title={`signed coefficient ${(p.alignment * 100).toFixed(0)}%`}
+    <svg
+      viewBox={`0 0 ${size} ${size}`}
+      width={size}
+      height={size}
+      role="img"
+      aria-label="archetype rosette of residual axes"
     >
-      {p.symbol}
-    </span>
+      {/* baseline circle — visual anchor for "no shift" */}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={baseR}
+        fill="none"
+        stroke="#2a3142"
+        strokeWidth={1}
+        strokeDasharray="3 3"
+      />
+
+      {/* polygons, drawn smallest-σ first so the largest axis stays on top */}
+      {[...polygons]
+        .map((p, i) => ({ ...p, idx: i }))
+        .sort((a, b) => (axes[a.idx].sigma - axes[b.idx].sigma))
+        .map((p) => (
+          <polygon
+            key={p.idx}
+            points={p.points}
+            fill={p.color}
+            fillOpacity={0.16}
+            stroke={p.color}
+            strokeWidth={1.6}
+            strokeOpacity={0.9}
+            strokeLinejoin="round"
+          />
+        ))}
+
+      {/* archetype dots */}
+      {archDots.map((d, i) => (
+        <circle
+          key={"d" + i}
+          cx={d.x}
+          cy={d.y}
+          r={3}
+          fill={colorMap[symbols[i]] ?? "#cbd"}
+          opacity={0.85}
+        />
+      ))}
+
+      {/* archetype labels */}
+      {labels.map((l, i) => (
+        <text
+          key={"l" + i}
+          x={l.x}
+          y={l.y}
+          textAnchor={l.anchor}
+          dominantBaseline="middle"
+          fontSize="10"
+          fontWeight={500}
+          fill={colorMap[l.sym] ?? "#cad4e0"}
+          style={{ fontFamily: "Inter, system-ui, sans-serif" }}
+        >
+          {l.sym}
+        </text>
+      ))}
+    </svg>
   );
 }
 
 function Movers({
-  positives, negatives, isContrast, axis, colorMap,
+  isContrast, axis, colorMap,
 }: {
-  positives: { symbol: string; alignment: number }[];
-  negatives: { symbol: string; alignment: number }[];
   isContrast: boolean;
   axis: SpectrumAxis;
   colorMap: Record<string, string>;
@@ -300,8 +401,10 @@ function Movers({
       </div>
     );
   }
-  // Monopolar axis: pick the side whose archetypes are dominant.
-  const list = positives.length >= negatives.length ? axis.positive_movers : axis.negative_movers;
+  // Monopolar axis: prefer positive movers if there are any, else negative.
+  const list = axis.positive_movers.length >= axis.negative_movers.length
+    ? axis.positive_movers
+    : axis.negative_movers;
   return <MoverInline movers={list} colorMap={colorMap} side="" />;
 }
 
