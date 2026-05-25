@@ -15,7 +15,6 @@ export function ContextOptions() {
   const selected = useSidebar((s) => s.selectedContextSymbols);
   const weights = useSidebar((s) => s.symbolWeights);
   const alch = useSidebar((s) => s.alchemistMode);
-  const sentenceB = useSidebar((s) => s.contextSentenceB);
   const set = useSidebar((s) => s.set);
   const setWeight = useSidebar((s) => s.setWeight);
 
@@ -86,18 +85,16 @@ export function ContextOptions() {
 
       <div className="border-t border-ink-700/60 pt-3 space-y-2">
         <Toggle
-          label="Alchemist mode (Context A → B)"
-          help="Enable a second context (B) for side-by-side comparison. The main panels show context A; alchemist controls let you blend A and B to study trajectories between two semantic positions."
+          label="Alchemist mode (Context A ⇄ B)"
+          help="Adds a second context (B) and a morph slider in the main page's Context Prompt card. Drag the slider to interpolate the override vector between A and B — every panel (Δ-graph, attention, rankings, similarity matrix) updates live."
           value={alch}
           onChange={(v) => set("alchemistMode", v)}
         />
         {alch && (
-          <textarea
-            className="input-base h-16"
-            placeholder="Context B sentence"
-            value={sentenceB}
-            onChange={(e) => set("contextSentenceB", e.target.value)}
-          />
+          <p className="text-[10px] leading-snug text-ink-400">
+            Type A and B and drag the slider in the <span className="text-accent-300">Context Prompt</span> card
+            above to morph between them.
+          </p>
         )}
       </div>
     </Section>

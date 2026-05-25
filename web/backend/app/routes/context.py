@@ -39,6 +39,65 @@ def encode_text(req: EncodeTextRequest) -> dict:
     return {"vector": v.astype(float).tolist(), "dim": int(v.shape[0])}
 
 
+class AlchemistBlendRequest(BaseModel):
+    space_id: str
+    sentence_a: str
+    sentence_b: str
+    blend: float = 0.5  # 0 → pure A, 1 → pure B
+
+
+@router.post("/set-alchemist-blend")
+def set_alchemist_blend(req: AlchemistBlendRequest) -> dict:
+    """Morph between two context sentences and install the result as the
+    space's context_override.
+
+    Server-side encode + lerp + normalize avoids round-tripping two vectors
+    on every slider tick.  The encoder's single-flight cache means repeated
+    calls with the same sentences are basically free — only the lerp
+    changes on each slider movement.
+
+    Reuses the same override slot audio/image use, so they're mutually
+    exclusive (the UI mirrors this).
+    """
+    space = engine_cache.get_space(req.space_id)
+    if space is None:
+        raise HTTPException(status_code=404, detail="unknown space_id")
+    a = (req.sentence_a or "").strip()
+    b = (req.sentence_b or "").strip()
+    lam = max(0.0, min(1.0, float(req.blend)))
+
+    # If only one side is filled, behave like a plain sentence (no blend
+    # needed) — keeps the slider feel honest at the endpoints when the
+    # other textarea is empty.
+    if not a and not b:
+        space.set_context_vec(None)
+        engine_cache.invalidate_results(req.space_id)
+        return {"ok": True, "active": False}
+
+    vecs = []
+    if a:
+        vecs.append(("a", space.embedder.encode([a])[0]))
+    if b:
+        vecs.append(("b", space.embedder.encode([b])[0]))
+
+    if len(vecs) == 1:
+        v = vecs[0][1]
+    else:
+        v = (1.0 - lam) * vecs[0][1] + lam * vecs[1][1]
+
+    v = v.astype(np.float32)
+    n = float(np.linalg.norm(v))
+    if n < 1e-9:
+        # degenerate (both sentences encoded to ~zero) — clear the override
+        space.set_context_vec(None)
+        engine_cache.invalidate_results(req.space_id)
+        return {"ok": True, "active": False}
+    v /= n
+    space.set_context_vec(v)
+    engine_cache.invalidate_results(req.space_id)
+    return {"ok": True, "active": True}
+
+
 @router.post("/encode-audio", response_model=EncodeAudioResponse)
 async def encode_audio(
     space_id: str = Form(...),

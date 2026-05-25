@@ -23,9 +23,15 @@ export interface SidebarState {
   contextSentence: string;
   selectedContextSymbols: string[];
   symbolWeights: Record<string, number>;
-  // dual-context (Alchemist mode)
+  // dual-context (Alchemist mode) — A and B sentences are blended server-side
+  // into a single override vector (slider drives `alchemistBlend`, 0=A, 1=B).
+  // `alchemistActive` mirrors backend override state; `alchemistNonce` is
+  // bumped on every blend change so dependent queries refetch.
   alchemistMode: boolean;
   contextSentenceB: string;
+  alchemistBlend: number;
+  alchemistActive: boolean;
+  alchemistNonce: number;
 
   // ----- Embedding Model -----
   embedderBackend: string;
@@ -140,6 +146,9 @@ export const useSidebar = create<SidebarState>((set) => ({
   symbolWeights: {},
   alchemistMode: false,
   contextSentenceB: "",
+  alchemistBlend: 0.5,
+  alchemistActive: false,
+  alchemistNonce: 0,
 
   embedderBackend: "cloudflare-bge-m3",
   embedderModel: "",

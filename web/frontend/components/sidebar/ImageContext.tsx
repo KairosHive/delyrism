@@ -61,10 +61,19 @@ export function ImageContext() {
         fd,
       );
       await api.post("/context/set-override", { space_id: spaceId, vector: enc.vector });
-      // if audio was on, the single backend slot just got replaced — sync UI
+      // Audio, image, and the alchemist blend all share the same backend
+      // override slot — flipping image on means the others just got
+      // replaced.  Sync UI state to match (also turn alchemist *mode* off
+      // so its effect doesn't immediately push its own blend back).
       if (audioActive) {
         set("audioActive", false);
         set("audioNonce", Date.now());
+      }
+      const st = useSidebar.getState();
+      if (st.alchemistMode || st.alchemistActive) {
+        set("alchemistMode", false);
+        set("alchemistActive", false);
+        set("alchemistNonce", Date.now());
       }
       set("imageDescription", enc.description);
       set("imageActive", true);

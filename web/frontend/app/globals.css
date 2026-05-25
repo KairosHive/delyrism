@@ -185,6 +185,39 @@
   margin-bottom: 0.65rem;
 }
 
+/* Alchemist morph slider — wider track + larger thumb than the sidebar
+ * sliders, and a gradient that visually anchors A → B. */
+input[type="range"].alchemist-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3bbdb0 0%, #6f7fcd 50%, #d08770 100%);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"].alchemist-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5f7fa;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(59, 189, 176, 0.25);
+  cursor: grab;
+}
+input[type="range"].alchemist-slider::-webkit-slider-thumb:active { cursor: grabbing; }
+input[type="range"].alchemist-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5f7fa;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(59, 189, 176, 0.25);
+  cursor: grab;
+}
+
 /* Custom scrollbar — slim, themed */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

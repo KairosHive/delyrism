@@ -28,11 +28,12 @@ export function useRankings() {
   const topk = useSidebar((s) => s.topk);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
+  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
 
   return useQuery({
     enabled: !!sid,
     placeholderData: keepPreviousData,
-    queryKey: ["propose", sid, sentence, weights, tau, alpha, lam, usePPR, blindSpot, topk, audioNonce, imageNonce],
+    queryKey: ["propose", sid, sentence, weights, tau, alpha, lam, usePPR, blindSpot, topk, audioNonce, imageNonce, alchemistNonce],
     queryFn: () =>
       api.post<ProposeResponse>("/propose", {
         space_id: sid,
@@ -126,15 +127,17 @@ export function useShift() {
   const reducer = useSidebar((s) => s.reducer);
   const audioActive = useSidebar((s) => s.audioActive);
   const imageActive = useSidebar((s) => s.imageActive);
+  const alchemistActive = useSidebar((s) => s.alchemistActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
+  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
 
   return useQuery({
-    // audio override counts as context — the engine's ctx_vec() honors it
-    // even when sentence is empty
-    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive),
+    // any override (audio / image / alchemist blend) counts as context — the
+    // engine's ctx_vec() honors them even when sentence is empty
+    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive || alchemistActive),
     placeholderData: keepPreviousData,
-    queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer, audioNonce, imageNonce],
+    queryKey: ["shift", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, reducer, audioNonce, imageNonce, alchemistNonce],
     queryFn: () => api.post<ShiftResponse>("/shift", shiftPayload()),
   });
 }
@@ -160,13 +163,15 @@ export function useDeltaGraph() {
   const deltaSign = useSidebar((s) => s.deltaSign);
   const audioActive = useSidebar((s) => s.audioActive);
   const imageActive = useSidebar((s) => s.imageActive);
+  const alchemistActive = useSidebar((s) => s.alchemistActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
+  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
 
   return useQuery({
-    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive),
+    enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive || alchemistActive),
     placeholderData: keepPreviousData,
-    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce, imageNonce],
+    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce, imageNonce, alchemistNonce],
     queryFn: () =>
       api.post<DeltaGraphResponse>("/delta-graph", {
         ...shiftPayload(),
@@ -191,13 +196,15 @@ export function useSubgraph() {
   const tau = useSidebar((s) => s.subTau);
   const audioActive = useSidebar((s) => s.audioActive);
   const imageActive = useSidebar((s) => s.imageActive);
+  const alchemistActive = useSidebar((s) => s.alchemistActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
+  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
   return useQuery({
-    // subgraph needs *some* form of context — sentence or audio override
-    enabled: !!sid && (!!sentence.trim() || audioActive || imageActive),
+    // subgraph needs *some* form of context — sentence or any active override
+    enabled: !!sid && (!!sentence.trim() || audioActive || imageActive || alchemistActive),
     placeholderData: keepPreviousData,
-    queryKey: ["subgraph", sid, sentence, ts, td, method, alpha, tau, audioNonce, imageNonce],
+    queryKey: ["subgraph", sid, sentence, ts, td, method, alpha, tau, audioNonce, imageNonce, alchemistNonce],
     queryFn: () =>
       api.post<SubgraphResponse>("/subgraph", {
         space_id: sid,
@@ -218,10 +225,11 @@ export function useAttention(symbol: string | null) {
   const tau = useSidebar((s) => s.tau);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
+  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
   return useQuery({
     enabled: !!sid && !!symbol,
     placeholderData: keepPreviousData,
-    queryKey: ["attention", sid, symbol, sentence, weights, tau, audioNonce, imageNonce],
+    queryKey: ["attention", sid, symbol, sentence, weights, tau, audioNonce, imageNonce, alchemistNonce],
     queryFn: () =>
       api.post<AttentionResponse>("/attention", {
         space_id: sid,
