@@ -3,6 +3,7 @@ import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, SpaceConfig, SpaceCreateResponse } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
+import { ExportButton } from "./ExportButton";
 
 /**
  * Build / rebuild the SymbolSpace.  Lives directly under the Console cards
@@ -67,12 +68,15 @@ export function BuildButton() {
           <div className="text-xs text-danger">{(build.error as Error).message}</div>
         )}
       </div>
-      {spaceId && !build.isPending && (
-        <div className="flex items-center gap-2 text-[11px] text-ink-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent-400" />
-          <span className="font-mono">space {spaceId.slice(0, 8)}…</span>
-        </div>
-      )}
+      <div className="flex items-center gap-3">
+        {spaceId && !build.isPending && (
+          <div className="flex items-center gap-2 text-[11px] text-ink-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent-400" />
+            <span className="font-mono">space {spaceId.slice(0, 8)}…</span>
+          </div>
+        )}
+        <ExportButton />
+      </div>
     </div>
   );
 }
