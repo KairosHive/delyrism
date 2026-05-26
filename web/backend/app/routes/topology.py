@@ -1,0 +1,692 @@
+"""Persistent homology endpoints — drives the Topology tab.
+
+Wraps `delyrism/ph.py` and exposes:
+  /topology/summary               TopoScore + joint PCA-2D for the overview map
+  /topology/diagrams/{symbol}     full persistence diagram (H0/H1/H2)
+  /topology/cycles/{symbol}       top persistent cycles + PCA coords
+  /topology/synergy               pairwise H1/H2 synergy matrix
+  /topology/pair-cycles?a&b       mixed/pure cycles between two symbols
+  /topology/catalysts/{symbol}    word-level LOO + cycle-participation impact
+
+Every endpoint is memoised on (space_id, op, params).  None of these
+depend on the current context — PH measures the *shape* of the
+unconditioned descriptor cloud — so the cache lives as long as the
+SymbolSpace itself.
+
+Ripser is the fast path.  If it's missing on the host, the endpoints
+return 503 with a clear message (the cheap H0-via-MST routes could in
+principle stand alone, but the user-facing value is the H1/H2 surface
+that requires ripser).
+"""
+from __future__ import annotations
+import itertools
+from typing import Optional
+
+import numpy as np
+from fastapi import APIRouter, HTTPException, Query
+
+from ..schemas import (
+    TopologySummaryEntry, TopologySummaryResponse, PCAPoint,
+    PersistenceDiagramResponse, PersistencePoint,
+    TopologyCyclesResponse, PersistentCycle, CycleVertex,
+    TopologySynergyResponse, SynergyEntry,
+    PairCyclesResponse, PairCycle,
+    WordCatalystResponse, WordCatalystEntry,
+)
+from .. import engine_cache
+
+router = APIRouter(prefix="/topology", tags=["topology"])
+
+
+# ---------- utilities -------------------------------------------------------
+
+def _require(space_id: str):
+    space = engine_cache.get_space(space_id)
+    if space is None:
+        raise HTTPException(status_code=404, detail="unknown space_id")
+    return space
+
+
+def _ripser_or_503():
+    """Lazy import; raise a clear HTTPException if ripser isn't available."""
+    try:
+        from ripser import ripser  # noqa: F401
+        return True
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Persistent-homology endpoints require the `ripser` package. "
+                "Install it (pip install ripser) and restart the backend."
+            ),
+        )
+
+
+def _ripser_available() -> bool:
+    try:
+        import ripser  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _pca2d(X: np.ndarray) -> np.ndarray:
+    """Joint PCA-2D, mean-centered.  Returns N×2."""
+    Xc = X - X.mean(axis=0, keepdims=True)
+    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    return Xc @ Vt[:2].T
+
+
+def _row_norm(X: np.ndarray) -> np.ndarray:
+    return X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+
+
+def _sum_finite(dgm: np.ndarray) -> float:
+    if dgm.size == 0:
+        return 0.0
+    m = np.isfinite(dgm[:, 1])
+    return float(np.sum(dgm[m, 1] - dgm[m, 0])) if m.any() else 0.0
+
+
+def _max_finite(dgm: np.ndarray) -> float:
+    if dgm.size == 0:
+        return 0.0
+    m = np.isfinite(dgm[:, 1])
+    if not m.any():
+        return 0.0
+    return float(np.max(dgm[m, 1] - dgm[m, 0]))
+
+
+def _symbol_embeddings(space) -> dict:
+    """{symbol: N_s × d numpy array of its descriptor vectors}."""
+    out = {}
+    for s in space.symbols:
+        idx = space.symbol_to_idx[s]
+        if len(idx) >= 4:  # PH needs at least a few points to be meaningful
+            out[s] = _row_norm(space.D[idx])
+    return out
+
+
+def _symbol_words(space) -> dict:
+    return {s: list(space.symbols_to_descriptors[s]) for s in space.symbols}
+
+
+def _cache_key(space_id: str, op: str, params: dict | None = None) -> str:
+    return engine_cache.memo_key(space_id, f"topology:{op}", params or {})
+
+
+# ---------- /topology/summary -----------------------------------------------
+
+@router.post("/summary", response_model=TopologySummaryResponse)
+def topology_summary(req: dict):
+    """Per-symbol TopoScore + a joint PCA-2D layout of every descriptor.
+
+    Returned in one shot so the Overview view doesn't need to roundtrip
+    for the layout.  PCA is on the *unit-normalised* original descriptors
+    — same frame everywhere PH is used in this tab.
+    """
+    space_id = req.get("space_id")
+    if not space_id:
+        raise HTTPException(status_code=400, detail="space_id required")
+    space = _require(space_id)
+
+    key = _cache_key(space_id, "summary")
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    have_ripser = _ripser_available()
+    sym_emb = _symbol_embeddings(space)
+
+    entries: list[TopologySummaryEntry] = []
+    if have_ripser:
+        from ripser import ripser
+        rows = []
+        for sym, X in sym_emb.items():
+            dgms = ripser(X, maxdim=2, metric="euclidean")["dgms"]
+            H0, H1, H2 = dgms[0], dgms[1], dgms[2]
+            # cohesion + outlier from H0
+            if H0.size and np.isfinite(H0[:, 1]).any():
+                p0 = H0[np.isfinite(H0[:, 1])]
+                pers0 = p0[:, 1] - p0[:, 0]
+                coh = float(np.median(pers0))
+                out = float(np.max(pers0))
+            else:
+                coh, out = 0.0, 0.0
+            h1_sum = _sum_finite(H1)
+            h1_max = _max_finite(H1)
+            h2_sum = _sum_finite(H2)
+            h2_max = _max_finite(H2)
+            thr = 0.02
+            h1_count = int(np.sum(np.where(np.isfinite(H1[:, 1] if H1.size else 0), (H1[:, 1] - H1[:, 0] if H1.size else 0), 0) > thr)) if H1.size else 0
+            h2_count = int(np.sum(np.where(np.isfinite(H2[:, 1] if H2.size else 0), (H2[:, 1] - H2[:, 0] if H2.size else 0), 0) > thr)) if H2.size else 0
+            rows.append((sym, coh, out, h1_sum, h1_max, h1_count, h2_sum, h2_max, h2_count))
+
+        # z-score composite
+        import statistics
+        if len(rows) >= 2:
+            cohs = [r[1] for r in rows]; h1s = [r[3] for r in rows]; h2s = [r[6] for r in rows]
+            def zsc(xs):
+                m = statistics.mean(xs); sd = statistics.pstdev(xs) or 1e-9
+                return [(x - m) / sd for x in xs]
+            coh_z = zsc(cohs); h1_z = zsc(h1s); h2_z = zsc(h2s)
+        else:
+            coh_z = [0.0] * len(rows); h1_z = [0.0] * len(rows); h2_z = [0.0] * len(rows)
+
+        for (r, cz, h1z, h2z) in zip(rows, coh_z, h1_z, h2_z):
+            (sym, coh, out, h1_sum, h1_max, h1_count, h2_sum, h2_max, h2_count) = r
+            entries.append(TopologySummaryEntry(
+                symbol=sym,
+                h0_cohesion=coh, h0_outlier=out,
+                h1_sum=h1_sum, h1_max=h1_max, h1_count=h1_count,
+                h2_sum=h2_sum, h2_max=h2_max, h2_count=h2_count,
+                topo_score=float(h1z + h2z - cz),
+            ))
+    else:
+        # Cheap fallback: just H0 cohesion via MST + flag the missing dependency
+        from delyrism.ph import h0_bar_lengths_from_mst
+        for sym, X in sym_emb.items():
+            try:
+                lens = h0_bar_lengths_from_mst(X, metric="euclidean")
+                coh = float(np.median(lens)) if lens.size else 0.0
+                out = float(np.max(lens)) if lens.size else 0.0
+            except Exception:
+                coh, out = 0.0, 0.0
+            entries.append(TopologySummaryEntry(
+                symbol=sym, h0_cohesion=coh, h0_outlier=out,
+                h1_sum=0.0, h1_max=0.0, h1_count=0,
+                h2_sum=0.0, h2_max=0.0, h2_count=0, topo_score=0.0,
+            ))
+
+    # Joint PCA-2D over all descriptors
+    Z = _pca2d(_row_norm(space.D))
+    pts = [
+        PCAPoint(word=d, symbol=space.owner[d], x=float(Z[i, 0]), y=float(Z[i, 1]))
+        for i, d in enumerate(space.descriptors)
+    ]
+    out = TopologySummaryResponse(entries=entries, points=pts, ripser_available=have_ripser)
+    engine_cache.memo_put(key, out)
+    return out
+
+
+# ---------- /topology/diagrams/{symbol} -------------------------------------
+
+@router.post("/diagrams", response_model=PersistenceDiagramResponse)
+def topology_diagram(req: dict):
+    space_id = req.get("space_id"); symbol = req.get("symbol")
+    if not space_id or not symbol:
+        raise HTTPException(status_code=400, detail="space_id and symbol required")
+    space = _require(space_id)
+    _ripser_or_503()
+
+    key = _cache_key(space_id, "diagram", {"symbol": symbol})
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    from ripser import ripser
+    sym_emb = _symbol_embeddings(space)
+    if symbol not in sym_emb:
+        raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
+    X = sym_emb[symbol]
+    dgms = ripser(X, maxdim=2, metric="euclidean")["dgms"]
+
+    pts: list[PersistencePoint] = []
+    max_finite = 0.0
+    for d, dgm in enumerate(dgms[:3]):
+        if not dgm.size:
+            continue
+        for birth, death in dgm:
+            is_inf = not np.isfinite(death)
+            b = float(birth); de = float(death) if not is_inf else float("inf")
+            if not is_inf and de > max_finite:
+                max_finite = de
+            pts.append(PersistencePoint(dim=d, birth=b, death=de if not is_inf else 0.0, is_infinite=is_inf))
+    # second pass: replace +inf with max_finite * 1.1 so the JSON is finite
+    inf_value = (max_finite if max_finite > 0 else 1.0) * 1.1
+    pts = [
+        PersistencePoint(dim=p.dim, birth=p.birth,
+                         death=inf_value if p.is_infinite else p.death,
+                         is_infinite=p.is_infinite)
+        for p in pts
+    ]
+    out = PersistenceDiagramResponse(symbol=symbol, points=pts,
+                                     max_finite_death=float(max_finite),
+                                     ripser_available=True)
+    engine_cache.memo_put(key, out)
+    return out
+
+
+# ---------- /topology/cycles/{symbol} ---------------------------------------
+
+@router.post("/cycles", response_model=TopologyCyclesResponse)
+def topology_cycles(req: dict):
+    """Top persistent H1 + H2 cycles for one symbol's descriptor cloud.
+
+    Each cycle carries the ordered vertices (for H1, this traces a loop
+    in semantic space; for H2, the triangle vertices of the void),
+    pre-projected to PCA-2D so the frontend can draw them on a shared
+    scatter without any client-side computation.
+    """
+    space_id = req.get("space_id"); symbol = req.get("symbol")
+    top_h1 = int(req.get("top_h1", 6))
+    top_h2 = int(req.get("top_h2", 3))
+    if not space_id or not symbol:
+        raise HTTPException(status_code=400, detail="space_id and symbol required")
+    space = _require(space_id)
+    _ripser_or_503()
+
+    key = _cache_key(space_id, "cycles", {"symbol": symbol, "k1": top_h1, "k2": top_h2})
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    sym_emb = _symbol_embeddings(space)
+    if symbol not in sym_emb:
+        raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
+    X = sym_emb[symbol]
+    words = list(space.symbols_to_descriptors[symbol])
+    # Defensive — drop duplicates by index alignment
+    words = words[:X.shape[0]]
+
+    from ripser import ripser
+    out_r = ripser(X, maxdim=2, metric="euclidean", do_cocycles=True)
+    H1, H2 = out_r["dgms"][1], out_r["dgms"][2]
+    coc1 = out_r.get("cocycles", [[], [], []])[1] if "cocycles" in out_r else []
+    coc2 = out_r.get("cocycles", [[], [], []])[2] if "cocycles" in out_r else []
+
+    # PCA-2D for this symbol's descriptors
+    Z = _pca2d(X)
+    descriptors = [
+        CycleVertex(word=words[i], index=i, x=float(Z[i, 0]), y=float(Z[i, 1]))
+        for i in range(X.shape[0])
+    ]
+
+    def _vertices_ordered_h1(cyc) -> list[int]:
+        """Given an H1 cocycle (list of [i, j, coeff]), return an *ordered*
+        traversal of the loop's vertices.  Greedy: start at the lowest-index
+        vertex, walk along edges.  Falls back to set order if the edges
+        don't form a single loop."""
+        if not cyc:
+            return []
+        edges: dict[int, list[int]] = {}
+        for row in cyc:
+            i, j = int(row[0]), int(row[1])
+            edges.setdefault(i, []).append(j)
+            edges.setdefault(j, []).append(i)
+        if not edges:
+            return []
+        start = min(edges.keys())
+        path = [start]
+        visited = {start}
+        cur = start
+        while True:
+            nxt = None
+            for v in edges.get(cur, []):
+                if v not in visited:
+                    nxt = v; break
+            if nxt is None:
+                break
+            path.append(nxt); visited.add(nxt); cur = nxt
+        # close the loop visually by appending start at the end? frontend
+        # will handle that — we return open path of distinct vertices
+        # plus any unvisited vertices appended (rare)
+        for v in edges.keys():
+            if v not in visited:
+                path.append(v)
+        return path
+
+    def _vertices_h2(cyc) -> list[int]:
+        verts = set()
+        for row in cyc:
+            verts.add(int(row[0])); verts.add(int(row[1])); verts.add(int(row[2]))
+        return sorted(verts)
+
+    cycles: list[PersistentCycle] = []
+    # H1
+    if H1.size:
+        pers = np.where(np.isfinite(H1[:, 1]), H1[:, 1] - H1[:, 0], 0.0)
+        order = np.argsort(pers)[::-1][:top_h1]
+        for idx in order:
+            if pers[idx] <= 0:
+                continue
+            cyc = coc1[idx] if idx < len(coc1) else []
+            verts = _vertices_ordered_h1(cyc)
+            if not verts:
+                continue
+            cycles.append(PersistentCycle(
+                dim=1,
+                birth=float(H1[idx, 0]),
+                death=float(H1[idx, 1] if np.isfinite(H1[idx, 1]) else 0.0),
+                persistence=float(pers[idx]),
+                vertices=[CycleVertex(word=words[v], index=v,
+                                      x=float(Z[v, 0]), y=float(Z[v, 1]))
+                          for v in verts if v < len(words)],
+            ))
+    # H2
+    if H2.size:
+        pers = np.where(np.isfinite(H2[:, 1]), H2[:, 1] - H2[:, 0], 0.0)
+        order = np.argsort(pers)[::-1][:top_h2]
+        for idx in order:
+            if pers[idx] <= 0:
+                continue
+            cyc = coc2[idx] if idx < len(coc2) else []
+            verts = _vertices_h2(cyc)
+            if not verts:
+                continue
+            cycles.append(PersistentCycle(
+                dim=2,
+                birth=float(H2[idx, 0]),
+                death=float(H2[idx, 1] if np.isfinite(H2[idx, 1]) else 0.0),
+                persistence=float(pers[idx]),
+                vertices=[CycleVertex(word=words[v], index=v,
+                                      x=float(Z[v, 0]), y=float(Z[v, 1]))
+                          for v in verts if v < len(words)],
+            ))
+
+    out = TopologyCyclesResponse(symbol=symbol, cycles=cycles, descriptors=descriptors,
+                                 ripser_available=True)
+    engine_cache.memo_put(key, out)
+    return out
+
+
+# ---------- /topology/synergy -----------------------------------------------
+
+@router.post("/synergy", response_model=TopologySynergyResponse)
+def topology_synergy(req: dict):
+    """Pairwise synergy_H1 / synergy_H2 for every (a, b) symbol pair.
+
+    Synergy = PH(A ∪ B) − PH(A ∪ B without cross-edges).  Captures how
+    much loop / void mass *requires* the two symbols to interact —
+    structure that wouldn't exist if you analysed them separately.
+    """
+    space_id = req.get("space_id")
+    if not space_id:
+        raise HTTPException(status_code=400, detail="space_id required")
+    space = _require(space_id)
+    _ripser_or_503()
+
+    key = _cache_key(space_id, "synergy")
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    from ripser import ripser
+    sym_emb = _symbol_embeddings(space)
+    syms = list(sym_emb.keys())
+
+    entries: list[SynergyEntry] = []
+    for a, b in itertools.combinations(syms, 2):
+        A = sym_emb[a]; B = sym_emb[b]
+        X = np.vstack([A, B])
+        X = _row_norm(X)
+        nA = len(A)
+        # union PH
+        d_union = ripser(X, maxdim=2, metric="euclidean")["dgms"]
+        sumH1_u = _sum_finite(d_union[1])
+        sumH2_u = _sum_finite(d_union[2])
+        # union with cross-edges blocked
+        diff = X[:, None, :] - X[None, :, :]
+        D = np.sqrt((diff * diff).sum(-1))
+        big = 1e9
+        # block A↔B edges
+        for i in range(len(X)):
+            for j in range(i + 1, len(X)):
+                if (i < nA) != (j < nA):
+                    D[i, j] = D[j, i] = big
+        d_nc = ripser(D, maxdim=2, metric="precomputed")["dgms"]
+        sumH1_nc = _sum_finite(d_nc[1])
+        sumH2_nc = _sum_finite(d_nc[2])
+        entries.append(SynergyEntry(
+            a=a, b=b,
+            synergy_h1=float(sumH1_u - sumH1_nc),
+            synergy_h2=float(sumH2_u - sumH2_nc),
+            sum_h1_union=float(sumH1_u),
+            sum_h2_union=float(sumH2_u),
+        ))
+
+    out = TopologySynergyResponse(symbols=syms, entries=entries, ripser_available=True)
+    engine_cache.memo_put(key, out)
+    return out
+
+
+# ---------- /topology/pair-cycles -------------------------------------------
+
+@router.post("/pair-cycles", response_model=PairCyclesResponse)
+def topology_pair_cycles(req: dict):
+    """Top persistent cycles in A ∪ B, tagged pure_a / pure_b / mixed.
+
+    Pure cycles tell you "this loop lives entirely in symbol X."  Mixed
+    cycles are the interesting ones — semantic loops that need both
+    symbols to close, i.e. the structural bridge between archetypes.
+    """
+    space_id = req.get("space_id")
+    a = req.get("a"); b = req.get("b")
+    top_h1 = int(req.get("top_h1", 8))
+    top_h2 = int(req.get("top_h2", 4))
+    if not space_id or not a or not b:
+        raise HTTPException(status_code=400, detail="space_id, a, b required")
+    space = _require(space_id)
+    _ripser_or_503()
+
+    key = _cache_key(space_id, "pair-cycles", {"a": a, "b": b, "k1": top_h1, "k2": top_h2})
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    sym_emb = _symbol_embeddings(space)
+    if a not in sym_emb or b not in sym_emb:
+        raise HTTPException(status_code=400, detail="both symbols must have ≥4 descriptors")
+    A = sym_emb[a]; B = sym_emb[b]
+    wordsA = list(space.symbols_to_descriptors[a])[:A.shape[0]]
+    wordsB = list(space.symbols_to_descriptors[b])[:B.shape[0]]
+    X = _row_norm(np.vstack([A, B]))
+    nA = len(A)
+    labels = np.array([0] * nA + [1] * len(B))
+    words = wordsA + wordsB
+    homes = [a] * nA + [b] * len(B)
+
+    Z = _pca2d(X)
+    descriptors = [
+        CycleVertex(word=words[i], index=i, x=float(Z[i, 0]), y=float(Z[i, 1]),
+                    home_symbol=homes[i])
+        for i in range(len(X))
+    ]
+
+    from ripser import ripser
+    out_r = ripser(X, maxdim=2, metric="euclidean", do_cocycles=True)
+    H1, H2 = out_r["dgms"][1], out_r["dgms"][2]
+    coc1 = out_r.get("cocycles", [[], [], []])[1] if "cocycles" in out_r else []
+    coc2 = out_r.get("cocycles", [[], [], []])[2] if "cocycles" in out_r else []
+
+    def _h1_walk(cyc):
+        if not cyc:
+            return []
+        edges = {}
+        for row in cyc:
+            i, j = int(row[0]), int(row[1])
+            edges.setdefault(i, []).append(j)
+            edges.setdefault(j, []).append(i)
+        if not edges:
+            return []
+        start = min(edges.keys())
+        path = [start]; visited = {start}; cur = start
+        while True:
+            nxt = None
+            for v in edges.get(cur, []):
+                if v not in visited:
+                    nxt = v; break
+            if nxt is None:
+                break
+            path.append(nxt); visited.add(nxt); cur = nxt
+        for v in edges.keys():
+            if v not in visited:
+                path.append(v)
+        return path
+
+    def _mix(verts: list[int]) -> tuple[str, float]:
+        if not verts:
+            return "mixed", 0.0
+        labs = labels[np.array(verts, dtype=int)]
+        n0 = int(np.sum(labs == 0)); n1 = int(np.sum(labs == 1))
+        if n1 == 0:
+            return "pure_a", 0.0
+        if n0 == 0:
+            return "pure_b", 0.0
+        return "mixed", float(min(n0, n1) / max(n0, n1))
+
+    cycles: list[PairCycle] = []
+
+    if H1.size:
+        pers = np.where(np.isfinite(H1[:, 1]), H1[:, 1] - H1[:, 0], 0.0)
+        order = np.argsort(pers)[::-1][:top_h1]
+        for idx in order:
+            if pers[idx] <= 0:
+                continue
+            cyc = coc1[idx] if idx < len(coc1) else []
+            verts = _h1_walk(cyc)
+            if not verts:
+                continue
+            mix_label, _ = _mix(verts)
+            # cross-edge fraction (H1)
+            total = 0; cross = 0
+            for row in cyc:
+                i, j = int(row[0]), int(row[1]); total += 1
+                if labels[i] != labels[j]:
+                    cross += 1
+            cross_frac = float(cross / total) if total > 0 else 0.0
+            cycles.append(PairCycle(
+                dim=1, birth=float(H1[idx, 0]),
+                death=float(H1[idx, 1] if np.isfinite(H1[idx, 1]) else 0.0),
+                persistence=float(pers[idx]), mix=mix_label,
+                cross_fraction=cross_frac,
+                vertices=[CycleVertex(word=words[v], index=v,
+                                      x=float(Z[v, 0]), y=float(Z[v, 1]),
+                                      home_symbol=homes[v])
+                          for v in verts if v < len(words)],
+            ))
+
+    if H2.size:
+        pers = np.where(np.isfinite(H2[:, 1]), H2[:, 1] - H2[:, 0], 0.0)
+        order = np.argsort(pers)[::-1][:top_h2]
+        for idx in order:
+            if pers[idx] <= 0:
+                continue
+            cyc = coc2[idx] if idx < len(coc2) else []
+            verts = set()
+            cross_t = 0; total_t = 0
+            for row in cyc:
+                i, j, k = int(row[0]), int(row[1]), int(row[2])
+                verts.update([i, j, k]); total_t += 1
+                if len({labels[i], labels[j], labels[k]}) >= 2:
+                    cross_t += 1
+            verts = sorted(verts)
+            if not verts:
+                continue
+            mix_label, _ = _mix(verts)
+            cycles.append(PairCycle(
+                dim=2, birth=float(H2[idx, 0]),
+                death=float(H2[idx, 1] if np.isfinite(H2[idx, 1]) else 0.0),
+                persistence=float(pers[idx]), mix=mix_label,
+                cross_fraction=float(cross_t / total_t) if total_t > 0 else 0.0,
+                vertices=[CycleVertex(word=words[v], index=v,
+                                      x=float(Z[v, 0]), y=float(Z[v, 1]),
+                                      home_symbol=homes[v])
+                          for v in verts if v < len(words)],
+            ))
+
+    out = PairCyclesResponse(a=a, b=b, cycles=cycles, descriptors=descriptors,
+                             ripser_available=True)
+    engine_cache.memo_put(key, out)
+    return out
+
+
+# ---------- /topology/catalysts/{symbol} ------------------------------------
+
+@router.post("/catalysts", response_model=WordCatalystResponse)
+def topology_catalysts(req: dict):
+    """Per-word topological criticality for one symbol.
+
+    Combines:
+      - leave-one-out: how much H1_sum / H2_sum drops if you delete this word
+      - cycle participation: vertex-credit from top persistent cocycles
+
+    The composite scores surface descriptors that are *holding the
+    topology together* — remove them and loops collapse.
+    """
+    space_id = req.get("space_id"); symbol = req.get("symbol")
+    if not space_id or not symbol:
+        raise HTTPException(status_code=400, detail="space_id and symbol required")
+    space = _require(space_id)
+    _ripser_or_503()
+
+    key = _cache_key(space_id, "catalysts", {"symbol": symbol})
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    from ripser import ripser
+    sym_emb = _symbol_embeddings(space)
+    if symbol not in sym_emb:
+        raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
+    X = sym_emb[symbol]
+    words = list(space.symbols_to_descriptors[symbol])[:X.shape[0]]
+
+    # baseline
+    base = ripser(X, maxdim=2, metric="euclidean", do_cocycles=True)
+    H1 = base["dgms"][1]; H2 = base["dgms"][2]
+    base_h1 = _sum_finite(H1); base_h2 = _sum_finite(H2)
+    coc1 = base.get("cocycles", [[], [], []])[1] if "cocycles" in base else []
+    coc2 = base.get("cocycles", [[], [], []])[2] if "cocycles" in base else []
+
+    # cycle-participation weights
+    cycle_w = np.zeros(len(words), dtype=float)
+    def _add_weights(H, C, dim, topk):
+        if not H.size:
+            return
+        pers = np.where(np.isfinite(H[:, 1]), H[:, 1] - H[:, 0], 0.0)
+        order = np.argsort(pers)[::-1][:topk]
+        for idx in order:
+            cyc = C[idx] if idx < len(C) else []
+            verts = set()
+            if dim == 1:
+                for row in cyc:
+                    verts.add(int(row[0])); verts.add(int(row[1]))
+            else:
+                for row in cyc:
+                    verts.update([int(row[0]), int(row[1]), int(row[2])])
+            for v in verts:
+                if v < len(words):
+                    cycle_w[v] += float(pers[idx])
+    _add_weights(H1, coc1, 1, topk=6)
+    _add_weights(H2, coc2, 2, topk=4)
+
+    # LOO — N ripser calls.  Bounded by symbol size; typical archetype
+    # has 10-20 descriptors, so cost is manageable.
+    delta_h1 = np.zeros(len(words), dtype=float)
+    delta_h2 = np.zeros(len(words), dtype=float)
+    for i in range(X.shape[0]):
+        Xi = np.delete(X, i, axis=0)
+        if Xi.shape[0] < 4:
+            continue
+        dgmi = ripser(Xi, maxdim=2, metric="euclidean")["dgms"]
+        delta_h1[i] = base_h1 - _sum_finite(dgmi[1])
+        delta_h2[i] = base_h2 - _sum_finite(dgmi[2])
+
+    composite = delta_h1 + delta_h2 + 0.5 * cycle_w
+
+    entries: list[WordCatalystEntry] = []
+    for i in range(len(words)):
+        entries.append(WordCatalystEntry(
+            word=words[i],
+            delta_h1=float(delta_h1[i]), delta_h2=float(delta_h2[i]),
+            cycle_weight=float(cycle_w[i]),
+            composite=float(composite[i]),
+        ))
+    entries.sort(key=lambda e: -e.composite)
+
+    out = WordCatalystResponse(symbol=symbol, entries=entries,
+                               h1_baseline=base_h1, h2_baseline=base_h2,
+                               ripser_available=True)
+    engine_cache.memo_put(key, out)
+    return out

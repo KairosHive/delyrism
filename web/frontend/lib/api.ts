@@ -214,3 +214,118 @@ export interface StoryResponse {
   motifs: string[];
   model: string;
 }
+
+
+// ───────────────────────── topology (persistent homology) ─────────────────────────
+
+export interface TopologySummaryEntry {
+  symbol: string;
+  h0_cohesion: number;
+  h0_outlier: number;
+  h1_sum: number;
+  h1_max: number;
+  h1_count: number;
+  h2_sum: number;
+  h2_max: number;
+  h2_count: number;
+  topo_score: number;
+}
+
+export interface PCAPoint {
+  word: string;
+  symbol: string;
+  x: number;
+  y: number;
+}
+
+export interface TopologySummaryResponse {
+  entries: TopologySummaryEntry[];
+  points: PCAPoint[];
+  ripser_available: boolean;
+}
+
+export interface PersistencePoint {
+  dim: 0 | 1 | 2;
+  birth: number;
+  death: number;
+  is_infinite: boolean;
+}
+
+export interface PersistenceDiagramResponse {
+  symbol: string;
+  points: PersistencePoint[];
+  max_finite_death: number;
+  ripser_available: boolean;
+}
+
+export interface CycleVertex {
+  word: string;
+  index: number;
+  x: number;
+  y: number;
+  home_symbol?: string | null;
+}
+
+export interface PersistentCycle {
+  dim: 1 | 2;
+  birth: number;
+  death: number;
+  persistence: number;
+  vertices: CycleVertex[];
+}
+
+export interface TopologyCyclesResponse {
+  symbol: string;
+  cycles: PersistentCycle[];
+  descriptors: CycleVertex[];
+  ripser_available: boolean;
+}
+
+export interface SynergyEntry {
+  a: string;
+  b: string;
+  synergy_h1: number;
+  synergy_h2: number;
+  sum_h1_union: number;
+  sum_h2_union: number;
+}
+
+export interface TopologySynergyResponse {
+  symbols: string[];
+  entries: SynergyEntry[];
+  ripser_available: boolean;
+}
+
+export interface PairCycle {
+  dim: 1 | 2;
+  birth: number;
+  death: number;
+  persistence: number;
+  mix: "pure_a" | "pure_b" | "mixed";
+  cross_fraction: number;
+  vertices: CycleVertex[];   // each carries home_symbol
+}
+
+export interface PairCyclesResponse {
+  a: string;
+  b: string;
+  cycles: PairCycle[];
+  descriptors: CycleVertex[];
+  ripser_available: boolean;
+}
+
+export interface WordCatalystEntry {
+  word: string;
+  delta_h1: number;
+  delta_h2: number;
+  cycle_weight: number;
+  composite: number;
+}
+
+export interface WordCatalystResponse {
+  symbol: string;
+  entries: WordCatalystEntry[];
+  h1_baseline: number;
+  h2_baseline: number;
+  ripser_available: boolean;
+}

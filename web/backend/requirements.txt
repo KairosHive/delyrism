@@ -7,5 +7,10 @@ requests>=2.31
 # Pillow for /context/encode-image — server-side resize before shipping to
 # the Cloudflare vision LLM (caps 25 MB inputs at 1024px on the long side).
 pillow>=10.0
+# Persistent homology — drives the Topology tab.  Compiled C++ extension
+# (~5MB binary).  The /topology routes degrade gracefully (return 503 with
+# a clear message) if it's missing, so a Railway build that fails to
+# compile ripser still serves every other tab.
+ripser>=0.6.7
 # The engine itself reuses dependencies from ../../requirements.txt
 # (numpy, scikit-learn, networkx, sentence-transformers, transformers, torch...)

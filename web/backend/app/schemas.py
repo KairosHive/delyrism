@@ -357,3 +357,121 @@ class StoryResponse(BaseModel):
     story: str
     motifs: List[str]
     model: str
+
+
+# ----------------------- topology (persistent homology) -----------------------
+
+class TopologySummaryEntry(BaseModel):
+    symbol: str
+    h0_cohesion: float          # median H0 persistence — lower = tighter cluster
+    h0_outlier: float           # max H0 persistence — biggest single-point lifetime
+    h1_sum: float               # total H1 persistence — loopiness
+    h1_max: float
+    h1_count: int               # number of H1 cycles with persistence > thr
+    h2_sum: float               # total H2 persistence — voidiness
+    h2_max: float
+    h2_count: int
+    topo_score: float           # z-score composite: H1_z + H2_z − H0_cohesion_z
+
+
+class TopologySummaryResponse(BaseModel):
+    entries: List[TopologySummaryEntry]
+    # Joint PCA-2D of all descriptors across all symbols — used by the
+    # overview map so every symbol's cloud lives in the same frame.
+    points: List["PCAPoint"]
+    ripser_available: bool
+
+
+class PCAPoint(BaseModel):
+    word: str
+    symbol: str
+    x: float
+    y: float
+
+
+class PersistencePoint(BaseModel):
+    dim: int                    # 0 / 1 / 2
+    birth: float
+    death: float                # infinity encoded as the diagram's max+1 for plotting
+    is_infinite: bool
+
+
+class PersistenceDiagramResponse(BaseModel):
+    symbol: str
+    points: List[PersistencePoint]
+    max_finite_death: float     # for setting axis limits client-side
+    ripser_available: bool
+
+
+class CycleVertex(BaseModel):
+    word: str
+    index: int                  # index inside the symbol's descriptor list
+    x: float                    # PCA-2D coords for plotting
+    y: float
+    home_symbol: Optional[str] = None  # only used for pair cycles; None = same as card
+
+
+class PersistentCycle(BaseModel):
+    dim: int                    # 1 or 2
+    birth: float
+    death: float
+    persistence: float
+    vertices: List[CycleVertex] # ordered (forms a loop for H1)
+
+
+class TopologyCyclesResponse(BaseModel):
+    symbol: str
+    cycles: List[PersistentCycle]
+    # ALL of this symbol's descriptors, projected — for drawing context
+    # behind the active cycle.
+    descriptors: List[CycleVertex]
+    ripser_available: bool
+
+
+class SynergyEntry(BaseModel):
+    a: str
+    b: str
+    synergy_h1: float           # how much H1 mass exists only when A∪B is connected
+    synergy_h2: float
+    sum_h1_union: float
+    sum_h2_union: float
+
+
+class TopologySynergyResponse(BaseModel):
+    symbols: List[str]
+    entries: List[SynergyEntry]
+    ripser_available: bool
+
+
+class PairCycle(BaseModel):
+    dim: int
+    birth: float
+    death: float
+    persistence: float
+    mix: Literal["pure_a", "pure_b", "mixed"]
+    cross_fraction: float       # fraction of cycle edges/triangles spanning A↔B
+    vertices: List[CycleVertex] # home_symbol filled in for each vertex
+
+
+class PairCyclesResponse(BaseModel):
+    a: str
+    b: str
+    cycles: List[PairCycle]
+    descriptors: List[CycleVertex]  # all A + B points, home_symbol on each
+    ripser_available: bool
+
+
+class WordCatalystEntry(BaseModel):
+    word: str
+    delta_h1: float             # how much removing this word drops H1_sum
+    delta_h2: float
+    cycle_weight: float         # vertex-credit from cycle-participation
+    composite: float            # delta_h1 + delta_h2 + 0.5 * cycle_weight
+
+
+class WordCatalystResponse(BaseModel):
+    symbol: str
+    entries: List[WordCatalystEntry]
+    h1_baseline: float
+    h2_baseline: float
+    ripser_available: bool

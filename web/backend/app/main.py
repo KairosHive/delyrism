@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routes import spaces, analysis, delta, context, story, builder
+from .routes import spaces, analysis, delta, context, story, builder, topology
 
 app = FastAPI(
     title="Delyrism API",
@@ -67,6 +67,7 @@ app.include_router(context.router)
 app.include_router(story.router)
 app.include_router(builder.router)
 app.include_router(builder.legacy_router)  # /miner alias kept for older clients
+app.include_router(topology.router)
 
 
 @app.get("/healthz")

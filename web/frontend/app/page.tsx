@@ -4,16 +4,18 @@ import { Sidebar } from "@/components/sidebar/Sidebar";
 import { Explorer } from "@/components/explorer/Explorer";
 import { StoryGenerator } from "@/components/story/StoryGenerator";
 import { ArchetypeBuilder } from "@/components/builder/ArchetypeBuilder";
+import { TopologyTab } from "@/components/topology/TopologyTab";
 import { Title } from "@/components/header/Title";
 import { Console } from "@/components/header/Console";
 import { BuildButton } from "@/components/header/BuildButton";
 import { TimingBadge } from "@/components/debug/TimingBadge";
 import { useSidebar } from "@/lib/store";
 
-type TabId = "explorer" | "story" | "builder";
+type TabId = "explorer" | "topology" | "story" | "builder";
 
 const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "explorer", label: "Explorer",          hint: "context-conditioned embeddings" },
+  { id: "topology", label: "Topology",          hint: "persistent homology of symbol clouds" },
   { id: "story",    label: "Story Generator",   hint: "weave motifs into micro-fiction" },
   { id: "builder",  label: "Archetype Builder", hint: "compose new symbol sets" },
 ];
@@ -85,6 +87,7 @@ export default function Home() {
 
         <section className="flex-1 px-3 pb-10 pt-4 md:px-8 md:pt-6">
           {tab === "explorer" && <Explorer />}
+          {tab === "topology" && <TopologyTab />}
           {tab === "story" && <StoryGenerator />}
           {tab === "builder" && <ArchetypeBuilder />}
         </section>
