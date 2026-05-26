@@ -2,7 +2,11 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plot } from "../plots/Plot";
-import { api, TopologySummaryResponse, TopologySummaryEntry, SetQualityMetrics } from "@/lib/api";
+import {
+  api,
+  TopologySummaryResponse, TopologySummaryEntry, SetQualityMetrics,
+  TopologySynergyResponse,
+} from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
 import { useTopologyContext } from "./useTopologyContext";
@@ -38,6 +42,22 @@ export function TopologyOverview() {
       api.post<TopologySummaryResponse>("/topology/summary", { space_id: sid }),
   });
 
+  // Synergy is heavier — fetch separately so the fast Set Quality scalars
+  // show first, synergy-derived "bridges" cards fill in when the request
+  // lands.  Same delta pattern (intrinsic baseline when overlay is on).
+  const qSyn = useQuery({
+    enabled: !!sid,
+    queryKey: ["topo-synergy", sid, ...ctx.keyTail],
+    queryFn: () =>
+      api.post<TopologySynergyResponse>("/topology/synergy", { space_id: sid, ...ctx.payload }),
+  });
+  const qSynBaseline = useQuery({
+    enabled: !!sid && ctx.active,
+    queryKey: ["topo-synergy", sid, "intrinsic"],
+    queryFn: () =>
+      api.post<TopologySynergyResponse>("/topology/synergy", { space_id: sid }),
+  });
+
   if (q.isPending) {
     return (
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.4fr]">
@@ -70,6 +90,9 @@ export function TopologyOverview() {
           current={data.set_quality}
           baseline={baselineQ}
           underContext={ctx.active}
+          syn={qSyn.data ?? null}
+          synBaseline={ctx.active ? qSynBaseline.data ?? null : null}
+          synPending={qSyn.isPending}
         />
       )}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.4fr]">
@@ -153,13 +176,29 @@ const METRICS: MetricSpec[] = [
     digits: 2, goodDir: "up" },
 ];
 
+function meanSynergy(data: TopologySynergyResponse | null, kind: "h1" | "h2"): number | null {
+  if (!data || data.entries.length === 0) return null;
+  const k = kind === "h1" ? "synergy_h1" : "synergy_h2";
+  let s = 0;
+  for (const e of data.entries) s += e[k];
+  return s / data.entries.length;
+}
+
 function SetQualityStrip({
-  current, baseline, underContext,
+  current, baseline, underContext, syn, synBaseline, synPending,
 }: {
   current: SetQualityMetrics;
   baseline: SetQualityMetrics | null;
   underContext: boolean;
+  syn: TopologySynergyResponse | null;
+  synBaseline: TopologySynergyResponse | null;
+  synPending: boolean;
 }) {
+  const synH1 = meanSynergy(syn, "h1");
+  const synH2 = meanSynergy(syn, "h2");
+  const synH1Base = meanSynergy(synBaseline, "h1");
+  const synH2Base = meanSynergy(synBaseline, "h2");
+
   return (
     <div className="panel-tight">
       <div className="mb-2 flex items-baseline justify-between">
@@ -172,7 +211,7 @@ function SetQualityStrip({
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
         {METRICS.map((m) => (
           <MetricCard
             key={m.key}
@@ -181,6 +220,93 @@ function SetQualityStrip({
             baseline={baseline ? baseline[m.key] : null}
           />
         ))}
+        <SynergyMetricCard
+          label="bridges H1"
+          hint="Mean H1 synergy across all archetype pairs.  Synergy = loop mass that requires the pair's clouds to be joined (cycles only existing in A∪B).  High = archetypes interweave with shared loops.  Negative = the union has LESS H1 than the parts alone — clouds compete."
+          value={synH1}
+          baseline={synH1Base}
+          pending={synPending && synH1 == null}
+        />
+        <SynergyMetricCard
+          label="bridges H2"
+          hint="Mean H2 synergy across all archetype pairs.  Cavity-equivalent of bridges H1 — voids that exist only when both clouds connect.  Rare; meaningful when present."
+          value={synH2}
+          baseline={synH2Base}
+          pending={synPending && synH2 == null}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SynergyMetricCard({
+  label, hint, value, baseline, pending,
+}: {
+  label: string;
+  hint: string;
+  value: number | null;
+  baseline: number | null;
+  pending: boolean;
+}) {
+  if (pending && value == null) {
+    return (
+      <div
+        className="rounded-lg border border-ink-700/60 bg-ink-900/40 p-2.5"
+        title={hint}
+      >
+        <div className="mb-0.5 text-[9px] uppercase tracking-widest text-ink-500">{label}</div>
+        <div className="flex items-baseline gap-1.5">
+          <div className="font-mono text-[15px] text-ink-500">
+            <span className="inline-block h-3 w-10 animate-pulse rounded bg-ink-800/60" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (value == null) {
+    return (
+      <div
+        className="rounded-lg border border-ink-700/60 bg-ink-900/40 p-2.5"
+        title={hint}
+      >
+        <div className="mb-0.5 text-[9px] uppercase tracking-widest text-ink-500">{label}</div>
+        <div className="font-mono text-[15px] text-ink-500">—</div>
+      </div>
+    );
+  }
+  const delta = baseline != null ? value - baseline : null;
+  const sig = delta != null && Math.abs(delta) > Math.max(0.003, Math.abs(value) * 0.02);
+  // For bridges, more = more connected; whether that's "good" depends on
+  // intent.  Colour Δ purely by sign (teal = positive change, warm = negative)
+  // without claiming a polarity.
+  const deltaColour =
+    !sig || delta == null
+      ? "#6e7e95"
+      : delta > 0
+        ? "#5fcfc4"
+        : "#d08770";
+  const arrow = delta == null ? "" : !sig ? "·" : delta > 0 ? "▲" : "▼";
+  return (
+    <div
+      className="rounded-lg border border-ink-700/60 bg-ink-900/40 p-2.5"
+      title={hint}
+    >
+      <div className="mb-0.5 text-[9px] uppercase tracking-widest text-ink-500">{label}</div>
+      <div className="flex items-baseline gap-1.5">
+        <div
+          className="font-mono text-[15px]"
+          style={{ color: value >= 0 ? "#cad4e0" : "#d08770" }}
+        >
+          {value >= 0 ? "" : ""}{value.toFixed(3)}
+        </div>
+        {delta != null && (
+          <div
+            className="font-mono text-[10px] tabular-nums"
+            style={{ color: deltaColour }}
+          >
+            {arrow} {delta > 0 ? "+" : ""}{delta.toFixed(3)}
+          </div>
+        )}
       </div>
     </div>
   );
