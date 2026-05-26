@@ -10,6 +10,8 @@ import {
 } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
+import { useTopologyContext } from "./useTopologyContext";
+import { ContextPill } from "./TopologyOverview";
 
 /**
  * Persistence diagrams — small-multiples grid + expandable detail.
@@ -44,10 +46,12 @@ export function TopologyDiagrams() {
   const colorMap = useSidebar((s) => s.colorMap);
   const [expanded, setExpanded] = React.useState<string | null>(null);
 
+  const ctx = useTopologyContext();
   const q = useQuery({
     enabled: !!sid,
-    queryKey: ["topo-diagrams-all", sid],
-    queryFn: () => api.post<AllDiagramsResponse>("/topology/diagrams-all", { space_id: sid }),
+    queryKey: ["topo-diagrams-all", sid, ...ctx.keyTail],
+    queryFn: () =>
+      api.post<AllDiagramsResponse>("/topology/diagrams-all", { space_id: sid, ...ctx.payload }),
   });
 
   if (q.isPending) {
@@ -89,6 +93,7 @@ export function TopologyDiagrams() {
 
   return (
     <div className="space-y-4">
+      {ctx.active && <ContextPill summary={ctx.summary} />}
       {/* ── overall summary banner ── */}
       <div className="panel-tight">
         <div className="mb-1 text-[10px] uppercase tracking-widest text-ink-400">

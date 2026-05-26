@@ -98,14 +98,21 @@ def _max_finite(dgm: np.ndarray) -> float:
     return float(np.max(dgm[m, 1] - dgm[m, 0]))
 
 
-def _symbol_embeddings(space) -> dict:
-    """{symbol: N_s × d numpy array of its descriptor vectors}."""
+def _symbol_embeddings_from(space, D: np.ndarray) -> dict:
+    """{symbol: N_s × d numpy array of its descriptor vectors} built from
+    the *given* descriptor matrix D — could be the original space.D or a
+    context-shifted D' from `engine_cache.get_or_compute_shifted_matrix`.
+    """
     out = {}
     for s in space.symbols:
         idx = space.symbol_to_idx[s]
         if len(idx) >= 4:  # PH needs at least a few points to be meaningful
-            out[s] = _row_norm(space.D[idx])
+            out[s] = _row_norm(D[idx])
     return out
+
+
+def _symbol_embeddings(space) -> dict:
+    return _symbol_embeddings_from(space, space.D)
 
 
 def _symbol_words(space) -> dict:
@@ -114,6 +121,53 @@ def _symbol_words(space) -> dict:
 
 def _cache_key(space_id: str, op: str, params: dict | None = None) -> str:
     return engine_cache.memo_key(space_id, f"topology:{op}", params or {})
+
+
+def _shift_params_from_body(body: dict) -> dict:
+    """Pull the standard shift-matrix parameter set out of a request body.
+    Mirrors the schema the Explorer's shiftPayload sends — same defaults so
+    a missing field collapses to the engine's standard behaviour."""
+    return {
+        "weights": body.get("weights"),
+        "sentence": body.get("sentence"),
+        "strategy": body.get("strategy", "gate"),
+        "beta": body.get("beta", 0.6),
+        "gate": body.get("gate", "relu"),
+        "tau": body.get("tau", 0.3),
+        "within_symbol_softmax": body.get("within_symbol_softmax", False),
+        "gamma": body.get("gamma", 0.5),
+        "prompt_template": body.get("prompt_template", "{sent}, {desc}"),
+        "pool_type": body.get("pool_type", "avg"),
+        "pool_w": body.get("pool_w", 0.7),
+        "membership_alpha": body.get("membership_alpha", 0.0),
+    }
+
+
+def _resolve_D_and_key(
+    space, space_id: str, body: dict, op: str, extra: dict | None = None,
+) -> tuple[np.ndarray, str, bool]:
+    """Return (D matrix, cache_key, used_context).
+
+    use_context=True in the body re-runs the same context-shift pipeline
+    Explorer uses (gate/reembed/pooling/hybrid, β, γ, τ, etc.) and returns
+    the shifted D' for the topology endpoint to consume.  The shift params
+    fold into the cache key so every (op, shift_params) combination memoises
+    independently.
+
+    use_context=False (default) returns the original space.D — the
+    "intrinsic shape" reading.
+    """
+    use_ctx = bool(body.get("use_context", False))
+    base = dict(extra or {})
+    if not use_ctx:
+        D = space.D
+        params = base
+    else:
+        shift_params = _shift_params_from_body(body)
+        D = engine_cache.get_or_compute_shifted_matrix(space_id, space, shift_params)
+        params = {**base, **shift_params, "_ctx": True}
+    key = _cache_key(space_id, op, params)
+    return D, key, use_ctx
 
 
 # ---------- /topology/summary -----------------------------------------------
@@ -131,13 +185,13 @@ def topology_summary(req: dict):
         raise HTTPException(status_code=400, detail="space_id required")
     space = _require(space_id)
 
-    key = _cache_key(space_id, "summary")
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "summary")
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
     have_ripser = _ripser_available()
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
 
     entries: list[TopologySummaryEntry] = []
     if have_ripser:
@@ -199,8 +253,9 @@ def topology_summary(req: dict):
                 h2_sum=0.0, h2_max=0.0, h2_count=0, topo_score=0.0,
             ))
 
-    # Joint PCA-2D over all descriptors
-    Z = _pca2d(_row_norm(space.D))
+    # Joint PCA-2D over all descriptors (uses the same D that drove PH —
+    # original or shifted depending on use_context).
+    Z = _pca2d(_row_norm(D))
     pts = [
         PCAPoint(word=d, symbol=space.owner[d], x=float(Z[i, 0]), y=float(Z[i, 1]))
         for i, d in enumerate(space.descriptors)
@@ -220,13 +275,13 @@ def topology_diagram(req: dict):
     space = _require(space_id)
     _ripser_or_503()
 
-    key = _cache_key(space_id, "diagram", {"symbol": symbol})
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "diagram", {"symbol": symbol})
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
     from ripser import ripser
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
     if symbol not in sym_emb:
         raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
     X = sym_emb[symbol]
@@ -272,13 +327,13 @@ def topology_diagrams_all(req: dict):
     space = _require(space_id)
     _ripser_or_503()
 
-    key = _cache_key(space_id, "diagrams-all")
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "diagrams-all")
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
     from ripser import ripser
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
 
     # First pass: compute all PH and find the global max-finite-death so the
     # minis can share an axis frame.
@@ -364,12 +419,13 @@ def topology_cycles(req: dict):
     space = _require(space_id)
     _ripser_or_503()
 
-    key = _cache_key(space_id, "cycles", {"symbol": symbol, "k1": top_h1, "k2": top_h2})
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "cycles",
+                                    {"symbol": symbol, "k1": top_h1, "k2": top_h2})
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
     if symbol not in sym_emb:
         raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
     X = sym_emb[symbol]
@@ -494,13 +550,13 @@ def topology_synergy(req: dict):
     space = _require(space_id)
     _ripser_or_503()
 
-    key = _cache_key(space_id, "synergy")
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "synergy")
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
     from ripser import ripser
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
     syms = list(sym_emb.keys())
 
     entries: list[SynergyEntry] = []
@@ -559,12 +615,13 @@ def topology_pair_cycles(req: dict):
     space = _require(space_id)
     _ripser_or_503()
 
-    key = _cache_key(space_id, "pair-cycles", {"a": a, "b": b, "k1": top_h1, "k2": top_h2})
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "pair-cycles",
+                                    {"a": a, "b": b, "k1": top_h1, "k2": top_h2})
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
     if a not in sym_emb or b not in sym_emb:
         raise HTTPException(status_code=400, detail="both symbols must have ≥4 descriptors")
     A = sym_emb[a]; B = sym_emb[b]
@@ -710,13 +767,13 @@ def topology_catalysts(req: dict):
     space = _require(space_id)
     _ripser_or_503()
 
-    key = _cache_key(space_id, "catalysts", {"symbol": symbol})
+    D, key, _ = _resolve_D_and_key(space, space_id, req, "catalysts", {"symbol": symbol})
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
 
     from ripser import ripser
-    sym_emb = _symbol_embeddings(space)
+    sym_emb = _symbol_embeddings_from(space, D)
     if symbol not in sym_emb:
         raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
     X = sym_emb[symbol]

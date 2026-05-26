@@ -5,6 +5,8 @@ import { Plot } from "../plots/Plot";
 import { api, TopologyCyclesResponse, PersistentCycle, CycleVertex } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
+import { useTopologyContext } from "./useTopologyContext";
+import { ContextPill } from "./TopologyOverview";
 
 /**
  * Interactive persistent-cycle browser — the killer view of the
@@ -36,18 +38,21 @@ export function TopologyCycles() {
   // Reset selection when switching symbol
   React.useEffect(() => { setActiveIdx(0); }, [symbol]);
 
+  const ctx = useTopologyContext();
   const q = useQuery({
     enabled: !!sid && !!symbol,
-    queryKey: ["topo-cycles", sid, symbol],
+    queryKey: ["topo-cycles", sid, symbol, ...ctx.keyTail],
     queryFn: () =>
       api.post<TopologyCyclesResponse>("/topology/cycles", {
-        space_id: sid, symbol, top_h1: 8, top_h2: 4,
+        space_id: sid, symbol, top_h1: 8, top_h2: 4, ...ctx.payload,
       }),
   });
 
   const accent = colorMap[symbol] ?? "#88c0d0";
 
   return (
+    <div className="space-y-3">
+      {ctx.active && <ContextPill summary={ctx.summary} />}
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.6fr]">
       {/* ── left: list of cycles ── */}
       <div className="panel-tight">
@@ -115,6 +120,7 @@ export function TopologyCycles() {
         {q.isPending && <Skeleton height={520} />}
         {q.data && <CyclePlot data={q.data} active={q.data.cycles[activeIdx] ?? null} accent={accent} />}
       </div>
+    </div>
     </div>
   );
 }

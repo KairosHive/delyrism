@@ -5,6 +5,7 @@ import { Plot } from "../plots/Plot";
 import { api, TopologySummaryResponse, TopologySummaryEntry } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
+import { useTopologyContext } from "./useTopologyContext";
 
 /**
  * Topology overview — the headline single-screen read.
@@ -20,10 +21,12 @@ export function TopologyOverview() {
   const colorMap = useSidebar((s) => s.colorMap);
   const [hover, setHover] = React.useState<string | null>(null);
 
+  const ctx = useTopologyContext();
   const q = useQuery({
     enabled: !!sid,
-    queryKey: ["topo-summary", sid],
-    queryFn: () => api.post<TopologySummaryResponse>("/topology/summary", { space_id: sid }),
+    queryKey: ["topo-summary", sid, ...ctx.keyTail],
+    queryFn: () =>
+      api.post<TopologySummaryResponse>("/topology/summary", { space_id: sid, ...ctx.payload }),
   });
 
   if (q.isPending) {
@@ -51,6 +54,7 @@ export function TopologyOverview() {
   const sorted = [...data.entries].sort((a, b) => b.topo_score - a.topo_score);
   return (
     <div className="space-y-4">
+      {ctx.active && <ContextPill summary={ctx.summary} />}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.4fr]">
         {/* ── ranked table ── */}
         <TopoScoreTable
@@ -102,6 +106,23 @@ export function TopologyOverview() {
           "↙ lower-right — many loops with no enclosed cavities",
         ]}
       />
+    </div>
+  );
+}
+
+export function ContextPill({ summary }: { summary: string }) {
+  return (
+    <div
+      className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px]"
+      style={{
+        borderColor: "#3bbdb060",
+        background: "#3bbdb014",
+        color: "#5fcfc4",
+      }}
+      title="Context overlay is ON — these values are computed on the shifted cloud, not the original."
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-[#3bbdb0]" />
+      under context · {summary}
     </div>
   );
 }

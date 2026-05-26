@@ -128,6 +128,13 @@ export interface SidebarState {
   imageDescription: string;
   imageThumbnail: string | null;   // object-URL for the selected file
 
+  // ----- topology tab — context overlay -----
+  // When true, every Topology subview re-runs PH on the context-shifted
+  // D' (using the same shift strategy + sentence as Explorer) instead of
+  // the intrinsic space.D.  Lets the user toggle "what shape does this
+  // archetype have?" vs "what shape does it take under THIS context?"
+  topologyShowContext: boolean;
+
   // ----- selected drill-down -----
   selectedSymbol: string | null;
 
@@ -201,6 +208,8 @@ export const useSidebar = create<SidebarState>((set) => ({
   symbolFilter: [],
   // default to strengthens-only — most users want the positive associations
   deltaSign: "up",
+
+  topologyShowContext: false,
 
   selectedSymbol: null,
 

@@ -10,6 +10,8 @@ import {
 } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
+import { useTopologyContext } from "./useTopologyContext";
+import { ContextPill } from "./TopologyOverview";
 
 /**
  * Synergy view — the "shared topology" map.
@@ -30,14 +32,17 @@ export function TopologySynergy() {
   const [dim, setDim] = React.useState<"h1" | "h2">("h1");
   const [pair, setPair] = React.useState<{ a: string; b: string } | null>(null);
 
+  const ctx = useTopologyContext();
   const q = useQuery({
     enabled: !!sid,
-    queryKey: ["topo-synergy", sid],
-    queryFn: () => api.post<TopologySynergyResponse>("/topology/synergy", { space_id: sid }),
+    queryKey: ["topo-synergy", sid, ...ctx.keyTail],
+    queryFn: () =>
+      api.post<TopologySynergyResponse>("/topology/synergy", { space_id: sid, ...ctx.payload }),
   });
 
   return (
     <div className="space-y-4">
+      {ctx.active && <ContextPill summary={ctx.summary} />}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr,1fr]">
         <div className="panel-tight">
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -293,12 +298,13 @@ function PairDrillDown({
   // Sort the two symbols so cache keys collapse for either order
   const [pa, pb] = a < b ? [a, b] : [b, a];
 
+  const ctx = useTopologyContext();
   const q = useQuery({
     enabled: !!sid,
-    queryKey: ["topo-pair", sid, pa, pb],
+    queryKey: ["topo-pair", sid, pa, pb, ...ctx.keyTail],
     queryFn: () =>
       api.post<PairCyclesResponse>("/topology/pair-cycles", {
-        space_id: sid, a: pa, b: pb, top_h1: 8, top_h2: 4,
+        space_id: sid, a: pa, b: pb, top_h1: 8, top_h2: 4, ...ctx.payload,
       }),
   });
   React.useEffect(() => { setActiveIdx(0); }, [pa, pb]);

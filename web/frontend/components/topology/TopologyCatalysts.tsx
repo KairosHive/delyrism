@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api, WordCatalystResponse, WordCatalystEntry } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
+import { useTopologyContext } from "./useTopologyContext";
+import { ContextPill } from "./TopologyOverview";
 
 /**
  * Word catalysts — which descriptors hold the topology together.
@@ -29,16 +31,19 @@ export function TopologyCatalysts() {
     if (!symbol && symbols.length) setSymbol(symbols[0]);
   }, [symbols, symbol]);
 
+  const ctx = useTopologyContext();
   const q = useQuery({
     enabled: !!sid && !!symbol,
-    queryKey: ["topo-catalysts", sid, symbol],
+    queryKey: ["topo-catalysts", sid, symbol, ...ctx.keyTail],
     queryFn: () =>
-      api.post<WordCatalystResponse>("/topology/catalysts", { space_id: sid, symbol }),
+      api.post<WordCatalystResponse>("/topology/catalysts", { space_id: sid, symbol, ...ctx.payload }),
   });
 
   const accent = colorMap[symbol] ?? "#88c0d0";
 
   return (
+    <div className="space-y-3">
+    {ctx.active && <ContextPill summary={ctx.summary} />}
     <div className="panel-tight">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
@@ -64,6 +69,7 @@ export function TopologyCatalysts() {
       )}
       {q.error && <div className="text-sm text-danger">{(q.error as Error).message}</div>}
       {q.data && <CatalystList data={q.data} accent={accent} />}
+    </div>
     </div>
   );
 }
