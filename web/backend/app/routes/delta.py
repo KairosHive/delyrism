@@ -357,13 +357,14 @@ def contextual_transformations(req: TransformationsRequest) -> TransformationsRe
       A migration is a strict definition: argmax of cosine to centroids
       actually changed.
     - identities: per-archetype before/after top-K descriptor lists.
-      ▸ "before" = THIS archetype's home descriptors, sorted by sim to
-        its original centroid (its native prototypes).
-      ▸ "after" = ALL descriptors sorted by sim to the SHIFTED centroid
-        of this archetype.  Foreign descriptors that drifted close to
-        the new centroid show up here — without necessarily being a
-        migration (their own home archetype may still win the argmax
-        race overall).
+      BOTH columns rank ALL descriptors (any archetype) by similarity to
+      this archetype's centroid — "before" against the original centroid,
+      "after" against the SHIFTED centroid.  Foreign descriptors that
+      naturally sit near the centroid appear in both columns; the "+ new"
+      flag honestly identifies descriptors that entered the top-K only
+      after context applied (not those that were always there but
+      previously hidden by a home-only filter — that was a misleading
+      earlier behaviour).
 
     Both lists are deduplicated by descriptor name — presets sometimes
     list the same word under multiple archetypes, which would otherwise
@@ -446,25 +447,25 @@ def contextual_transformations(req: TransformationsRequest) -> TransformationsRe
     migrations = sorted(seen_migrations.values(), key=lambda m: -m.score)[:25]
 
     # ── identity cards ──
-    # "before" = home descriptors of this archetype, sorted by sim to its
-    # original centroid (native prototypes).  "after" = ALL descriptors
-    # sorted by sim to the SHIFTED centroid (the new prototypes of this
-    # archetype-under-context, foreign drifters welcome).  Dedupe by name.
+    # Identity card columns: BOTH list the top-K descriptors nearest to
+    # this archetype's centroid — "before" against the original centroid,
+    # "after" against the SHIFTED centroid.  Neither column filters by
+    # ownership; foreign descriptors that naturally sit near the centroid
+    # are included in both columns.  This makes the "+ new" chip honest:
+    # it flags descriptors that genuinely entered the top-K only after
+    # context applied, not foreign descriptors that were always there but
+    # hidden by a home-only filter.  Dedupe by descriptor name.
     K = max(1, int(req.topk))
     identities: list[ArchetypeIdentityCard] = []
     for s_idx, sym in enumerate(symbols):
         home_indices = [i for i, o in enumerate(owners) if o == sym]
 
-        # ── before: home descriptors only, deduped by name ──
-        if home_indices:
-            home_sims = sims_before[home_indices, s_idx]
-            home_order = np.argsort(-home_sims)
-        else:
-            home_order = np.array([], dtype=int)
+        # ── before: ALL descriptors sorted by sim to ORIGINAL centroid ──
+        before_order = np.argsort(-sims_before[:, s_idx])
         seen_b: set[str] = set()
         before_list: list[IdentityEntry] = []
-        for j in home_order:
-            idx = home_indices[int(j)]
+        for j in before_order:
+            idx = int(j)
             name = descriptor_names[idx]
             if name in seen_b:
                 continue

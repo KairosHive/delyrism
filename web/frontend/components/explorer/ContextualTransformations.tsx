@@ -228,10 +228,11 @@ function IdentityGrid({
       <div
         className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-ink-400"
         title={
-          "originally = this archetype's home descriptors, sorted by similarity to its original centroid.\n" +
-          "under context = ALL descriptors sorted by similarity to the SHIFTED centroid (where this archetype lives now).\n" +
-          "Foreign descriptors (other archetype colours) can appear in 'under context' WITHOUT being a migration — " +
-          "they're close to this archetype now but their own home archetype may still win the argmax race overall."
+          "Both columns rank ALL descriptors (any archetype) by similarity to this archetype's centroid.\n" +
+          "  originally = ranked against the ORIGINAL centroid (no context).\n" +
+          "  under context = ranked against the SHIFTED centroid after context applied.\n" +
+          "Foreign descriptors that sit naturally near this archetype's centroid appear in BOTH columns.\n" +
+          "The '+ new' chip flags only descriptors that genuinely entered the top-K because of context."
         }
       >
         What each archetype looks like now
