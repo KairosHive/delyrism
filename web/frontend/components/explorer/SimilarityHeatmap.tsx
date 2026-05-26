@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Plot } from "../plots/Plot";
 import { api, SimilarityResponse, SymbolSimilarityResponse } from "@/lib/api";
 import { useSidebar, buildContextWeights } from "@/lib/store";
+import { Skeleton } from "../ui/Skeleton";
 
 /**
  * Δ-similarity heatmap with two modes:
@@ -129,9 +130,7 @@ export function SimilarityHeatmap() {
           Add a context (sentence, symbol weights, audio, or image) to compute the Δ matrix.
         </div>
       )}
-      {q.isPending && hasContext && (
-        <div className="p-6 text-sm text-ink-300">computing…</div>
-      )}
+      {q.isPending && hasContext && !delta && <Skeleton height={440} />}
       {delta && labels && (() => {
         const n = labels.length;
         const masked = delta.map((row, i) =>

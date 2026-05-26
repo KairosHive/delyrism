@@ -9,6 +9,7 @@ import {
   IdentityEntry,
 } from "@/lib/api";
 import { useSidebar, buildContextWeights } from "@/lib/store";
+import { Skeleton } from "../ui/Skeleton";
 
 /**
  * Contextual transformations — two concrete views on top of the same shift:
@@ -95,7 +96,14 @@ export function ContextualTransformations() {
         </div>
       )}
       {hasCtx && q.isPending && !q.data && (
-        <div className="p-6 text-sm text-ink-300">computing…</div>
+        <div className="space-y-3 py-2">
+          <Skeleton lines={3} />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <Skeleton height={180} />
+            <Skeleton height={180} />
+            <Skeleton height={180} />
+          </div>
+        </div>
       )}
       {q.data && <Content data={q.data} colorMap={colorMap} />}
     </div>

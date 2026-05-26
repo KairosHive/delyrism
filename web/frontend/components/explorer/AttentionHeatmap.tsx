@@ -3,6 +3,7 @@ import * as React from "react";
 import { Plot } from "../plots/Plot";
 import { useAttention } from "@/lib/hooks";
 import { useSidebar } from "@/lib/store";
+import { Skeleton } from "../ui/Skeleton";
 
 export function AttentionHeatmap() {
   const symbols = useSidebar((s) => s.symbols);
@@ -31,7 +32,7 @@ export function AttentionHeatmap() {
           ))}
         </select>
       </div>
-      {att.isPending && <div className="text-sm text-ink-300">computing…</div>}
+      {att.isPending && !att.data && <Skeleton height={320} />}
       {att.data && (() => {
         // sort descriptors by attention weight descending
         const pairs = att.data.descriptors

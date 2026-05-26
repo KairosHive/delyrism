@@ -319,7 +319,7 @@ def invalidate_results(space_id: str) -> None:
 
 
 # ---- shifted-matrix cache ---------------------------------------------------
-# /shift, /delta-graph, /similarity, /similarity-symbols, /shift-spectrum all
+# /shift, /delta-graph, /similarity, /similarity-symbols, /transformations all
 # call SymbolSpace.make_shifted_matrix with the same params on every keystroke
 # (after the debounced textarea settles, all five panels refire in parallel).
 # Without sharing they each recompute the same N×d matrix.  Cheap for `gate`

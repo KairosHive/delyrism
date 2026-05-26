@@ -12,6 +12,7 @@ export function SemanticMap() {
   const cent = useSidebar((s) => s.includeCentroids);
   const ncent = useSidebar((s) => s.normalizeCentroids);
   const arrows = useSidebar((s) => s.showArrows);
+  const pullHeat = useSidebar((s) => s.pullHeatmap);
   const set = useSidebar((s) => s.set);
   return (
     <Section title="Semantic Map" color={SECTION_COLORS.map} defaultOpen={false}>
@@ -35,6 +36,8 @@ export function SemanticMap() {
           help="Project centroids onto the unit sphere before reducing. Mostly affects spacing when descriptors have very different magnitudes." />
         <Toggle label="Show context arrows" value={arrows} onChange={(v) => set("showArrows", v)}
           help="When a context is active, draw small arrows from each descriptor to its context-shifted position." />
+        <Toggle label="Color by pull intensity" value={pullHeat} onChange={(v) => set("pullHeatmap", v)}
+          help="When a context is active, shade each descriptor dot by how strongly the context moved it (length of its shift arrow in 2D). Bright = pulled hard; dim = barely moved. Overrides the per-symbol coloring while active." />
       </div>
     </Section>
   );

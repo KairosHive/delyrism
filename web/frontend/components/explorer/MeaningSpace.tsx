@@ -23,6 +23,7 @@ export function MeaningSpace() {
   const showArrows = useSidebar((s) => s.showArrows);
   const includeCentroids = useSidebar((s) => s.includeCentroids);
   const reducer = useSidebar((s) => s.reducer);
+  const pullHeat = useSidebar((s) => s.pullHeatmap);
 
   const r = useReduce2D();
   const shift = useShift();
@@ -59,11 +60,44 @@ export function MeaningSpace() {
     groups.set(p.symbol, arr);
   }
 
+  // When pull-intensity mode is on, we colour descriptors by the length
+  // of their 2D shift arrow rather than by archetype.  Pre-compute the
+  // global magnitudes so every trace shares a single colour scale.
+  const pullActive = pullHeat && hasShift;
+  const pullByLabel = new Map<string, number>();
+  let pullMax = 0;
+  if (pullActive && shift.data) {
+    for (const a of shift.data.arrows) {
+      const m = Math.hypot(a.x1 - a.x0, a.y1 - a.y0);
+      pullByLabel.set(a.descriptor, m);
+      if (m > pullMax) pullMax = m;
+    }
+  }
+
   const traces: any[] = [];
   for (const [sym, items] of groups.entries()) {
     const color = colorMap[sym] ?? "#888";
     const descs = items.filter((i) => i.kind === "descriptor");
     const cents = items.filter((i) => i.kind === "centroid");
+    const descMarker: any = pullActive
+      ? {
+          // Plotly's heatmap palette per-marker.  Normalised to global max so
+          // colours are comparable across the whole cloud — not per-symbol.
+          color: descs.map((p) => (pullByLabel.get(p.label) ?? 0) / Math.max(pullMax, 1e-9)),
+          colorscale: [
+            [0.0, "#1b212e"],   // dim — unmoved
+            [0.3, "#3bbdb0"],   // mid — pulled some
+            [0.7, "#d08770"],   // warm — pulled hard
+            [1.0, "#ef476f"],   // hottest
+          ],
+          cmin: 0,
+          cmax: 1,
+          size: 9,
+          opacity: 0.92,
+          line: { color: "rgba(0,0,0,0.4)", width: 0.5 },
+          showscale: false,
+        }
+      : { color, size: 9, opacity: 0.88, line: { color: "rgba(0,0,0,0.4)", width: 0.5 } };
     traces.push({
       x: descs.map((p) => p.x),
       y: descs.map((p) => p.y),
@@ -71,8 +105,11 @@ export function MeaningSpace() {
       type: "scatter",
       mode: "markers",
       name: sym,
-      marker: { color, size: 9, opacity: 0.88, line: { color: "rgba(0,0,0,0.4)", width: 0.5 } },
-      hovertemplate: `<b>${sym}</b> · %{text}<extra></extra>`,
+      marker: descMarker,
+      hovertemplate: pullActive
+        ? `<b>${sym}</b> · %{text}<br>pull = %{customdata:.3f}<extra></extra>`
+        : `<b>${sym}</b> · %{text}<extra></extra>`,
+      customdata: pullActive ? descs.map((p) => pullByLabel.get(p.label) ?? 0) : undefined,
     });
     if (drawHulls && descs.length >= 3) {
       const hull = convexHull(descs.map((d) => [d.x, d.y] as [number, number]));
@@ -132,6 +169,14 @@ export function MeaningSpace() {
       <div className="mb-2 flex items-center justify-between">
         <div className="section-title">2D Meaning Space</div>
         <div className="flex items-center gap-2 text-[10px] text-ink-400">
+          {pullActive && (
+            <span
+              className="pill border-warmth/60 bg-warmth/15 text-warmth"
+              title="colouring by length of 2D shift arrow (pull intensity)"
+            >
+              pull heatmap
+            </span>
+          )}
           <span className="pill">{pts.length} points</span>
           {hasShift && (
             <span className="pill text-accent-300">{shift.data!.arrows.length} arrows</span>

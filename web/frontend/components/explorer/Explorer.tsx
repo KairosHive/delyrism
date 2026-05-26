@@ -47,13 +47,83 @@ export function Explorer() {
 
 function EmptyState() {
   return (
-    <div className="mx-auto max-w-2xl rounded-2xl border border-ink-700/60 bg-ink-900/40 p-8 text-center">
-      <div className="font-display text-2xl text-ink-50">Pick an archetype system above</div>
-      <p className="mt-2 text-sm text-ink-300">
-        Choose a preset from <span className="text-accent-300">Symbolic Structure</span>, type a sentence
-        into <span className="text-accent-300">Context Prompt</span>, then press
-        <span className="ml-1 font-mono text-accent-300">Build space</span> in the sidebar.
-      </p>
+    <div className="mx-auto max-w-3xl rounded-2xl border border-ink-700/60 bg-ink-900/40 p-8">
+      <div className="text-center">
+        <div className="font-display text-2xl text-ink-50">Three steps to get started</div>
+        <p className="mt-1 text-sm text-ink-400">
+          all the controls live in the two cards at the top of this page
+        </p>
+      </div>
+      <ol className="mt-6 space-y-4">
+        <Step
+          num={1}
+          title="Pick an archetype system"
+          color="symbolic"
+          body={
+            <>
+              Use the <span className="text-accent-300">Symbolic Structure</span> card to choose a
+              preset — Elements, Chakras, Jungian, Tarot, etc. You can also edit the JSON
+              directly in the sidebar to compose your own.
+            </>
+          }
+        />
+        <Step
+          num={2}
+          title="Give it a context"
+          color="context"
+          body={
+            <>
+              Type a sentence into <span className="text-accent-300">Context Prompt</span>. Or drop
+              an image, record audio, or flip on <span className="text-accent-300">alchemist mode</span>{" "}
+              to morph between two contexts with a slider.
+            </>
+          }
+        />
+        <Step
+          num={3}
+          title="Press Build space"
+          color="accent"
+          body={
+            <>
+              The button just below the two cards. It encodes every descriptor through the chosen
+              embedder (one-time per preset) — afterwards, context changes update every panel live.
+            </>
+          }
+        />
+      </ol>
+      <div className="mt-6 rounded-lg border border-ink-700/40 bg-ink-900/30 p-3 text-[11px] text-ink-400">
+        <span className="text-ink-300">Tip</span>: every sidebar control has a{" "}
+        <span className="font-mono text-accent-300">?</span> hover-tooltip explaining what it
+        does — no need to read docs.
+      </div>
     </div>
+  );
+}
+
+function Step({
+  num, title, body, color,
+}: {
+  num: number;
+  title: string;
+  body: React.ReactNode;
+  color: "symbolic" | "context" | "accent";
+}) {
+  const borderClass = {
+    symbolic: "border-accent-500/50 bg-accent-600/10 text-accent-200",
+    context:  "border-warmth/50 bg-warmth/10 text-warmth",
+    accent:   "border-accent-500/50 bg-accent-600/20 text-accent-100",
+  }[color];
+  return (
+    <li className="flex gap-4">
+      <div
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border font-mono text-sm font-medium ${borderClass}`}
+      >
+        {num}
+      </div>
+      <div className="flex-1 pt-0.5">
+        <div className="text-sm font-semibold text-ink-50">{title}</div>
+        <div className="mt-0.5 text-[12px] leading-relaxed text-ink-300">{body}</div>
+      </div>
+    </li>
   );
 }

@@ -179,36 +179,6 @@ export interface SymbolSimilarityResponse {
   delta: number[][];
 }
 
-export interface SpectrumProfileEntry {
-  symbol: string;
-  alignment: number;       // signed cosine of axis direction with the centroid
-}
-
-export interface SpectrumMoverEntry {
-  descriptor: string;
-  symbol: string;          // owning symbol (color lookup)
-  score: number;           // σ · U[i,k]  (signed displacement along the axis)
-}
-
-export interface SpectrumAxis {
-  sigma: number;
-  archetype_profile: SpectrumProfileEntry[];
-  positive_movers: SpectrumMoverEntry[];
-  negative_movers: SpectrumMoverEntry[];
-}
-
-export interface ShiftSpectrumResponse {
-  // Rank-1 component of the shift in archetype space — same info as
-  // the rankings panel ("where does context pull on average").
-  mean_shift: SpectrumProfileEntry[];
-  // Singular values / axes of the *residual* (mean-subtracted) shift —
-  // patterns of differential motion across descriptors.
-  sigma: number[];
-  axes: SpectrumAxis[];
-  dominance_ratio: number | null;
-  effective_rank: number;
-}
-
 export interface MigrationEntry {
   descriptor: string;
   from_archetype: string;

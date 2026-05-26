@@ -223,53 +223,6 @@ class SymbolSimilarityResponse(BaseModel):
     delta: List[List[float]]
 
 
-# ----------------------- shift spectrum (SVD of D' − D) -----------------------
-
-class SpectrumRequest(ShiftRequest):
-    """Top-K principal axes of the context-induced shift matrix Δ = D' − D."""
-    topk: int = 3
-
-
-class SpectrumProfileEntry(BaseModel):
-    symbol: str
-    # signed cosine of the axis direction v_k with the symbol's centroid.
-    # +1 = axis points fully toward this archetype; -1 = points away.
-    alignment: float
-
-
-class SpectrumMoverEntry(BaseModel):
-    descriptor: str
-    symbol: str  # owning symbol
-    # signed contribution along this axis = σ_k · U[i, k].  Positive movers
-    # travel in the + direction of the axis; negative in the − direction.
-    score: float
-
-
-class SpectrumAxis(BaseModel):
-    sigma: float
-    archetype_profile: List[SpectrumProfileEntry]
-    positive_movers: List[SpectrumMoverEntry]
-    negative_movers: List[SpectrumMoverEntry]
-
-
-class ShiftSpectrumResponse(BaseModel):
-    # Mean shift across all descriptors — the "primary direction of pull"
-    # this context applies uniformly.  Same information the rankings panel
-    # shows, just expressed as a signed archetype mixture.  Pulled out so
-    # the residual SVD below can show genuinely multi-axial structure.
-    mean_shift: List[SpectrumProfileEntry]
-    # σ vector of the RESIDUAL (mean-subtracted) matrix — descending.
-    sigma: List[float]
-    # Top axes of the residual — patterns of differential motion across
-    # descriptors, beyond what the mean shift accounts for.
-    axes: List[SpectrumAxis]
-    # σ₁ / σ₂ of the residual — high = one dominant sub-pattern, ~1 =
-    # multiple comparable sub-patterns.
-    dominance_ratio: Optional[float] = None
-    # Participation ratio of the residual — fractional number of sub-patterns.
-    effective_rank: float
-
-
 # ---------------- Contextual transformations (migrations + identity) ----------------
 
 class TransformationsRequest(ShiftRequest):

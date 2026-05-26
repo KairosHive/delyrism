@@ -50,6 +50,10 @@ export interface SidebarState {
   includeCentroids: boolean;
   normalizeCentroids: boolean;
   showArrows: boolean;
+  // When a context is active, colour descriptor dots by the 2D length of
+  // their shift arrow (how strongly the context moved them).  Overrides
+  // per-symbol palette colouring while on.
+  pullHeatmap: boolean;
 
   // ----- Ranking -----
   tau: number;
@@ -164,6 +168,7 @@ export const useSidebar = create<SidebarState>((set) => ({
   includeCentroids: true,
   normalizeCentroids: false,
   showArrows: true,
+  pullHeatmap: false,
 
   tau: 0.3,
   alpha: 0.8,
