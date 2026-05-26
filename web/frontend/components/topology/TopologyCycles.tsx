@@ -140,6 +140,7 @@ export function TopologyCycles() {
             active={q.data.cycles[activeIdx] ?? null}
             accent={accent}
             mode={mode}
+            activeIdx={activeIdx}
           />
         )}
       </div>
@@ -244,12 +245,13 @@ function CycleBadge({ cycle, accent }: { cycle: PersistentCycle; accent: string 
 }
 
 function CyclePlot({
-  data, active, accent, mode,
+  data, active, accent, mode, activeIdx,
 }: {
   data: TopologyCyclesResponse;
   active: PersistentCycle | null;
   accent: string;
   mode: "single" | "all";
+  activeIdx: number;
 }) {
   const traces: any[] = [];
 
@@ -289,15 +291,22 @@ function CyclePlot({
   });
 
   if (mode === "all") {
-    // Draw every cycle simultaneously in its palette colour.  Smaller σ →
-    // lower opacity so the dominant cycles dominate visually.
+    // Draw every cycle simultaneously in its palette colour.  Persistence
+    // → opacity so dominant cycles still dominate visually.  The selected
+    // cycle is drawn LAST (so it sits on top), with full opacity and
+    // vertex labels, so the user's pick stays unambiguous.
     const maxPers = Math.max(...data.cycles.map((c) => c.persistence), 1e-6);
     data.cycles.forEach((cyc, i) => {
+      if (i === activeIdx) return; // selected drawn last
       const col = cycleColor(i);
       const persRel = cyc.persistence / maxPers;
-      const opacity = 0.4 + 0.5 * persRel; // [0.4 .. 0.9]
+      const opacity = 0.28 + 0.32 * persRel; // [0.28 .. 0.60] — slightly dim so the selected pops
       drawCycleTraces(traces, cyc, col, opacity, /* withLabels */ false);
     });
+    const sel = data.cycles[activeIdx];
+    if (sel) {
+      drawCycleTraces(traces, sel, cycleColor(activeIdx), 1.0, /* withLabels */ true);
+    }
   } else if (active && active.vertices.length >= 2) {
     // Single mode: draw the one active cycle + its vertex labels
     drawCycleTraces(traces, active, accent, 1.0, /* withLabels */ true);

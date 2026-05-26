@@ -387,6 +387,7 @@ function PairDrillDown({
             ca={ca}
             cb={cb}
             mode={mode}
+            activeIdx={activeIdx}
           />
         </div>
       )}
@@ -487,13 +488,14 @@ function PairCycleList({
 }
 
 function PairCyclePlot({
-  data, active, ca, cb, mode,
+  data, active, ca, cb, mode, activeIdx,
 }: {
   data: PairCyclesResponse;
   active: PairCycle | null;
   ca: string;
   cb: string;
   mode: "single" | "all";
+  activeIdx: number;
 }) {
   const a = data.a; const b = data.b;
 
@@ -531,13 +533,19 @@ function PairCyclePlot({
   }
 
   if (mode === "all") {
-    // Overlay every cycle in its palette colour, opacity scaled by
-    // persistence relative to the max in this pair.
+    // Overlay every cycle in its palette colour; persistence → opacity;
+    // selected cycle drawn LAST with full opacity + labels so the user's
+    // pick stays prominent.
     const maxPers = Math.max(...data.cycles.map((c) => c.persistence), 1e-6);
     data.cycles.forEach((cyc, i) => {
+      if (i === activeIdx) return;
       const persRel = cyc.persistence / maxPers;
-      drawPairCycleTraces(traces, cyc, cycleColor(i), 0.4 + 0.5 * persRel, /* withLabels */ false);
+      drawPairCycleTraces(traces, cyc, cycleColor(i), 0.28 + 0.32 * persRel, /* withLabels */ false);
     });
+    const sel = data.cycles[activeIdx];
+    if (sel && sel.vertices.length >= 2) {
+      drawPairCycleTraces(traces, sel, cycleColor(activeIdx), 1.0, /* withLabels */ true);
+    }
   } else if (active && active.vertices.length >= 2) {
     // Single mode: same colouring rule as before — pure cycles inherit the
     // pure-side symbol colour, mixed cycles get the teal bridge colour.
