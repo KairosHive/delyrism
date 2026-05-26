@@ -471,19 +471,22 @@ function PairCycleList({
       {visibleIdxToOrig.map((i, visI) => {
         const cyc = allCycles[i];
         const active = visI === clampedVisible;
-        const label =
-          cyc.mix === "pure_a" ? `pure ${a}` :
-          cyc.mix === "pure_b" ? `pure ${b}` : "bridge";
-        const labelColour = cyc.mix === "pure_a" ? ca : cyc.mix === "pure_b" ? cb : MIX_STYLE.mixed.colour;
+        // Pair-cycles is bridges-only by default — the "bridge" pill is
+        // redundant.  Only show a pill if this is a pure cycle (which can
+        // appear when include_pure=true is opted in).
+        const isPure = cyc.mix === "pure_a" || cyc.mix === "pure_b";
+        const pureLabel = cyc.mix === "pure_a" ? `pure ${a}` : `pure ${b}`;
+        const pureColour = cyc.mix === "pure_a" ? ca : cb;
+        const activeColour = isPure ? pureColour : MIX_STYLE.mixed.colour;
         return (
           <button
             key={i}
             onClick={() => onActivate(visI)}
             className="block w-full rounded-md border p-2 text-left text-[11px] transition"
             style={{
-              borderColor: active ? labelColour : "rgba(255,255,255,0.08)",
-              background: active ? `${labelColour}10` : "rgba(255,255,255,0.02)",
-              boxShadow: active ? `inset 0 0 0 1px ${labelColour}55` : "none",
+              borderColor: active ? activeColour : "rgba(255,255,255,0.08)",
+              background: active ? `${activeColour}10` : "rgba(255,255,255,0.02)",
+              boxShadow: active ? `inset 0 0 0 1px ${activeColour}55` : "none",
             }}
           >
             <div className="mb-1 flex items-center gap-1.5 text-[10px]">
@@ -502,12 +505,14 @@ function PairCycleList({
               >
                 H{cyc.dim}
               </span>
-              <span
-                className="rounded px-1.5 py-0.5"
-                style={{ background: `${labelColour}1a`, border: `1px solid ${labelColour}66`, color: labelColour }}
-              >
-                {label}
-              </span>
+              {isPure && (
+                <span
+                  className="rounded px-1.5 py-0.5"
+                  style={{ background: `${pureColour}1a`, border: `1px solid ${pureColour}66`, color: pureColour }}
+                >
+                  {pureLabel}
+                </span>
+              )}
               <span className="text-ink-400">pers</span>
               <span className="font-mono text-ink-200">{cyc.persistence.toFixed(3)}</span>
               {cyc.cross_fraction > 0 && (
