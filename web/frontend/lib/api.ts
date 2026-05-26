@@ -238,10 +238,20 @@ export interface PCAPoint {
   y: number;
 }
 
+export interface SetQualityMetrics {
+  coverage_h1: number;
+  coverage_h2: number;
+  richness_mean: number;
+  cohesion_balance: number;       // [0, 1] higher = more even tightness
+  separation_tightness: number;   // [0, ~2] higher = archetypes more distinct
+  count_balance: number;          // [0, 1] higher = balanced descriptor counts
+}
+
 export interface TopologySummaryResponse {
   entries: TopologySummaryEntry[];
   points: PCAPoint[];
   ripser_available: boolean;
+  set_quality: SetQualityMetrics | null;
 }
 
 export interface PersistencePoint {

@@ -374,12 +374,44 @@ class TopologySummaryEntry(BaseModel):
     topo_score: float           # z-score composite: H1_z + H2_z − H0_cohesion_z
 
 
+class SetQualityMetrics(BaseModel):
+    """Set-level metrics for evaluating an archetype design as a whole.
+    Higher generally = better-shaped set, but each metric is interpretable
+    on its own so the user can tune their archetype mapping with intent.
+
+    Comparing intrinsic vs context-shifted values tells you whether
+    applying context tightens / loosens / reshapes the archetypal field.
+    """
+    # H1 / H2 mass on the UNION of all descriptors — does the set as a
+    # whole have loop / void structure (covers the manifold) or is it
+    # just a single blob?
+    coverage_h1: float
+    coverage_h2: float
+    # Mean per-archetype "internal richness" (count of persistent H1+H2
+    # features above noise).  Higher = archetypes are multi-faceted, not
+    # synonym clusters.
+    richness_mean: float
+    # 1 − std(H0_cohesion)/mean(H0_cohesion) across archetypes.  Higher
+    # = archetypes are similarly tight ("even design"); lower = some
+    # archetypes are tight, others diffuse.
+    cohesion_balance: float
+    # Mean pairwise cosine distance between archetype centroids.  Higher
+    # = archetypes occupy distinct regions of the semantic space.
+    separation_tightness: float
+    # Shannon entropy of descriptor-count distribution across archetypes,
+    # normalised to [0, 1] by log2(S).  1 = perfectly balanced counts;
+    # 0 = one archetype hoards everything.
+    count_balance: float
+
+
 class TopologySummaryResponse(BaseModel):
     entries: List[TopologySummaryEntry]
     # Joint PCA-2D of all descriptors across all symbols — used by the
     # overview map so every symbol's cloud lives in the same frame.
     points: List["PCAPoint"]
     ripser_available: bool
+    # Set-level quality scalars (None if too few symbols / ripser missing)
+    set_quality: Optional[SetQualityMetrics] = None
 
 
 class PCAPoint(BaseModel):

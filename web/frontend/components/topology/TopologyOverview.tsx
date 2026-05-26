@@ -2,7 +2,7 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plot } from "../plots/Plot";
-import { api, TopologySummaryResponse, TopologySummaryEntry } from "@/lib/api";
+import { api, TopologySummaryResponse, TopologySummaryEntry, SetQualityMetrics } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
 import { useTopologyContext } from "./useTopologyContext";
@@ -28,6 +28,15 @@ export function TopologyOverview() {
     queryFn: () =>
       api.post<TopologySummaryResponse>("/topology/summary", { space_id: sid, ...ctx.payload }),
   });
+  // When context overlay is on, also fetch the intrinsic baseline so the
+  // Set Quality strip can show the *delta* — "applying this context
+  // increased richness by +0.4" etc.  Same endpoint, no shift params.
+  const qBaseline = useQuery({
+    enabled: !!sid && ctx.active,
+    queryKey: ["topo-summary", sid, "intrinsic"],
+    queryFn: () =>
+      api.post<TopologySummaryResponse>("/topology/summary", { space_id: sid }),
+  });
 
   if (q.isPending) {
     return (
@@ -52,9 +61,17 @@ export function TopologyOverview() {
   }
 
   const sorted = [...data.entries].sort((a, b) => b.topo_score - a.topo_score);
+  const baselineQ = ctx.active ? qBaseline.data?.set_quality ?? null : null;
   return (
     <div className="space-y-4">
       {ctx.active && <ContextPill summary={ctx.summary} />}
+      {data.set_quality && (
+        <SetQualityStrip
+          current={data.set_quality}
+          baseline={baselineQ}
+          underContext={ctx.active}
+        />
+      )}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.4fr]">
         {/* ── ranked table ── */}
         <TopoScoreTable
@@ -106,6 +123,110 @@ export function TopologyOverview() {
           "↙ lower-right — many loops with no enclosed cavities",
         ]}
       />
+    </div>
+  );
+}
+
+// ──────────────────────────── Set Quality strip ────────────────────────────
+
+type MetricSpec = {
+  key: keyof SetQualityMetrics;
+  label: string;
+  hint: string;
+  unit?: string;       // optional formatting (e.g. "×" for counts)
+  digits?: number;     // decimal places
+  goodDir: "up" | "down";  // does up mean "better"?  affects Δ colouring
+};
+
+const METRICS: MetricSpec[] = [
+  { key: "richness_mean",       label: "richness",  hint: "Mean per-archetype H1 + H2 feature count.  Higher = archetypes are multi-faceted, not flat synonym clusters.",
+    digits: 2, unit: "loops/voids", goodDir: "up" },
+  { key: "coverage_h1",         label: "coverage H1", hint: "H1 loop mass on the union of every descriptor.  Higher = your archetypes collectively explore the semantic manifold rather than clumping in one place.",
+    digits: 3, goodDir: "up" },
+  { key: "coverage_h2",         label: "coverage H2", hint: "H2 void mass on the union.  Higher = the joint cloud has cavity structure — usually a sign of rich coverage.",
+    digits: 3, goodDir: "up" },
+  { key: "cohesion_balance",    label: "balance",   hint: "1 − std/mean of H0 cohesion across archetypes.  Higher = archetypes are similarly tight; lower = some are tight, others diffuse.",
+    digits: 2, goodDir: "up" },
+  { key: "separation_tightness",label: "separation",hint: "Mean pairwise centroid cosine distance.  Higher = archetypes occupy distinct regions of the embedding space.",
+    digits: 2, goodDir: "up" },
+  { key: "count_balance",       label: "count even",hint: "Shannon entropy of descriptor counts per archetype, normalised.  1 = perfectly balanced sizes; 0 = one archetype hoards everything.",
+    digits: 2, goodDir: "up" },
+];
+
+function SetQualityStrip({
+  current, baseline, underContext,
+}: {
+  current: SetQualityMetrics;
+  baseline: SetQualityMetrics | null;
+  underContext: boolean;
+}) {
+  return (
+    <div className="panel-tight">
+      <div className="mb-2 flex items-baseline justify-between">
+        <div>
+          <div className="section-title">Set quality</div>
+          <div className="text-[11px] text-ink-400">
+            {underContext
+              ? "scalars under the active context · Δ shows change vs intrinsic baseline"
+              : "set-level scalars on the unconditioned archetype set"}
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {METRICS.map((m) => (
+          <MetricCard
+            key={m.key}
+            spec={m}
+            value={current[m.key]}
+            baseline={baseline ? baseline[m.key] : null}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({
+  spec, value, baseline,
+}: {
+  spec: MetricSpec;
+  value: number;
+  baseline: number | null;
+}) {
+  const delta = baseline != null ? value - baseline : null;
+  const goodIsUp = spec.goodDir === "up";
+  // Significance threshold so we don't flash colour for noise.
+  const sig = delta != null && Math.abs(delta) > Math.max(0.005, Math.abs(value) * 0.02);
+  const deltaColour =
+    !sig || delta == null
+      ? "#6e7e95"
+      : (delta > 0) === goodIsUp
+        ? "#5fcfc4" // improvement
+        : "#d08770"; // regression
+  const arrow =
+    delta == null ? "" : !sig ? "·" : delta > 0 ? "▲" : "▼";
+  return (
+    <div
+      className="rounded-lg border border-ink-700/60 bg-ink-900/40 p-2.5"
+      title={spec.hint}
+    >
+      <div className="mb-0.5 text-[9px] uppercase tracking-widest text-ink-500">
+        {spec.label}
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <div className="font-mono text-[15px] text-ink-100">
+          {value.toFixed(spec.digits ?? 2)}
+        </div>
+        {delta != null && (
+          <div
+            className="font-mono text-[10px] tabular-nums"
+            style={{ color: deltaColour }}
+          >
+            {arrow}{" "}
+            {delta > 0 ? "+" : ""}{delta.toFixed(spec.digits ?? 2)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

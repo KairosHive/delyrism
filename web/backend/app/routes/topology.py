@@ -39,7 +39,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from ..schemas import (
-    TopologySummaryEntry, TopologySummaryResponse, PCAPoint,
+    TopologySummaryEntry, TopologySummaryResponse, PCAPoint, SetQualityMetrics,
     PersistenceDiagramResponse, PersistencePoint,
     AllDiagramsEntry, AllDiagramsResponse,
     TopologyCyclesResponse, PersistentCycle, CycleVertex,
@@ -335,7 +335,60 @@ def topology_summary(req: dict):
         PCAPoint(word=d, symbol=space.owner[d], x=float(Z[i, 0]), y=float(Z[i, 1]))
         for i, d in enumerate(space.descriptors)
     ]
-    out = TopologySummaryResponse(entries=entries, points=pts, ripser_available=have_ripser)
+
+    # ─── set-level quality scalars ───
+    set_q: Optional[SetQualityMetrics] = None
+    if have_ripser and len(entries) >= 2 and sym_emb:
+        # Coverage — PH on the UNION of all descriptors.
+        union_X = _row_norm(np.vstack(list(sym_emb.values())))
+        union_dgms = _get_ph(space_id, "__union__", union_X)["dgms"]
+        coverage_h1 = _sum_finite(union_dgms[1])
+        coverage_h2 = _sum_finite(union_dgms[2])
+
+        # Internal richness — mean of (H1_persistent + H2_persistent) per symbol.
+        richness_mean = float(np.mean([e.h1_count + e.h2_count for e in entries]))
+
+        # Cohesion balance — 1 − std/mean of h0_cohesion across symbols.
+        coh_vals = np.array([e.h0_cohesion for e in entries], dtype=float)
+        if coh_vals.mean() > 1e-9:
+            cohesion_balance = float(max(0.0, min(1.0, 1.0 - coh_vals.std() / coh_vals.mean())))
+        else:
+            cohesion_balance = 0.0
+
+        # Separation tightness — mean pairwise cosine distance between
+        # archetype centroids on the unit sphere.
+        cents = np.stack([X.mean(axis=0) for X in sym_emb.values()])
+        cents = cents / (np.linalg.norm(cents, axis=1, keepdims=True) + 1e-9)
+        sim_mat = cents @ cents.T
+        n = len(cents)
+        if n >= 2:
+            iu = np.triu_indices(n, k=1)
+            separation_tightness = float(np.mean(1.0 - sim_mat[iu]))
+        else:
+            separation_tightness = 0.0
+
+        # Count balance — Shannon entropy of descriptor counts, normalised.
+        counts = np.array([len(X) for X in sym_emb.values()], dtype=float)
+        if counts.sum() > 0 and n >= 2:
+            probs = counts / counts.sum()
+            probs = probs[probs > 0]
+            ent = float(-np.sum(probs * np.log2(probs)))
+            count_balance = ent / float(np.log2(n))
+        else:
+            count_balance = 0.0
+
+        set_q = SetQualityMetrics(
+            coverage_h1=coverage_h1,
+            coverage_h2=coverage_h2,
+            richness_mean=richness_mean,
+            cohesion_balance=cohesion_balance,
+            separation_tightness=separation_tightness,
+            count_balance=count_balance,
+        )
+
+    out = TopologySummaryResponse(entries=entries, points=pts,
+                                  ripser_available=have_ripser,
+                                  set_quality=set_q)
     engine_cache.memo_put(key, out)
     return out
 
