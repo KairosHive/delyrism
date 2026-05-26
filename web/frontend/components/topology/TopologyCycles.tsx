@@ -40,6 +40,9 @@ export function TopologyCycles() {
   const [symbol, setSymbol] = React.useState<string>("");
   const [activeIdx, setActiveIdx] = React.useState<number>(0);
   const [mode, setMode] = React.useState<"single" | "all">("single");
+  const [showAllLabels, setShowAllLabels] = React.useState<boolean>(false);
+  const [showH1, setShowH1] = React.useState<boolean>(true);
+  const [showH2, setShowH2] = React.useState<boolean>(true);
 
   React.useEffect(() => {
     if (!symbol && symbols.length) setSymbol(symbols[0]);
@@ -59,13 +62,27 @@ export function TopologyCycles() {
 
   const accent = colorMap[symbol] ?? "#88c0d0";
 
+  // Build the filtered cycle list (respecting H1/H2 chips) but keep the
+  // ORIGINAL palette index so each cycle's colour is stable as the user
+  // toggles filters.  visibleIdxToOrig = absolute index of the cycle the
+  // user picks in the filtered list.
+  const allCycles = q.data?.cycles ?? [];
+  const visibleIdxToOrig: number[] = [];
+  allCycles.forEach((c, i) => {
+    if (c.dim === 1 && showH1) visibleIdxToOrig.push(i);
+    else if (c.dim === 2 && showH2) visibleIdxToOrig.push(i);
+  });
+  // Clamp activeIdx to a valid visible cycle
+  const clampedVisible = Math.min(activeIdx, Math.max(0, visibleIdxToOrig.length - 1));
+  const activeOrigIdx = visibleIdxToOrig[clampedVisible] ?? -1;
+
   return (
     <div className="space-y-3">
       {ctx.active && <ContextPill summary={ctx.summary} />}
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.6fr]">
       {/* ── left: list of cycles ── */}
       <div className="panel-tight">
-        <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="section-title">Persistent cycles</div>
             <div className="text-[11px] text-ink-400">click to trace on the map →</div>
@@ -79,28 +96,40 @@ export function TopologyCycles() {
           </select>
         </div>
 
+        <DimFilter
+          showH1={showH1} showH2={showH2}
+          onChange={(h1, h2) => { setShowH1(h1); setShowH2(h2); setActiveIdx(0); }}
+          countH1={allCycles.filter((c) => c.dim === 1).length}
+          countH2={allCycles.filter((c) => c.dim === 2).length}
+        />
+
         {q.isPending && <Skeleton lines={6} />}
         {q.error && <div className="text-sm text-danger">{(q.error as Error).message}</div>}
         {q.data && (
-          q.data.cycles.length === 0 ? (
-            <div className="rounded-md border border-ink-700/40 bg-ink-900/30 p-3 text-[11px] text-ink-400">
-              No persistent cycles found in this symbol — the descriptor cloud is essentially{" "}
-              {q.data.descriptors.length < 6 ? "too small" : "topologically trivial (no loops above noise)"}.
+          visibleIdxToOrig.length === 0 ? (
+            <div className="mt-2 rounded-md border border-ink-700/40 bg-ink-900/30 p-3 text-[11px] text-ink-400">
+              {allCycles.length === 0
+                ? <>No persistent cycles found in this symbol — the descriptor cloud is essentially{" "}
+                    {q.data.descriptors.length < 6 ? "too small" : "topologically trivial (no loops above noise)"}.</>
+                : <>No cycles match the current H1/H2 filter.</>}
             </div>
           ) : (
-            <div className="space-y-1.5">
-              {q.data.cycles.map((cyc, i) => (
-                <CycleRow
-                  key={i}
-                  cycle={cyc}
-                  idx={i}
-                  active={i === activeIdx}
-                  accent={accent}
-                  swatch={cycleColor(i)}
-                  showSwatch={mode === "all"}
-                  onActivate={() => setActiveIdx(i)}
-                />
-              ))}
+            <div className="mt-2 space-y-1.5">
+              {visibleIdxToOrig.map((origIdx, visI) => {
+                const cyc = allCycles[origIdx];
+                return (
+                  <CycleRow
+                    key={origIdx}
+                    cycle={cyc}
+                    idx={origIdx}
+                    active={visI === clampedVisible}
+                    accent={accent}
+                    swatch={cycleColor(origIdx)}
+                    showSwatch={mode === "all"}
+                    onActivate={() => setActiveIdx(visI)}
+                  />
+                );
+              })}
             </div>
           )
         )}
@@ -116,20 +145,29 @@ export function TopologyCycles() {
 
       {/* ── right: PCA scatter with active cycle traced (or all overlaid) ── */}
       <div className="panel-tight">
-        <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="section-title">
-              Cloud · {mode === "all" ? `all ${q.data?.cycles.length ?? 0} cycles` : "active cycle"}
+              Cloud · {mode === "all" ? `all ${visibleIdxToOrig.length} cycles` : "active cycle"}
             </div>
             <div className="text-[11px] text-ink-400">
               PCA-2D of <span style={{ color: accent }}>{symbol}</span>'s descriptors
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {mode === "single" && q.data?.cycles[activeIdx] && (
-              <CycleBadge cycle={q.data.cycles[activeIdx]} accent={accent} />
+            {mode === "single" && allCycles[activeOrigIdx] && (
+              <CycleBadge cycle={allCycles[activeOrigIdx]} accent={accent} />
             )}
-            <ModeToggle mode={mode} onChange={setMode} cycleCount={q.data?.cycles.length ?? 0} />
+            {mode === "all" && visibleIdxToOrig.length > 1 && (
+              <button
+                className={`pill !text-[10px] ${showAllLabels ? "border-accent-500/60 bg-accent-600/20 text-accent-200" : "hover:border-ink-500"}`}
+                onClick={() => setShowAllLabels((v) => !v)}
+                title="Show vertex labels on every visible cycle"
+              >
+                {showAllLabels ? "labels on" : "labels off"}
+              </button>
+            )}
+            <ModeToggle mode={mode} onChange={setMode} cycleCount={visibleIdxToOrig.length} />
           </div>
         </div>
 
@@ -137,14 +175,56 @@ export function TopologyCycles() {
         {q.data && (
           <CyclePlot
             data={q.data}
-            active={q.data.cycles[activeIdx] ?? null}
+            visibleOrigIdx={visibleIdxToOrig}
+            activeOrigIdx={activeOrigIdx}
             accent={accent}
             mode={mode}
-            activeIdx={activeIdx}
+            showAllLabels={showAllLabels}
           />
         )}
       </div>
     </div>
+    </div>
+  );
+}
+
+export function DimFilter({
+  showH1, showH2, onChange, countH1, countH2,
+}: {
+  showH1: boolean;
+  showH2: boolean;
+  onChange: (h1: boolean, h2: boolean) => void;
+  countH1: number;
+  countH2: number;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        onClick={() => onChange(!showH1, showH2)}
+        className="rounded-md border px-2 py-0.5 text-[10px] transition"
+        style={{
+          background: showH1 ? "#3bbdb022" : "transparent",
+          borderColor: showH1 ? "#3bbdb088" : "rgba(255,255,255,0.08)",
+          color: showH1 ? "#5fcfc4" : "#6e7e95",
+          opacity: showH1 ? 1 : 0.6,
+        }}
+        title="H1 = 1-dimensional loops"
+      >
+        H1 · {countH1}
+      </button>
+      <button
+        onClick={() => onChange(showH1, !showH2)}
+        className="rounded-md border px-2 py-0.5 text-[10px] transition"
+        style={{
+          background: showH2 ? "#d0877022" : "transparent",
+          borderColor: showH2 ? "#d0877088" : "rgba(255,255,255,0.08)",
+          color: showH2 ? "#d08770" : "#6e7e95",
+          opacity: showH2 ? 1 : 0.6,
+        }}
+        title="H2 = 2-dimensional voids (sphere-like cavities)"
+      >
+        H2 · {countH2}
+      </button>
     </div>
   );
 }
@@ -245,21 +325,25 @@ function CycleBadge({ cycle, accent }: { cycle: PersistentCycle; accent: string 
 }
 
 function CyclePlot({
-  data, active, accent, mode, activeIdx,
+  data, visibleOrigIdx, activeOrigIdx, accent, mode, showAllLabels,
 }: {
   data: TopologyCyclesResponse;
-  active: PersistentCycle | null;
+  visibleOrigIdx: number[];
+  activeOrigIdx: number;
   accent: string;
   mode: "single" | "all";
-  activeIdx: number;
+  showAllLabels: boolean;
 }) {
   const traces: any[] = [];
+  const visibleCycles = visibleOrigIdx.map((i) => ({ origIdx: i, cyc: data.cycles[i] }));
+  const active = activeOrigIdx >= 0 ? data.cycles[activeOrigIdx] : null;
 
   // ── compute which descriptors are highlighted in either mode ──
   let highlightedIdx: Set<number>;
   if (mode === "all") {
     highlightedIdx = new Set<number>();
-    for (const c of data.cycles) for (const v of c.vertices) highlightedIdx.add(v.index);
+    for (const { cyc } of visibleCycles)
+      for (const v of cyc.vertices) highlightedIdx.add(v.index);
   } else {
     highlightedIdx = new Set((active?.vertices ?? []).map((v) => v.index));
   }
@@ -291,21 +375,19 @@ function CyclePlot({
   });
 
   if (mode === "all") {
-    // Draw every cycle simultaneously in its palette colour.  Persistence
-    // → opacity so dominant cycles still dominate visually.  The selected
-    // cycle is drawn LAST (so it sits on top), with full opacity and
-    // vertex labels, so the user's pick stays unambiguous.
-    const maxPers = Math.max(...data.cycles.map((c) => c.persistence), 1e-6);
-    data.cycles.forEach((cyc, i) => {
-      if (i === activeIdx) return; // selected drawn last
-      const col = cycleColor(i);
+    // Draw every VISIBLE cycle in its palette colour.  Selected cycle
+    // drawn last (on top) with full opacity + labels.  Other cycles dim
+    // by persistence; labels optional via showAllLabels.
+    const maxPers = Math.max(...visibleCycles.map(({ cyc }) => cyc.persistence), 1e-6);
+    visibleCycles.forEach(({ origIdx, cyc }) => {
+      if (origIdx === activeOrigIdx) return; // selected drawn last
+      const col = cycleColor(origIdx);
       const persRel = cyc.persistence / maxPers;
-      const opacity = 0.28 + 0.32 * persRel; // [0.28 .. 0.60] — slightly dim so the selected pops
-      drawCycleTraces(traces, cyc, col, opacity, /* withLabels */ false);
+      const opacity = 0.28 + 0.32 * persRel;
+      drawCycleTraces(traces, cyc, col, opacity, /* withLabels */ showAllLabels);
     });
-    const sel = data.cycles[activeIdx];
-    if (sel) {
-      drawCycleTraces(traces, sel, cycleColor(activeIdx), 1.0, /* withLabels */ true);
+    if (active) {
+      drawCycleTraces(traces, active, cycleColor(activeOrigIdx), 1.0, /* withLabels */ true);
     }
   } else if (active && active.vertices.length >= 2) {
     // Single mode: draw the one active cycle + its vertex labels

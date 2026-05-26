@@ -12,6 +12,7 @@ import { useSidebar } from "@/lib/store";
 import { Skeleton } from "../ui/Skeleton";
 import { useTopologyContext } from "./useTopologyContext";
 import { ContextPill } from "./TopologyOverview";
+import { DimFilter } from "./TopologyCycles";
 
 /**
  * Synergy view — the "shared topology" map.
@@ -233,6 +234,7 @@ function SynergyHeatmap({
 
   return (
     <>
+      <div style={{ cursor: "pointer" }}>
       <Plot
         data={[
           {
@@ -249,7 +251,7 @@ function SynergyHeatmap({
             zmin: 0,
             zmax: vmax,
             colorbar: { title: { text: dim === "h1" ? "syn H1" : "syn H2", side: "right" }, thickness: 12, len: 0.8 },
-            hovertemplate: "%{y} ⋈ %{x}<br>synergy = %{z:.3f}<extra></extra>",
+            hovertemplate: "%{y} ⋈ %{x}<br>synergy = %{z:.3f}<br><i>click to drill into bridge cycles</i><extra></extra>",
           },
         ]}
         layout={{
@@ -275,11 +277,17 @@ function SynergyHeatmap({
         style={{ width: "100%", height: "100%" }}
         config={{ displaylogo: false, responsive: true }}
       />
-      {active && (
-        <div className="mt-2 text-[10px] text-ink-400">
-          showing pair <span className="text-ink-100">{active.a} ⋈ {active.b}</span> below — click another cell to switch.
-        </div>
-      )}
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-ink-400">
+        <span className="inline-flex h-4 items-center rounded border border-accent-500/40 bg-accent-600/10 px-1.5 font-medium text-accent-300">
+          tip
+        </span>
+        {active ? (
+          <>showing <span className="text-ink-100">{active.a} ⋈ {active.b}</span> below — click another cell to switch.</>
+        ) : (
+          <>click any non-diagonal cell to see the actual <em>bridge cycles</em> that link the two archetypes.</>
+        )}
+      </div>
     </>
   );
 }
@@ -303,6 +311,9 @@ function PairDrillDown({
   const sid = useSidebar((s) => s.spaceId);
   const [activeIdx, setActiveIdx] = React.useState<number>(0);
   const [mode, setMode] = React.useState<"single" | "all">("single");
+  const [showAllLabels, setShowAllLabels] = React.useState<boolean>(false);
+  const [showH1, setShowH1] = React.useState<boolean>(true);
+  const [showH2, setShowH2] = React.useState<boolean>(true);
 
   // Sort the two symbols so cache keys collapse for either order
   const [pa, pb] = a < b ? [a, b] : [b, a];
@@ -321,22 +332,46 @@ function PairDrillDown({
   const ca = colorMap[pa] ?? "#88c0d0";
   const cb = colorMap[pb] ?? "#d08770";
 
+  const allCycles = q.data?.cycles ?? [];
+  const visibleIdxToOrig: number[] = [];
+  allCycles.forEach((c, i) => {
+    if (c.dim === 1 && showH1) visibleIdxToOrig.push(i);
+    else if (c.dim === 2 && showH2) visibleIdxToOrig.push(i);
+  });
+  const clampedVisible = Math.min(activeIdx, Math.max(0, visibleIdxToOrig.length - 1));
+  const activeOrigIdx = visibleIdxToOrig[clampedVisible] ?? -1;
+
   return (
     <div className="panel-tight">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="section-title flex items-center gap-2">
-            Pair · <span style={{ color: ca }}>{pa}</span>
+            Bridges · <span style={{ color: ca }}>{pa}</span>
             <span className="text-ink-500">⋈</span>
             <span style={{ color: cb }}>{pb}</span>
           </div>
           <div className="text-[11px] text-ink-400">
-            {mode === "all" && q.data?.cycles.length
-              ? `all ${q.data.cycles.length} cycles overlaid`
-              : "cycles in the union — pure or bridging"}
+            {mode === "all" && visibleIdxToOrig.length
+              ? `all ${visibleIdxToOrig.length} bridge cycles overlaid`
+              : "mixed cycles that require both archetypes to close"}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <DimFilter
+            showH1={showH1} showH2={showH2}
+            onChange={(h1, h2) => { setShowH1(h1); setShowH2(h2); setActiveIdx(0); }}
+            countH1={allCycles.filter((c) => c.dim === 1).length}
+            countH2={allCycles.filter((c) => c.dim === 2).length}
+          />
+          {mode === "all" && visibleIdxToOrig.length > 1 && (
+            <button
+              className={`pill !text-[10px] ${showAllLabels ? "border-accent-500/60 bg-accent-600/20 text-accent-200" : "hover:border-ink-500"}`}
+              onClick={() => setShowAllLabels((v) => !v)}
+              title="Show vertex labels on every visible cycle"
+            >
+              {showAllLabels ? "labels on" : "labels off"}
+            </button>
+          )}
           <div className="inline-flex shrink-0 overflow-hidden rounded-md border border-ink-700">
             <button
               className={`px-2.5 py-1 text-[11px] transition ${
@@ -351,7 +386,7 @@ function PairDrillDown({
                 mode === "all" ? "bg-accent-600/30 text-ink-50" : "text-ink-300 hover:bg-ink-800"
               }`}
               onClick={() => setMode("all")}
-              title={`Overlay all ${q.data?.cycles.length ?? 0} cycles`}
+              title={`Overlay all ${visibleIdxToOrig.length} cycles`}
             >
               all
             </button>
@@ -372,8 +407,9 @@ function PairDrillDown({
       {q.data && (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr,1.6fr]">
           <PairCycleList
-            cycles={q.data.cycles}
-            activeIdx={activeIdx}
+            allCycles={allCycles}
+            visibleIdxToOrig={visibleIdxToOrig}
+            clampedVisible={clampedVisible}
             onActivate={setActiveIdx}
             ca={ca}
             cb={cb}
@@ -383,11 +419,12 @@ function PairDrillDown({
           />
           <PairCyclePlot
             data={q.data}
-            active={q.data.cycles[activeIdx] ?? null}
+            visibleOrigIdx={visibleIdxToOrig}
+            activeOrigIdx={activeOrigIdx}
             ca={ca}
             cb={cb}
             mode={mode}
-            activeIdx={activeIdx}
+            showAllLabels={showAllLabels}
           />
         </div>
       )}
@@ -402,10 +439,11 @@ const MIX_STYLE: Record<string, { label: string; colour: string }> = {
 };
 
 function PairCycleList({
-  cycles, activeIdx, onActivate, ca, cb, a, b, showSwatch = false,
+  allCycles, visibleIdxToOrig, clampedVisible, onActivate, ca, cb, a, b, showSwatch = false,
 }: {
-  cycles: PairCycle[];
-  activeIdx: number;
+  allCycles: PairCycle[];
+  visibleIdxToOrig: number[];
+  clampedVisible: number;
   onActivate: (i: number) => void;
   ca: string;
   cb: string;
@@ -413,26 +451,34 @@ function PairCycleList({
   b: string;
   showSwatch?: boolean;
 }) {
-  if (!cycles.length) {
+  if (!allCycles.length) {
     return (
       <div className="rounded-md border border-ink-700/40 bg-ink-900/30 p-3 text-[11px] text-ink-400">
-        No persistent cycles in the union of these two clouds.
+        No bridge cycles between these two clouds — they don't share any
+        topological structure that needs both archetypes to close.
+      </div>
+    );
+  }
+  if (!visibleIdxToOrig.length) {
+    return (
+      <div className="rounded-md border border-ink-700/40 bg-ink-900/30 p-3 text-[11px] text-ink-400">
+        No cycles match the current H1/H2 filter.
       </div>
     );
   }
   return (
     <div className="space-y-1.5">
-      {cycles.map((cyc, i) => {
-        const styleKey = cyc.mix === "pure_a" || cyc.mix === "pure_b" ? cyc.mix : "mixed";
+      {visibleIdxToOrig.map((i, visI) => {
+        const cyc = allCycles[i];
+        const active = visI === clampedVisible;
         const label =
           cyc.mix === "pure_a" ? `pure ${a}` :
-          cyc.mix === "pure_b" ? `pure ${b}` : "mixed (bridge)";
+          cyc.mix === "pure_b" ? `pure ${b}` : "bridge";
         const labelColour = cyc.mix === "pure_a" ? ca : cyc.mix === "pure_b" ? cb : MIX_STYLE.mixed.colour;
-        const active = i === activeIdx;
         return (
           <button
             key={i}
-            onClick={() => onActivate(i)}
+            onClick={() => onActivate(visI)}
             className="block w-full rounded-md border p-2 text-left text-[11px] transition"
             style={{
               borderColor: active ? labelColour : "rgba(255,255,255,0.08)",
@@ -488,22 +534,26 @@ function PairCycleList({
 }
 
 function PairCyclePlot({
-  data, active, ca, cb, mode, activeIdx,
+  data, visibleOrigIdx, activeOrigIdx, ca, cb, mode, showAllLabels,
 }: {
   data: PairCyclesResponse;
-  active: PairCycle | null;
+  visibleOrigIdx: number[];
+  activeOrigIdx: number;
   ca: string;
   cb: string;
   mode: "single" | "all";
-  activeIdx: number;
+  showAllLabels: boolean;
 }) {
   const a = data.a; const b = data.b;
+  const visibleCycles = visibleOrigIdx.map((i) => ({ origIdx: i, cyc: data.cycles[i] }));
+  const active = activeOrigIdx >= 0 ? data.cycles[activeOrigIdx] : null;
 
   // Which descriptor indices to highlight as "in a cycle"
   let highlightedIdx: Set<number>;
   if (mode === "all") {
     highlightedIdx = new Set<number>();
-    for (const c of data.cycles) for (const v of c.vertices) highlightedIdx.add(v.index);
+    for (const { cyc } of visibleCycles)
+      for (const v of cyc.vertices) highlightedIdx.add(v.index);
   } else {
     highlightedIdx = new Set((active?.vertices ?? []).map((v) => v.index));
   }
@@ -533,26 +583,28 @@ function PairCyclePlot({
   }
 
   if (mode === "all") {
-    // Overlay every cycle in its palette colour; persistence → opacity;
-    // selected cycle drawn LAST with full opacity + labels so the user's
-    // pick stays prominent.
-    const maxPers = Math.max(...data.cycles.map((c) => c.persistence), 1e-6);
-    data.cycles.forEach((cyc, i) => {
-      if (i === activeIdx) return;
+    // Overlay every visible cycle in its palette colour; persistence →
+    // opacity; selected cycle drawn LAST with full opacity + labels.
+    // Other cycles get labels when showAllLabels is on.
+    const maxPers = Math.max(...visibleCycles.map(({ cyc }) => cyc.persistence), 1e-6);
+    visibleCycles.forEach(({ origIdx, cyc }) => {
+      if (origIdx === activeOrigIdx) return;
       const persRel = cyc.persistence / maxPers;
-      drawPairCycleTraces(traces, cyc, cycleColor(i), 0.28 + 0.32 * persRel, /* withLabels */ false);
+      drawPairCycleTraces(traces, cyc, cycleColor(origIdx),
+                          0.28 + 0.32 * persRel, /* withLabels */ showAllLabels,
+                          a, ca, cb);
     });
-    const sel = data.cycles[activeIdx];
-    if (sel && sel.vertices.length >= 2) {
-      drawPairCycleTraces(traces, sel, cycleColor(activeIdx), 1.0, /* withLabels */ true);
+    if (active && active.vertices.length >= 2) {
+      drawPairCycleTraces(traces, active, cycleColor(activeOrigIdx), 1.0,
+                          /* withLabels */ true, a, ca, cb);
     }
   } else if (active && active.vertices.length >= 2) {
-    // Single mode: same colouring rule as before — pure cycles inherit the
-    // pure-side symbol colour, mixed cycles get the teal bridge colour.
+    // Single mode: bridge cycles get a teal edge colour; pure cycles
+    // (if include_pure was ever requested) get their pure-side colour.
     const edgeColour =
       active.mix === "pure_a" ? ca :
       active.mix === "pure_b" ? cb : "#5fcfc4";
-    drawPairCycleTraces(traces, active, edgeColour, 1.0, /* withLabels */ true);
+    drawPairCycleTraces(traces, active, edgeColour, 1.0, /* withLabels */ true, a, ca, cb);
   }
 
   return (
@@ -577,13 +629,18 @@ function PairCyclePlot({
   );
 }
 
-/** Append plotly traces for one pair-cycle onto the given list. */
+/** Append plotly traces for one pair-cycle onto the given list.  Labels are
+ *  *coloured by home symbol* (ca / cb) so it's unambiguous which words in
+ *  the cycle come from which archetype — bridges become readable. */
 function drawPairCycleTraces(
   traces: any[],
   cyc: PairCycle,
   color: string,
   opacity: number,
   withLabels: boolean,
+  a: string,
+  ca: string,
+  cb: string,
 ) {
   if (cyc.vertices.length < 2) return;
   if (cyc.dim === 1) {
@@ -614,17 +671,27 @@ function drawPairCycleTraces(
     }
   }
   if (withLabels) {
-    traces.push({
-      x: cyc.vertices.map((v) => v.x),
-      y: cyc.vertices.map((v) => v.y),
-      text: cyc.vertices.map((v, i) =>
-        cyc.dim === 1 ? `${i + 1}· ${v.word}` : v.word,
-      ),
-      type: "scatter", mode: "text",
-      textposition: "top center",
-      textfont: { color: "#dbe2ee", size: 11, family: "Inter, system-ui" },
-      hoverinfo: "skip", showlegend: false,
-    });
+    // Split labels into two traces (one per home symbol) so each can carry
+    // its own colour.  Plotly accepts a per-point textfont colour array
+    // but separate traces are cleaner.
+    for (const home of [a, /* the other */ null] as const) {
+      const idxs = cyc.vertices
+        .map((v, i) => ({ v, i }))
+        .filter(({ v }) => home === null ? v.home_symbol !== a : v.home_symbol === a);
+      if (idxs.length === 0) continue;
+      const colour = home === a ? ca : cb;
+      traces.push({
+        x: idxs.map(({ v }) => v.x),
+        y: idxs.map(({ v }) => v.y),
+        text: idxs.map(({ v, i }) =>
+          cyc.dim === 1 ? `${i + 1}· ${v.word}` : v.word,
+        ),
+        type: "scatter", mode: "text",
+        textposition: "top center",
+        textfont: { color: colour, size: 11, family: "Inter, system-ui" },
+        hoverinfo: "skip", showlegend: false,
+      });
+    }
   }
 }
 

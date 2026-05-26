@@ -680,23 +680,24 @@ def topology_synergy(req: dict):
 
 @router.post("/pair-cycles", response_model=PairCyclesResponse)
 def topology_pair_cycles(req: dict):
-    """Top persistent cycles in A ∪ B, tagged pure_a / pure_b / mixed.
-
-    Pure cycles tell you "this loop lives entirely in symbol X."  Mixed
-    cycles are the interesting ones — semantic loops that need both
-    symbols to close, i.e. the structural bridge between archetypes.
+    """*Bridge* cycles in A ∪ B — loops/voids that REQUIRE both symbols
+    to close.  Pure-A and pure-B cycles are filtered out by default
+    because they're identical to the cycles you'd see in the Cycles tab
+    for symbol A or B alone (set include_pure=true to override).
     """
     space_id = req.get("space_id")
     a = req.get("a"); b = req.get("b")
     top_h1 = int(req.get("top_h1", 8))
     top_h2 = int(req.get("top_h2", 4))
+    include_pure = bool(req.get("include_pure", False))
     if not space_id or not a or not b:
         raise HTTPException(status_code=400, detail="space_id, a, b required")
     space = _require(space_id)
     _ripser_or_503()
 
     D, key, _ = _resolve_D_and_key(space, space_id, req, "pair-cycles",
-                                    {"a": a, "b": b, "k1": top_h1, "k2": top_h2})
+                                    {"a": a, "b": b, "k1": top_h1, "k2": top_h2,
+                                     "include_pure": include_pure})
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
@@ -775,6 +776,8 @@ def topology_pair_cycles(req: dict):
             if not verts:
                 continue
             mix_label, _ = _mix(verts)
+            if not include_pure and mix_label != "mixed":
+                continue
             # cross-edge fraction (H1)
             total = 0; cross = 0
             for row in cyc:
@@ -811,6 +814,8 @@ def topology_pair_cycles(req: dict):
             if not verts:
                 continue
             mix_label, _ = _mix(verts)
+            if not include_pure and mix_label != "mixed":
+                continue
             cycles.append(PairCycle(
                 dim=2, birth=float(H2[idx, 0]),
                 death=float(H2[idx, 1] if np.isfinite(H2[idx, 1]) else 0.0),
