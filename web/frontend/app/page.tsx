@@ -14,10 +14,10 @@ import { useSidebar } from "@/lib/store";
 type TabId = "explorer" | "topology" | "story" | "builder";
 
 const TABS: { id: TabId; label: string; hint: string }[] = [
-  { id: "explorer", label: "Explorer",          hint: "context-conditioned embeddings" },
-  { id: "topology", label: "Topology",          hint: "persistent homology of symbol clouds" },
-  { id: "story",    label: "Story Generator",   hint: "weave motifs into micro-fiction" },
-  { id: "builder",  label: "Archetype Builder", hint: "compose new symbol sets" },
+  { id: "explorer", label: "Explorer", hint: "context-conditioned embeddings" },
+  { id: "topology", label: "Topology", hint: "shape & cycles" },
+  { id: "story",    label: "Story",    hint: "weave motifs into micro-fiction" },
+  { id: "builder",  label: "Builder",  hint: "compose archetype sets" },
 ];
 
 export default function Home() {
@@ -142,6 +142,7 @@ function Tabs({ tab, setTab }: { tab: TabId; setTab: (t: TabId) => void }) {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
+              title={t.hint}
               className={`relative shrink-0 px-3 py-2.5 text-sm transition md:px-4
                 ${active ? "text-ink-50" : "text-ink-400 hover:text-ink-100"}`}
             >

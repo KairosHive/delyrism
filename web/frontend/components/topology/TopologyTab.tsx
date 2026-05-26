@@ -3,7 +3,6 @@ import * as React from "react";
 import { useSidebar } from "@/lib/store";
 import { useTopologyContext } from "./useTopologyContext";
 import { TopologyOverview } from "./TopologyOverview";
-import { TopologyDiagrams } from "./TopologyDiagrams";
 import { TopologyCycles } from "./TopologyCycles";
 import { TopologySynergy } from "./TopologySynergy";
 import { TopologyCatalysts } from "./TopologyCatalysts";
@@ -24,11 +23,10 @@ import { TopologyCatalysts } from "./TopologyCatalysts";
  * internal loops? do these two archetypes share structural topology?").
  */
 
-type SubView = "overview" | "diagrams" | "cycles" | "synergy" | "catalysts";
+type SubView = "overview" | "cycles" | "synergy" | "catalysts";
 
 const SUBVIEWS: { id: SubView; label: string; hint: string; color: string; icon: string }[] = [
   { id: "overview",  label: "Overview",     hint: "TopoScore + symbol map", color: "#3bbdb0", icon: "◐" },
-  { id: "diagrams",  label: "Diagrams",     hint: "birth/death scatter",    color: "#9b59b6", icon: "◇" },
   { id: "cycles",    label: "Cycles",       hint: "loops in semantic space",color: "#e67e22", icon: "⊙" },
   { id: "synergy",   label: "Synergy",      hint: "shared structure",       color: "#c2a6fe", icon: "⋈" },
   { id: "catalysts", label: "Catalysts",    hint: "load-bearing words",     color: "#bf616a", icon: "✦" },
@@ -37,6 +35,17 @@ const SUBVIEWS: { id: SubView; label: string; hint: string; color: string; icon:
 export function TopologyTab() {
   const spaceId = useSidebar((s) => s.spaceId);
   const [sub, setSub] = React.useState<SubView>("overview");
+
+  // Subview swap → fire a delayed resize so Plotly/force-graph panels
+  // measure their final container size (otherwise they render with the
+  // dimensions of the previous subview and look truncated on first paint).
+  // Same trick used at the main-tab level in page.tsx.
+  React.useEffect(() => {
+    const timers = [50, 180, 400].map((d) =>
+      setTimeout(() => window.dispatchEvent(new Event("resize")), d),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [sub]);
 
   if (!spaceId) {
     return (
@@ -96,7 +105,6 @@ export function TopologyTab() {
       </div>
 
       {sub === "overview" && <TopologyOverview />}
-      {sub === "diagrams" && <TopologyDiagrams />}
       {sub === "cycles" && <TopologyCycles />}
       {sub === "synergy" && <TopologySynergy />}
       {sub === "catalysts" && <TopologyCatalysts />}
