@@ -25,12 +25,21 @@ import { ContextPill } from "./TopologyOverview";
  * with each loop drawn as an actual closed path through the 2D layout
  * of the descriptor cloud.
  */
+// Per-cycle palette — distinct hues so multiple cycles overlay cleanly.
+// Cycled through if there are more cycles than colours.
+const CYCLE_PALETTE = [
+  "#3bbdb0", "#e67e22", "#c2a6fe", "#bf616a", "#5fa8d3",
+  "#e6c068", "#2ecc71", "#d08770", "#9b59b6", "#88c0d0",
+];
+const cycleColor = (i: number) => CYCLE_PALETTE[i % CYCLE_PALETTE.length];
+
 export function TopologyCycles() {
   const sid = useSidebar((s) => s.spaceId);
   const symbols = useSidebar((s) => s.symbols);
   const colorMap = useSidebar((s) => s.colorMap);
   const [symbol, setSymbol] = React.useState<string>("");
   const [activeIdx, setActiveIdx] = React.useState<number>(0);
+  const [mode, setMode] = React.useState<"single" | "all">("single");
 
   React.useEffect(() => {
     if (!symbol && symbols.length) setSymbol(symbols[0]);
@@ -87,6 +96,8 @@ export function TopologyCycles() {
                   idx={i}
                   active={i === activeIdx}
                   accent={accent}
+                  swatch={cycleColor(i)}
+                  showSwatch={mode === "all"}
                   onActivate={() => setActiveIdx(i)}
                 />
               ))}
@@ -103,35 +114,79 @@ export function TopologyCycles() {
         </div>
       </div>
 
-      {/* ── right: PCA scatter with active cycle traced ── */}
+      {/* ── right: PCA scatter with active cycle traced (or all overlaid) ── */}
       <div className="panel-tight">
-        <div className="mb-2 flex items-center justify-between">
+        <div className="mb-2 flex items-center justify-between gap-3">
           <div>
-            <div className="section-title">Cloud · active cycle</div>
+            <div className="section-title">
+              Cloud · {mode === "all" ? `all ${q.data?.cycles.length ?? 0} cycles` : "active cycle"}
+            </div>
             <div className="text-[11px] text-ink-400">
               PCA-2D of <span style={{ color: accent }}>{symbol}</span>'s descriptors
             </div>
           </div>
-          {q.data?.cycles[activeIdx] && (
-            <CycleBadge cycle={q.data.cycles[activeIdx]} accent={accent} />
-          )}
+          <div className="flex items-center gap-2">
+            {mode === "single" && q.data?.cycles[activeIdx] && (
+              <CycleBadge cycle={q.data.cycles[activeIdx]} accent={accent} />
+            )}
+            <ModeToggle mode={mode} onChange={setMode} cycleCount={q.data?.cycles.length ?? 0} />
+          </div>
         </div>
 
         {q.isPending && <Skeleton height={520} />}
-        {q.data && <CyclePlot data={q.data} active={q.data.cycles[activeIdx] ?? null} accent={accent} />}
+        {q.data && (
+          <CyclePlot
+            data={q.data}
+            active={q.data.cycles[activeIdx] ?? null}
+            accent={accent}
+            mode={mode}
+          />
+        )}
       </div>
     </div>
     </div>
   );
 }
 
+function ModeToggle({
+  mode, onChange, cycleCount,
+}: {
+  mode: "single" | "all";
+  onChange: (m: "single" | "all") => void;
+  cycleCount: number;
+}) {
+  return (
+    <div className="inline-flex shrink-0 overflow-hidden rounded-md border border-ink-700">
+      <button
+        className={`px-2.5 py-1 text-[11px] transition ${
+          mode === "single" ? "bg-accent-600/30 text-ink-50" : "text-ink-300 hover:bg-ink-800"
+        }`}
+        onClick={() => onChange("single")}
+      >
+        single
+      </button>
+      <button
+        className={`px-2.5 py-1 text-[11px] transition ${
+          mode === "all" ? "bg-accent-600/30 text-ink-50" : "text-ink-300 hover:bg-ink-800"
+        }`}
+        onClick={() => onChange("all")}
+        title={`Overlay all ${cycleCount} cycles at once`}
+      >
+        all
+      </button>
+    </div>
+  );
+}
+
 function CycleRow({
-  cycle, idx, active, accent, onActivate,
+  cycle, idx, active, accent, swatch, showSwatch, onActivate,
 }: {
   cycle: PersistentCycle;
   idx: number;
   active: boolean;
   accent: string;
+  swatch: string;
+  showSwatch: boolean;
   onActivate: () => void;
 }) {
   const isH1 = cycle.dim === 1;
@@ -150,6 +205,13 @@ function CycleRow({
       }}
     >
       <div className="mb-1 flex items-center gap-1.5 text-[10px]">
+        {showSwatch && (
+          <span
+            className="inline-block h-2 w-2 shrink-0 rounded-sm"
+            style={{ background: swatch }}
+            title="colour of this cycle on the cloud →"
+          />
+        )}
         <span
           className="rounded px-1.5 py-0.5 font-mono"
           style={{ background: dimChip.bg, border: `1px solid ${dimChip.border}`, color: dimChip.color }}
@@ -182,17 +244,25 @@ function CycleBadge({ cycle, accent }: { cycle: PersistentCycle; accent: string 
 }
 
 function CyclePlot({
-  data, active, accent,
+  data, active, accent, mode,
 }: {
   data: TopologyCyclesResponse;
   active: PersistentCycle | null;
   accent: string;
+  mode: "single" | "all";
 }) {
-  // Background scatter — all descriptors of this symbol
-  const activeSet = new Set((active?.vertices ?? []).map((v) => v.index));
-
   const traces: any[] = [];
-  // dimmed background
+
+  // ── compute which descriptors are highlighted in either mode ──
+  let highlightedIdx: Set<number>;
+  if (mode === "all") {
+    highlightedIdx = new Set<number>();
+    for (const c of data.cycles) for (const v of c.vertices) highlightedIdx.add(v.index);
+  } else {
+    highlightedIdx = new Set((active?.vertices ?? []).map((v) => v.index));
+  }
+
+  // dimmed background — descriptors with no cycle membership
   traces.push({
     x: data.descriptors.map((d) => d.x),
     y: data.descriptors.map((d) => d.y),
@@ -202,56 +272,35 @@ function CyclePlot({
     name: "descriptors",
     showlegend: false,
     marker: {
-      size: data.descriptors.map((d) => (activeSet.has(d.index) ? 12 : 8)),
-      color: data.descriptors.map((d) => (activeSet.has(d.index) ? accent : "rgba(255,255,255,0.18)")),
+      size: data.descriptors.map((d) => (highlightedIdx.has(d.index) ? 11 : 7)),
+      color: data.descriptors.map((d) =>
+        highlightedIdx.has(d.index)
+          ? (mode === "all" ? "rgba(255,255,255,0.65)" : accent)
+          : "rgba(255,255,255,0.16)"
+      ),
       line: {
-        color: data.descriptors.map((d) => (activeSet.has(d.index) ? "white" : "rgba(0,0,0,0.3)")),
-        width: data.descriptors.map((d) => (activeSet.has(d.index) ? 1.5 : 0.4)),
+        color: data.descriptors.map((d) =>
+          highlightedIdx.has(d.index) ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.3)"
+        ),
+        width: data.descriptors.map((d) => (highlightedIdx.has(d.index) ? 1 : 0.4)),
       },
     },
     hovertemplate: "%{text}<extra></extra>",
   });
 
-  if (active && active.vertices.length >= 2) {
-    if (active.dim === 1) {
-      // close the loop visually
-      const xs = active.vertices.map((v) => v.x).concat([active.vertices[0].x]);
-      const ys = active.vertices.map((v) => v.y).concat([active.vertices[0].y]);
-      traces.push({
-        x: xs, y: ys,
-        type: "scatter", mode: "lines",
-        line: { color: accent, width: 2.5, shape: "spline" },
-        hoverinfo: "skip", showlegend: false,
-      });
-    } else {
-      // H2 — draw the convex hull of the vertices as a translucent polygon
-      const pts = active.vertices.map((v) => [v.x, v.y] as [number, number]);
-      const hull = convexHull(pts);
-      if (hull.length >= 3) {
-        hull.push(hull[0]);
-        traces.push({
-          x: hull.map((h) => h[0]),
-          y: hull.map((h) => h[1]),
-          type: "scatter", mode: "lines",
-          fill: "toself",
-          fillcolor: `${accent}25`,
-          line: { color: accent, width: 1.5 },
-          hoverinfo: "skip", showlegend: false,
-        });
-      }
-    }
-    // labels on the active cycle vertices
-    traces.push({
-      x: active.vertices.map((v) => v.x),
-      y: active.vertices.map((v) => v.y),
-      text: active.vertices.map((v, i) =>
-        active.dim === 1 ? `${i + 1}· ${v.word}` : v.word
-      ),
-      type: "scatter", mode: "text",
-      textposition: "top center",
-      textfont: { color: "#dbe2ee", size: 11, family: "Inter, system-ui" },
-      hoverinfo: "skip", showlegend: false,
+  if (mode === "all") {
+    // Draw every cycle simultaneously in its palette colour.  Smaller σ →
+    // lower opacity so the dominant cycles dominate visually.
+    const maxPers = Math.max(...data.cycles.map((c) => c.persistence), 1e-6);
+    data.cycles.forEach((cyc, i) => {
+      const col = cycleColor(i);
+      const persRel = cyc.persistence / maxPers;
+      const opacity = 0.4 + 0.5 * persRel; // [0.4 .. 0.9]
+      drawCycleTraces(traces, cyc, col, opacity, /* withLabels */ false);
     });
+  } else if (active && active.vertices.length >= 2) {
+    // Single mode: draw the one active cycle + its vertex labels
+    drawCycleTraces(traces, active, accent, 1.0, /* withLabels */ true);
   }
 
   return (
@@ -273,6 +322,60 @@ function CyclePlot({
       config={{ displaylogo: false, responsive: true, scrollZoom: true }}
     />
   );
+}
+
+/** Append the plotly traces for one cycle (loop or void) onto an existing
+ *  traces array.  H1 → spline edges around the loop.  H2 → translucent
+ *  filled convex-hull polygon.  Labels optional (suppressed in "all" mode
+ *  to avoid clutter). */
+function drawCycleTraces(
+  traces: any[],
+  cyc: PersistentCycle,
+  color: string,
+  opacity: number,
+  withLabels: boolean,
+) {
+  if (cyc.vertices.length < 2) return;
+  if (cyc.dim === 1) {
+    const xs = cyc.vertices.map((v) => v.x).concat([cyc.vertices[0].x]);
+    const ys = cyc.vertices.map((v) => v.y).concat([cyc.vertices[0].y]);
+    traces.push({
+      x: xs, y: ys,
+      type: "scatter", mode: "lines",
+      line: { color, width: 2.5, shape: "spline" },
+      opacity,
+      hoverinfo: "skip", showlegend: false,
+    });
+  } else {
+    const pts = cyc.vertices.map((v) => [v.x, v.y] as [number, number]);
+    const hull = convexHull(pts);
+    if (hull.length >= 3) {
+      hull.push(hull[0]);
+      traces.push({
+        x: hull.map((h) => h[0]),
+        y: hull.map((h) => h[1]),
+        type: "scatter", mode: "lines",
+        fill: "toself",
+        fillcolor: color + Math.round(opacity * 40).toString(16).padStart(2, "0"),
+        line: { color, width: 1.5 },
+        opacity,
+        hoverinfo: "skip", showlegend: false,
+      });
+    }
+  }
+  if (withLabels) {
+    traces.push({
+      x: cyc.vertices.map((v) => v.x),
+      y: cyc.vertices.map((v) => v.y),
+      text: cyc.vertices.map((v, i) =>
+        cyc.dim === 1 ? `${i + 1}· ${v.word}` : v.word,
+      ),
+      type: "scatter", mode: "text",
+      textposition: "top center",
+      textfont: { color: "#dbe2ee", size: 11, family: "Inter, system-ui" },
+      hoverinfo: "skip", showlegend: false,
+    });
+  }
 }
 
 // Andrew's monotone chain convex hull

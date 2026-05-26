@@ -284,6 +284,14 @@ function SynergyHeatmap({
   );
 }
 
+// Per-cycle palette — same hues as the Cycles tab so the visual
+// language is consistent across views.
+const CYCLE_PALETTE = [
+  "#3bbdb0", "#e67e22", "#c2a6fe", "#bf616a", "#5fa8d3",
+  "#e6c068", "#2ecc71", "#d08770", "#9b59b6", "#88c0d0",
+];
+const cycleColor = (i: number) => CYCLE_PALETTE[i % CYCLE_PALETTE.length];
+
 function PairDrillDown({
   a, b, colorMap, onClose,
 }: {
@@ -294,6 +302,7 @@ function PairDrillDown({
 }) {
   const sid = useSidebar((s) => s.spaceId);
   const [activeIdx, setActiveIdx] = React.useState<number>(0);
+  const [mode, setMode] = React.useState<"single" | "all">("single");
 
   // Sort the two symbols so cache keys collapse for either order
   const [pa, pb] = a < b ? [a, b] : [b, a];
@@ -322,12 +331,35 @@ function PairDrillDown({
             <span style={{ color: cb }}>{pb}</span>
           </div>
           <div className="text-[11px] text-ink-400">
-            cycles in the union — pure or bridging
+            {mode === "all" && q.data?.cycles.length
+              ? `all ${q.data.cycles.length} cycles overlaid`
+              : "cycles in the union — pure or bridging"}
           </div>
         </div>
-        <button onClick={onClose} className="text-[11px] text-ink-400 hover:text-ink-200">
-          close ✕
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex shrink-0 overflow-hidden rounded-md border border-ink-700">
+            <button
+              className={`px-2.5 py-1 text-[11px] transition ${
+                mode === "single" ? "bg-accent-600/30 text-ink-50" : "text-ink-300 hover:bg-ink-800"
+              }`}
+              onClick={() => setMode("single")}
+            >
+              single
+            </button>
+            <button
+              className={`px-2.5 py-1 text-[11px] transition ${
+                mode === "all" ? "bg-accent-600/30 text-ink-50" : "text-ink-300 hover:bg-ink-800"
+              }`}
+              onClick={() => setMode("all")}
+              title={`Overlay all ${q.data?.cycles.length ?? 0} cycles`}
+            >
+              all
+            </button>
+          </div>
+          <button onClick={onClose} className="text-[11px] text-ink-400 hover:text-ink-200">
+            close ✕
+          </button>
+        </div>
       </div>
 
       {q.isPending && (
@@ -347,12 +379,14 @@ function PairDrillDown({
             cb={cb}
             a={pa}
             b={pb}
+            showSwatch={mode === "all"}
           />
           <PairCyclePlot
             data={q.data}
             active={q.data.cycles[activeIdx] ?? null}
             ca={ca}
             cb={cb}
+            mode={mode}
           />
         </div>
       )}
@@ -367,7 +401,7 @@ const MIX_STYLE: Record<string, { label: string; colour: string }> = {
 };
 
 function PairCycleList({
-  cycles, activeIdx, onActivate, ca, cb, a, b,
+  cycles, activeIdx, onActivate, ca, cb, a, b, showSwatch = false,
 }: {
   cycles: PairCycle[];
   activeIdx: number;
@@ -376,6 +410,7 @@ function PairCycleList({
   cb: string;
   a: string;
   b: string;
+  showSwatch?: boolean;
 }) {
   if (!cycles.length) {
     return (
@@ -405,6 +440,13 @@ function PairCycleList({
             }}
           >
             <div className="mb-1 flex items-center gap-1.5 text-[10px]">
+              {showSwatch && (
+                <span
+                  className="inline-block h-2 w-2 shrink-0 rounded-sm"
+                  style={{ background: cycleColor(i) }}
+                  title="colour of this cycle on the plot →"
+                />
+              )}
               <span
                 className="rounded px-1.5 py-0.5 font-mono"
                 style={{ background: cyc.dim === 1 ? "#3bbdb022" : "#d0877022",
@@ -445,19 +487,27 @@ function PairCycleList({
 }
 
 function PairCyclePlot({
-  data, active, ca, cb,
+  data, active, ca, cb, mode,
 }: {
   data: PairCyclesResponse;
   active: PairCycle | null;
   ca: string;
   cb: string;
+  mode: "single" | "all";
 }) {
-  const activeSet = new Set((active?.vertices ?? []).map((v) => v.index));
   const a = data.a; const b = data.b;
+
+  // Which descriptor indices to highlight as "in a cycle"
+  let highlightedIdx: Set<number>;
+  if (mode === "all") {
+    highlightedIdx = new Set<number>();
+    for (const c of data.cycles) for (const v of c.vertices) highlightedIdx.add(v.index);
+  } else {
+    highlightedIdx = new Set((active?.vertices ?? []).map((v) => v.index));
+  }
 
   const traces: any[] = [];
   // background: all descriptors, coloured by home symbol, dimmed
-  // split into two traces for proper legend
   const pointsA = data.descriptors.filter((d) => d.home_symbol === a);
   const pointsB = data.descriptors.filter((d) => d.home_symbol === b);
   for (const [grp, name, col] of [[pointsA, a, ca], [pointsB, b, cb]] as const) {
@@ -469,60 +519,32 @@ function PairCyclePlot({
       mode: "markers",
       name,
       marker: {
-        size: grp.map((d) => (activeSet.has(d.index) ? 13 : 8)),
-        color: grp.map((d) => (activeSet.has(d.index) ? col : `${col}55`)),
+        size: grp.map((d) => (highlightedIdx.has(d.index) ? 13 : 8)),
+        color: grp.map((d) => (highlightedIdx.has(d.index) ? col : `${col}55`)),
         line: {
-          color: grp.map((d) => (activeSet.has(d.index) ? "white" : "rgba(0,0,0,0.3)")),
-          width: grp.map((d) => (activeSet.has(d.index) ? 1.5 : 0.4)),
+          color: grp.map((d) => (highlightedIdx.has(d.index) ? "white" : "rgba(0,0,0,0.3)")),
+          width: grp.map((d) => (highlightedIdx.has(d.index) ? 1.5 : 0.4)),
         },
       },
       hovertemplate: `<b>${name}</b> · %{text}<extra></extra>`,
     });
   }
 
-  if (active && active.vertices.length >= 2) {
-    if (active.dim === 1) {
-      const xs = active.vertices.map((v) => v.x).concat([active.vertices[0].x]);
-      const ys = active.vertices.map((v) => v.y).concat([active.vertices[0].y]);
-      const edgeColour =
-        active.mix === "pure_a" ? ca :
-        active.mix === "pure_b" ? cb : "#5fcfc4";
-      traces.push({
-        x: xs, y: ys,
-        type: "scatter", mode: "lines",
-        line: { color: edgeColour, width: 2.5, shape: "spline" },
-        hoverinfo: "skip", showlegend: false,
-      });
-    } else {
-      const pts = active.vertices.map((v) => [v.x, v.y] as [number, number]);
-      const hull = convexHull(pts);
-      if (hull.length >= 3) {
-        hull.push(hull[0]);
-        const edgeColour =
-          active.mix === "pure_a" ? ca :
-          active.mix === "pure_b" ? cb : "#5fcfc4";
-        traces.push({
-          x: hull.map((h) => h[0]),
-          y: hull.map((h) => h[1]),
-          type: "scatter", mode: "lines",
-          fill: "toself",
-          fillcolor: `${edgeColour}25`,
-          line: { color: edgeColour, width: 1.5 },
-          hoverinfo: "skip", showlegend: false,
-        });
-      }
-    }
-    traces.push({
-      x: active.vertices.map((v) => v.x),
-      y: active.vertices.map((v) => v.y),
-      text: active.vertices.map((v, i) =>
-        active.dim === 1 ? `${i + 1}· ${v.word}` : v.word
-      ),
-      type: "scatter", mode: "text",
-      textposition: "top center",
-      textfont: { color: "#dbe2ee", size: 11, family: "Inter, system-ui" },
-      hoverinfo: "skip", showlegend: false,
+  if (mode === "all") {
+    // Overlay every cycle in its palette colour, opacity scaled by
+    // persistence relative to the max in this pair.
+    const maxPers = Math.max(...data.cycles.map((c) => c.persistence), 1e-6);
+    data.cycles.forEach((cyc, i) => {
+      const persRel = cyc.persistence / maxPers;
+      drawPairCycleTraces(traces, cyc, cycleColor(i), 0.4 + 0.5 * persRel, /* withLabels */ false);
     });
+  } else if (active && active.vertices.length >= 2) {
+    // Single mode: same colouring rule as before — pure cycles inherit the
+    // pure-side symbol colour, mixed cycles get the teal bridge colour.
+    const edgeColour =
+      active.mix === "pure_a" ? ca :
+      active.mix === "pure_b" ? cb : "#5fcfc4";
+    drawPairCycleTraces(traces, active, edgeColour, 1.0, /* withLabels */ true);
   }
 
   return (
@@ -545,6 +567,57 @@ function PairCyclePlot({
       config={{ displaylogo: false, responsive: true, scrollZoom: true }}
     />
   );
+}
+
+/** Append plotly traces for one pair-cycle onto the given list. */
+function drawPairCycleTraces(
+  traces: any[],
+  cyc: PairCycle,
+  color: string,
+  opacity: number,
+  withLabels: boolean,
+) {
+  if (cyc.vertices.length < 2) return;
+  if (cyc.dim === 1) {
+    const xs = cyc.vertices.map((v) => v.x).concat([cyc.vertices[0].x]);
+    const ys = cyc.vertices.map((v) => v.y).concat([cyc.vertices[0].y]);
+    traces.push({
+      x: xs, y: ys,
+      type: "scatter", mode: "lines",
+      line: { color, width: 2.5, shape: "spline" },
+      opacity,
+      hoverinfo: "skip", showlegend: false,
+    });
+  } else {
+    const pts = cyc.vertices.map((v) => [v.x, v.y] as [number, number]);
+    const hull = convexHull(pts);
+    if (hull.length >= 3) {
+      hull.push(hull[0]);
+      traces.push({
+        x: hull.map((h) => h[0]),
+        y: hull.map((h) => h[1]),
+        type: "scatter", mode: "lines",
+        fill: "toself",
+        fillcolor: color + Math.round(opacity * 40).toString(16).padStart(2, "0"),
+        line: { color, width: 1.5 },
+        opacity,
+        hoverinfo: "skip", showlegend: false,
+      });
+    }
+  }
+  if (withLabels) {
+    traces.push({
+      x: cyc.vertices.map((v) => v.x),
+      y: cyc.vertices.map((v) => v.y),
+      text: cyc.vertices.map((v, i) =>
+        cyc.dim === 1 ? `${i + 1}· ${v.word}` : v.word,
+      ),
+      type: "scatter", mode: "text",
+      textposition: "top center",
+      textfont: { color: "#dbe2ee", size: 11, family: "Inter, system-ui" },
+      hoverinfo: "skip", showlegend: false,
+    });
+  }
 }
 
 function convexHull(points: [number, number][]): [number, number][] {
