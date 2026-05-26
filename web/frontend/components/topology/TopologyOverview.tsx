@@ -164,9 +164,9 @@ type MetricSpec = {
 const METRICS: MetricSpec[] = [
   { key: "richness_mean",       label: "richness",  hint: "Mean per-archetype H1 + H2 feature count.  Higher = archetypes are multi-faceted, not flat synonym clusters.",
     digits: 2, unit: "loops/voids", goodDir: "up" },
-  { key: "coverage_h1",         label: "coverage H1", hint: "H1 loop mass on the union of every descriptor.  Higher = your archetypes collectively explore the semantic manifold rather than clumping in one place.",
+  { key: "coverage_h1",         label: "coverage H1", hint: "H1 loop mass on the union of every descriptor.  Higher = your archetypes collectively explore the semantic manifold rather than clumping in one place.  Computed on a stratified subsample when the union exceeds 150 points (deterministic).",
     digits: 3, goodDir: "up" },
-  { key: "coverage_h2",         label: "coverage H2", hint: "H2 void mass on the union.  Higher = the joint cloud has cavity structure — usually a sign of rich coverage.",
+  { key: "coverage_h2",         label: "coverage H2", hint: "H2 void mass on the union.  Higher = the joint cloud has cavity structure (rare and meaningful when present).  Same subsampling as coverage H1.",
     digits: 3, goodDir: "up" },
   { key: "cohesion_balance",    label: "balance",   hint: "1 − std/mean of H0 cohesion across archetypes.  Higher = archetypes are similarly tight; lower = some are tight, others diffuse.",
     digits: 2, goodDir: "up" },
