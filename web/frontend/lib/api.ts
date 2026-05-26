@@ -258,6 +258,24 @@ export interface PersistenceDiagramResponse {
   ripser_available: boolean;
 }
 
+export interface AllDiagramsEntry {
+  symbol: string;
+  points: PersistencePoint[];
+  h0_finite: number;
+  h1_total: number;
+  h1_persistent: number;
+  h2_total: number;
+  h2_persistent: number;
+  max_persistence_h1: number;
+  max_persistence_h2: number;
+}
+
+export interface AllDiagramsResponse {
+  entries: AllDiagramsEntry[];
+  max_finite_death: number;
+  ripser_available: boolean;
+}
+
 export interface CycleVertex {
   word: string;
   index: number;

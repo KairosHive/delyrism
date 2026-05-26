@@ -475,3 +475,24 @@ class WordCatalystResponse(BaseModel):
     h1_baseline: float
     h2_baseline: float
     ripser_available: bool
+
+
+class AllDiagramsEntry(BaseModel):
+    symbol: str
+    points: List[PersistencePoint]
+    # Roll-ups for the per-symbol mini-card title and auto-narration.
+    h0_finite: int
+    h1_total: int
+    h1_persistent: int          # H1 features with persistence > 0.02
+    h2_total: int
+    h2_persistent: int
+    max_persistence_h1: float
+    max_persistence_h2: float
+
+
+class AllDiagramsResponse(BaseModel):
+    entries: List[AllDiagramsEntry]
+    # Shared max for the y-axis so every mini-diagram lives in the same
+    # frame — comparison-ready out of the box.
+    max_finite_death: float
+    ripser_available: bool

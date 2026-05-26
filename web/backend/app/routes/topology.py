@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, Query
 from ..schemas import (
     TopologySummaryEntry, TopologySummaryResponse, PCAPoint,
     PersistenceDiagramResponse, PersistencePoint,
+    AllDiagramsEntry, AllDiagramsResponse,
     TopologyCyclesResponse, PersistentCycle, CycleVertex,
     TopologySynergyResponse, SynergyEntry,
     PairCyclesResponse, PairCycle,
@@ -253,6 +254,93 @@ def topology_diagram(req: dict):
     out = PersistenceDiagramResponse(symbol=symbol, points=pts,
                                      max_finite_death=float(max_finite),
                                      ripser_available=True)
+    engine_cache.memo_put(key, out)
+    return out
+
+
+# ---------- /topology/diagrams-all ------------------------------------------
+
+@router.post("/diagrams-all", response_model=AllDiagramsResponse)
+def topology_diagrams_all(req: dict):
+    """All symbols' persistence diagrams in one shot — drives the
+    small-multiples grid in the Diagrams sub-view.  Shared axis frame
+    (max_finite_death) so the minis are visually comparable.
+    """
+    space_id = req.get("space_id")
+    if not space_id:
+        raise HTTPException(status_code=400, detail="space_id required")
+    space = _require(space_id)
+    _ripser_or_503()
+
+    key = _cache_key(space_id, "diagrams-all")
+    cached = engine_cache.memo_get(key)
+    if cached is not None:
+        return cached
+
+    from ripser import ripser
+    sym_emb = _symbol_embeddings(space)
+
+    # First pass: compute all PH and find the global max-finite-death so the
+    # minis can share an axis frame.
+    raw: dict[str, list] = {}
+    max_finite = 0.0
+    for sym, X in sym_emb.items():
+        dgms = ripser(X, maxdim=2, metric="cosine")["dgms"]
+        raw[sym] = dgms
+        for dgm in dgms:
+            if not dgm.size:
+                continue
+            mask = np.isfinite(dgm[:, 1])
+            if mask.any():
+                m = float(np.max(dgm[mask, 1]))
+                if m > max_finite:
+                    max_finite = m
+
+    inf_value = (max_finite if max_finite > 0 else 1.0) * 1.1
+    PERS_THR = 0.02
+
+    entries: list[AllDiagramsEntry] = []
+    for sym, dgms in raw.items():
+        pts: list[PersistencePoint] = []
+        h0_finite = 0
+        h1_total = 0; h1_pers_count = 0; max_h1 = 0.0
+        h2_total = 0; h2_pers_count = 0; max_h2 = 0.0
+        for d, dgm in enumerate(dgms[:3]):
+            if not dgm.size:
+                continue
+            for birth, death in dgm:
+                is_inf = not np.isfinite(death)
+                b = float(birth)
+                de = inf_value if is_inf else float(death)
+                pts.append(PersistencePoint(dim=d, birth=b, death=de, is_infinite=is_inf))
+                if d == 0 and not is_inf:
+                    h0_finite += 1
+                elif d == 1:
+                    h1_total += 1
+                    if not is_inf:
+                        p = float(death) - b
+                        if p > PERS_THR:
+                            h1_pers_count += 1
+                        if p > max_h1:
+                            max_h1 = p
+                elif d == 2:
+                    h2_total += 1
+                    if not is_inf:
+                        p = float(death) - b
+                        if p > PERS_THR:
+                            h2_pers_count += 1
+                        if p > max_h2:
+                            max_h2 = p
+        entries.append(AllDiagramsEntry(
+            symbol=sym, points=pts,
+            h0_finite=h0_finite,
+            h1_total=h1_total, h1_persistent=h1_pers_count,
+            h2_total=h2_total, h2_persistent=h2_pers_count,
+            max_persistence_h1=max_h1, max_persistence_h2=max_h2,
+        ))
+
+    out = AllDiagramsResponse(entries=entries, max_finite_death=max_finite,
+                              ripser_available=True)
     engine_cache.memo_put(key, out)
     return out
 
