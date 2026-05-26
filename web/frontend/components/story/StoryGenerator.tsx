@@ -29,6 +29,16 @@ const TONES = [
   "tarkovsky",
 ];
 
+// Distinct accent colour per section so the story sidebar reads as four
+// clearly-separated cards rather than one long uniform list.  Each colour
+// pairs with a small icon for redundant signalling.
+const STORY_COLORS = {
+  model:      "#9b59b6", // purple — the machine
+  narrative:  "#3498db", // blue  — text / structure
+  motifs:     "#e67e22", // orange — symbolic anchors
+  atmosphere: "#bf616a", // red    — mood / heat
+} as const;
+
 const FORMS: { value: string; label: string }[] = [
   { value: "prose",       label: "Prose (one paragraph)" },
   { value: "short-story", label: "Short story (2–4 paragraphs)" },
@@ -113,7 +123,7 @@ export function StoryGenerator() {
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.5fr]">
       <div className="space-y-3">
-        <Section title="Model" defaultOpen>
+        <Section title="Model" defaultOpen color={STORY_COLORS.model} icon="🧠">
           <Select
             label="Provider · model"
             value={model}
@@ -123,7 +133,7 @@ export function StoryGenerator() {
           />
         </Section>
 
-        <Section title="Narrative" defaultOpen>
+        <Section title="Narrative" defaultOpen color={STORY_COLORS.narrative} icon="📖">
           <Select label="Language" value={language} onChange={(v) => set("storyLanguage", v as any)}
             options={[
               { value: "English", label: "English" },
@@ -149,7 +159,7 @@ export function StoryGenerator() {
             help="Output shape — separate from Tone (register/style). Prose = one paragraph. Short story = 2–4 paragraphs with a turn. Poem = line breaks and stanzas. Myth = cosmic/etiological. Incantation = ritual repetition with 2nd-person address. Vignette = a single held scene." />
         </Section>
 
-        <Section title="Anchor & Motifs" defaultOpen>
+        <Section title="Anchor & Motifs" defaultOpen color={STORY_COLORS.motifs} icon="⚓">
           <Select label="Anchor archetype" value={anchor} onChange={(v) => set("storyAnchor", v)}
             options={[
               { value: "",     label: "— none —" },
@@ -169,7 +179,7 @@ export function StoryGenerator() {
             help="Where motif words come from. Δ-graph = words from descriptor pairs whose similarity changed most under context (the relational view). Top-attention = the descriptors most strongly aligned with the context for the anchor (or top-ranked) symbol — sharper, less 'movement'-driven. Mixed interleaves both." />
         </Section>
 
-        <Section title="Atmosphere" defaultOpen>
+        <Section title="Atmosphere" defaultOpen color={STORY_COLORS.atmosphere} icon="🌫">
           <Select label="Tone" value={tone} onChange={(v) => set("storyTone", v)}
             options={TONES.map((t) => ({ value: t, label: t }))}
             help="Style register. Plain tones (dreamy/eerie/warm) just adjust adjectives; the named-author tones (pynchon/blake/mystic-baroque/gnostic-techno) inject specific style directives, lexicons, and avoid-lists into the prompt." />
