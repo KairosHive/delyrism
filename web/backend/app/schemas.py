@@ -343,11 +343,28 @@ class StoryRequest(BaseModel):
     # How many motif words to weave explicitly into the prompt.
     motif_density: int = 12
     # Where motifs come from:
-    #   "delta-graph"   — words from the Δ-graph (current behavior)
-    #   "top-attention" — top-attended descriptors of the anchor (or top-ranked
-    #                     symbol if no anchor), via conditioned_symbol()
-    #   "mixed"         — half-and-half, deduped
-    motif_source: Literal["delta-graph", "top-attention", "mixed"] = "delta-graph"
+    #   "delta-graph"    — words from the Δ-graph (current behavior)
+    #   "top-attention"  — top-attended descriptors of the anchor (or top-ranked
+    #                      symbol if no anchor), via conditioned_symbol()
+    #   "mixed"          — half-and-half, deduped
+    #   "transformation" — the migrations + identity-card drift for one
+    #                      target archetype.  Story is structured around
+    #                      what's fading and what's emerging.
+    #   "cycle"          — a persistent H1 (or H2) loop / void becomes the
+    #                      story's narrative spine — vertex words drive the
+    #                      sequence of beats.
+    motif_source: Literal["delta-graph", "top-attention", "mixed",
+                          "transformation", "cycle"] = "delta-graph"
+
+    # Sub-mode for motif_source="transformation":
+    #   "emergence" — focus on descriptors entering the archetype
+    #   "fading"    — focus on descriptors leaving
+    #   "becoming"  — both, structured as before → after
+    transformation_mode: Literal["emergence", "fading", "becoming"] = "becoming"
+    # Sub-mode for motif_source="cycle":
+    #   "h1" — use a persistent 1-dimensional loop (default)
+    #   "h2" — use a persistent 2-dimensional void
+    cycle_dim: Literal["h1", "h2"] = "h1"
 
     # delta graph params used to extract motifs
     delta_params: Optional[DeltaGraphRequest] = None
@@ -357,6 +374,10 @@ class StoryResponse(BaseModel):
     story: str
     motifs: List[str]
     model: str
+    # When the target archetype was auto-picked (anchor=none + a topology
+    # source), echo back which one the backend chose.  None for the other
+    # sources or when an explicit anchor was given.
+    auto_target: Optional[str] = None
 
 
 # ----------------------- topology (persistent homology) -----------------------

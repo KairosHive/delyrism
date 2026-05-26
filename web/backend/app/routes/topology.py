@@ -156,6 +156,41 @@ def _shift_params_from_body(body: dict) -> dict:
     }
 
 
+def walk_h1_cycle(cyc) -> list[int]:
+    """Greedy traversal of an H1 cocycle's vertices, returning an ordered
+    walk that closes the loop.  Public helper — both /topology/cycles and
+    /story (cycle source) use it.
+    """
+    if cyc is None or len(cyc) == 0:
+        return []
+    edges: dict[int, list[int]] = {}
+    for row in cyc:
+        i, j = int(row[0]), int(row[1])
+        edges.setdefault(i, []).append(j)
+        edges.setdefault(j, []).append(i)
+    if not edges:
+        return []
+    start = min(edges.keys())
+    path = [start]
+    visited = {start}
+    cur = start
+    while True:
+        nxt = None
+        for v in edges.get(cur, []):
+            if v not in visited:
+                nxt = v
+                break
+        if nxt is None:
+            break
+        path.append(nxt)
+        visited.add(nxt)
+        cur = nxt
+    for v in edges.keys():
+        if v not in visited:
+            path.append(v)
+    return path
+
+
 def _build_union_for_ph(
     sym_emb: dict, target_max: int = 150, seed: int = 42,
 ) -> np.ndarray:

@@ -107,9 +107,13 @@ export interface SidebarState {
   storyAnchor: string;
   // Motif controls — number of motif words and where they come from.
   storyMotifDensity: number;
-  storyMotifSource: "delta-graph" | "top-attention" | "mixed";
+  storyMotifSource: "delta-graph" | "top-attention" | "mixed" | "transformation" | "cycle";
+  // Sub-modes for the topology-driven sources.  Only used when
+  // storyMotifSource is the matching value.
+  storyTransformationMode: "emergence" | "fading" | "becoming";
+  storyCycleDim: "h1" | "h2";
   // Last-generated story and motifs (so they survive tab navigation).
-  storyResult: { story: string; motifs: string[]; model: string } | null;
+  storyResult: { story: string; motifs: string[]; model: string; auto_target?: string | null } | null;
   storyError: string | null;
 
   // ----- audio context override -----
@@ -235,6 +239,8 @@ export const useSidebar = create<SidebarState>((set) => ({
   storyAnchor: "",
   storyMotifDensity: 12,
   storyMotifSource: "delta-graph",
+  storyTransformationMode: "becoming",
+  storyCycleDim: "h1",
   storyResult: null,
   storyError: null,
 

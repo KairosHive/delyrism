@@ -69,6 +69,8 @@ export function StoryGenerator() {
   const anchor = useSidebar((s) => s.storyAnchor);
   const motifDensity = useSidebar((s) => s.storyMotifDensity);
   const motifSource = useSidebar((s) => s.storyMotifSource);
+  const transformationMode = useSidebar((s) => s.storyTransformationMode);
+  const cycleDim = useSidebar((s) => s.storyCycleDim);
   const symbols = useSidebar((s) => s.symbols);
   const storyResult = useSidebar((s) => s.storyResult);
   const storyError = useSidebar((s) => s.storyError);
@@ -102,11 +104,13 @@ export function StoryGenerator() {
         anchor_archetype: anchor || null,
         motif_density: motifDensity,
         motif_source: motifSource,
+        transformation_mode: transformationMode,
+        cycle_dim: cycleDim,
         delta_params,
       });
     },
     onSuccess: (data) => {
-      set("storyResult", { story: data.story, motifs: data.motifs, model: data.model });
+      set("storyResult", { story: data.story, motifs: data.motifs, model: data.model, auto_target: data.auto_target ?? null });
       set("storyError", null);
     },
     onError: (err: Error) => {
@@ -172,11 +176,52 @@ export function StoryGenerator() {
             help="How many motif words the prompt explicitly asks the model to weave in. More = richer texture but harder for the LLM to integrate naturally. 8–14 is the sweet spot." />
           <Select label="Motif source" value={motifSource} onChange={(v) => set("storyMotifSource", v as any)}
             options={[
-              { value: "delta-graph",   label: "Δ-graph nodes (relational shift)" },
-              { value: "top-attention", label: "Top-attention descriptors (sharp focus)" },
-              { value: "mixed",         label: "Mixed (half-and-half)" },
+              { value: "delta-graph",     label: "Δ-graph nodes (relational shift)" },
+              { value: "top-attention",   label: "Top-attention descriptors (sharp focus)" },
+              { value: "mixed",           label: "Mixed (Δ + attention)" },
+              { value: "transformation",  label: "Contextual transformation (becoming)" },
+              { value: "cycle",           label: "Cycle journey (loop as story spine)" },
             ]}
-            help="Where motif words come from. Δ-graph = words from descriptor pairs whose similarity changed most under context (the relational view). Top-attention = the descriptors most strongly aligned with the context for the anchor (or top-ranked) symbol — sharper, less 'movement'-driven. Mixed interleaves both." />
+            help="Where motif words come from. Δ-graph / top-attention / mixed surface descriptor words by various criteria. The two topology-driven sources structure the story around archetypal motion: transformation tells the arc of an archetype's drift under context; cycle traces a persistent loop in semantic space as a closed narrative spine." />
+
+          {motifSource === "transformation" && (
+            <div className="rounded-md border border-warmth/40 bg-warmth/10 p-2 space-y-1">
+              <div className="text-[10px] uppercase tracking-widest text-warmth">
+                Transformation mode
+              </div>
+              <Select label="Mode" value={transformationMode} onChange={(v) => set("storyTransformationMode", v as any)}
+                options={[
+                  { value: "becoming",  label: "Becoming (both, before → after)" },
+                  { value: "emergence", label: "Emergence (what enters the archetype)" },
+                  { value: "fading",    label: "Fading (what leaves the archetype)" },
+                ]}
+                help="Which slice of the archetype's identity-card drift drives the story." />
+              <p className="text-[10px] leading-snug text-ink-400">
+                {anchor
+                  ? <>Target: <span className="text-warmth">{anchor === "auto" ? "(top-ranked)" : anchor}</span></>
+                  : <><span className="text-warmth">Anchor is none</span> → backend auto-picks the most-transformed archetype (max |emerged|+|faded|).</>}
+              </p>
+            </div>
+          )}
+
+          {motifSource === "cycle" && (
+            <div className="rounded-md border border-accent-500/40 bg-accent-600/10 p-2 space-y-1">
+              <div className="text-[10px] uppercase tracking-widest text-accent-300">
+                Cycle journey
+              </div>
+              <Select label="Dimension" value={cycleDim} onChange={(v) => set("storyCycleDim", v as any)}
+                options={[
+                  { value: "h1", label: "H1 — semantic loop (closed path of words)" },
+                  { value: "h2", label: "H2 — void (circle the absence)" },
+                ]}
+                help="H1 loops give an ordered word-trail to walk. H2 voids give an unordered vertex set surrounding an absence the story circles around." />
+              <p className="text-[10px] leading-snug text-ink-400">
+                {anchor
+                  ? <>Target: <span className="text-accent-300">{anchor === "auto" ? "(top-ranked)" : anchor}</span></>
+                  : <><span className="text-accent-300">Anchor is none</span> → backend auto-picks the archetype with the most-persistent {cycleDim.toUpperCase()} cycle.</>}
+              </p>
+            </div>
+          )}
         </Section>
 
         <Section title="Atmosphere" defaultOpen color={STORY_COLORS.atmosphere} icon="🌫">
@@ -210,8 +255,18 @@ export function StoryGenerator() {
       </div>
 
       <div className="panel-pad min-h-[400px] space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="section-title">Story</div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="section-title">Story</div>
+            {storyResult?.auto_target && (
+              <span
+                className="pill !text-[10px] border-accent-500/60 bg-accent-600/15 text-accent-200"
+                title="Anchor was none — backend auto-picked this archetype for the chosen topology source."
+              >
+                auto · {storyResult.auto_target}
+              </span>
+            )}
+          </div>
           {storyResult?.motifs?.length ? (
             <div className="flex max-w-[60%] flex-wrap items-center gap-1 text-[10px] text-ink-300">
               motifs:

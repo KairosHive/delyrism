@@ -213,6 +213,10 @@ export interface StoryResponse {
   story: string;
   motifs: string[];
   model: string;
+  /** When the backend auto-picked the target archetype (no anchor was
+   *  set + motif_source is "transformation" or "cycle"), the chosen
+   *  symbol is echoed back here so the UI can show "auto-picked: FIRE". */
+  auto_target?: string | null;
 }
 
 

@@ -2,14 +2,21 @@
 motif extractor used by the existing Streamlit app."""
 from __future__ import annotations
 import os
+import numpy as np
 import requests
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 from fastapi import APIRouter, HTTPException
 
 from ..schemas import StoryRequest, StoryResponse, DeltaGraphRequest
 from .. import engine_cache
 from ..tone_presets import build_tone_extras, build_form_directive
 from delyrism import context_delta_graph
+from .topology import (
+    _get_ph as _topology_get_ph,
+    _symbol_embeddings_from as _topology_symbol_embeddings_from,
+    walk_h1_cycle as _topology_walk_h1_cycle,
+    _row_norm as _topology_row_norm,
+)
 
 router = APIRouter(prefix="/story", tags=["story"])
 
@@ -100,6 +107,242 @@ def _top_attention_motifs(space, *, sentence, weights, k: int, anchor: Optional[
     return out[:k]
 
 
+# ─────────────────── topology-driven motif sources ───────────────────────
+
+def _shift_params_from_req(req: StoryRequest) -> dict:
+    """Standard shift parameter pack derived from the request.  Honors the
+    user's Δ-graph sidebar settings (carried in delta_params) so the
+    transformation / cycle stories reflect the same context-shifted cloud
+    the rest of Explorer is showing."""
+    dp = req.delta_params or DeltaGraphRequest(space_id=req.space_id)
+    return {
+        "weights": req.weights,
+        "sentence": req.sentence,
+        "strategy": dp.strategy,
+        "beta": dp.beta,
+        "gate": dp.gate,
+        "tau": dp.tau,
+        "within_symbol_softmax": dp.within_symbol_softmax,
+        "gamma": dp.gamma,
+        "prompt_template": dp.prompt_template,
+        "pool_type": dp.pool_type,
+        "pool_w": dp.pool_w,
+        "membership_alpha": dp.membership_alpha,
+    }
+
+
+def _transformation_motifs(
+    space, req: StoryRequest, target: Optional[str], density: int,
+) -> Tuple[List[str], str, str]:
+    """Return (motifs, prompt_context_block, resolved_target).
+
+    When `target` is None, auto-picks the most-transformed archetype
+    (max number of new/faded descriptors entering/leaving its top-K).
+    Mode (emergence / fading / becoming) drives which slice of the
+    identity card becomes the motifs and shapes the prompt narration.
+    """
+    shift_params = _shift_params_from_req(req)
+    D_after = engine_cache.get_or_compute_shifted_matrix(req.space_id, space, shift_params)
+
+    symbols = list(space.symbols)
+    cents = np.stack([space.symbol_centroids[s] for s in symbols])
+    cents = cents / (np.linalg.norm(cents, axis=1, keepdims=True) + 1e-9)
+    sims_before = space.D @ cents.T
+    sims_after_to_orig = D_after @ cents.T  # only used for the auto-pick metric
+
+    descriptor_names = list(space.descriptors)
+    owners = [space.owner.get(d, "") for d in descriptor_names]
+
+    K_topk = 8  # how many in the before/after lists to compute deltas from
+
+    def _identity_card(sym: str):
+        s_idx = symbols.index(sym)
+        # before: top-K against original centroid (any descriptor)
+        before_order = np.argsort(-sims_before[:, s_idx])
+        seen_b: set = set()
+        before_list: list = []
+        for j in before_order:
+            idx = int(j)
+            name = descriptor_names[idx]
+            if name in seen_b:
+                continue
+            seen_b.add(name)
+            before_list.append((name, owners[idx]))
+            if len(before_list) >= K_topk:
+                break
+        # after: top-K against shifted centroid (mean of sym's descriptors in D_after)
+        home_indices = [i for i, o in enumerate(owners) if o == sym]
+        if home_indices:
+            c_after = D_after[home_indices].mean(axis=0)
+            n = float(np.linalg.norm(c_after))
+            c_after_unit = c_after / n if n > 1e-9 else cents[s_idx]
+        else:
+            c_after_unit = cents[s_idx]
+        sims_after_shifted = D_after @ c_after_unit
+        after_order = np.argsort(-sims_after_shifted)
+        seen_a: set = set()
+        after_list: list = []
+        for j in after_order:
+            idx = int(j)
+            name = descriptor_names[idx]
+            if name in seen_a:
+                continue
+            seen_a.add(name)
+            after_list.append((name, owners[idx]))
+            if len(after_list) >= K_topk:
+                break
+        before_names = {n for n, _ in before_list}
+        after_names = {n for n, _ in after_list}
+        emerged = [(n, o) for n, o in after_list if n not in before_names]
+        faded   = [(n, o) for n, o in before_list if n not in after_names]
+        return before_list, after_list, emerged, faded
+
+    # Auto-pick target if not provided
+    if not target or target not in space.symbol_to_idx:
+        best_sym, best_score = None, -1
+        for sym in symbols:
+            _, _, em, fd = _identity_card(sym)
+            score = len(em) + len(fd)
+            if score > best_score:
+                best_score = score
+                best_sym = sym
+        target = best_sym or (symbols[0] if symbols else "")
+
+    before_list, after_list, emerged, faded = _identity_card(target)
+
+    # Pick motifs based on mode
+    mode = req.transformation_mode
+    if mode == "emergence":
+        chosen = [n for n, _ in emerged]
+    elif mode == "fading":
+        chosen = [n for n, _ in faded]
+    else:  # becoming
+        # interleave to give both sides representation
+        chosen = []
+        for pair in zip(emerged + [(None, None)] * len(faded), faded + [(None, None)] * len(emerged)):
+            for n, _ in pair:
+                if n and n not in chosen:
+                    chosen.append(n)
+        # if both lists are short, pad from after_list
+        for n, _ in after_list:
+            if len(chosen) >= density:
+                break
+            if n not in chosen:
+                chosen.append(n)
+
+    chosen = chosen[:density]
+
+    # Build the prompt context — narration of what's changing in this archetype.
+    def _fmt(items, lim=6):
+        return ", ".join(f"{n} ({o})" if o and o != target else n for n, o in items[:lim]) or "—"
+
+    if mode == "emergence":
+        context_block = (
+            f"The archetype {target} is taking on new aspects under this context.  "
+            f"Newly drawn in: {_fmt(emerged)}.  "
+            f"Tell a story of {target} becoming a vessel for these new presences."
+        )
+    elif mode == "fading":
+        context_block = (
+            f"The archetype {target} is shedding old aspects under this context.  "
+            f"Falling away: {_fmt(faded)}.  "
+            f"Tell a story of {target} releasing what it once held."
+        )
+    else:  # becoming
+        context_block = (
+            f"The archetype {target} is transforming.  "
+            f"Fading: {_fmt(faded)}.  "
+            f"Emerging: {_fmt(emerged)}.  "
+            f"Tell a story of {target} crossing from its old form into its new one — "
+            f"name what is left behind and what is taking its place."
+        )
+
+    return chosen, context_block, target
+
+
+def _cycle_motifs(
+    space, req: StoryRequest, target: Optional[str], density: int,
+) -> Tuple[List[str], str, str]:
+    """Return (motifs, prompt_context_block, resolved_target).
+
+    When `target` is None, auto-picks the archetype with the highest
+    persistence of a top H1 (or H2, per req.cycle_dim) feature.  The
+    chosen cycle's ordered vertex words become the motifs IN ORDER —
+    the prompt asks the LLM to trace them as the story's spine.
+    """
+    shift_params = _shift_params_from_req(req)
+    D_after = engine_cache.get_or_compute_shifted_matrix(req.space_id, space, shift_params)
+    sym_emb = _topology_symbol_embeddings_from(space, D_after)
+    if not sym_emb:
+        return [], "", target or ""
+
+    dim_idx = 1 if req.cycle_dim == "h1" else 2
+
+    def _top_cycle_for(sym: str):
+        if sym not in sym_emb:
+            return None  # (persistence, cycle_words, cocycle_raw)
+        X = sym_emb[sym]
+        out = _topology_get_ph(req.space_id, sym, X, maxdim=2, thresh=1.0, cocycles=True)
+        H = out["dgms"][dim_idx]
+        coc = out.get("cocycles", [[], [], []])[dim_idx] if "cocycles" in out else []
+        if H.size == 0:
+            return None
+        pers = np.where(np.isfinite(H[:, 1]), H[:, 1] - H[:, 0], 0.0)
+        if pers.max() <= 0:
+            return None
+        idx = int(np.argmax(pers))
+        words = list(space.symbols_to_descriptors[sym])[: X.shape[0]]
+        cyc_raw = coc[idx] if idx < len(coc) else []
+        if dim_idx == 1:
+            ordered = _topology_walk_h1_cycle(cyc_raw)
+        else:
+            # H2 — unordered vertex set
+            verts = set()
+            for row in cyc_raw:
+                verts.update([int(row[0]), int(row[1]), int(row[2])])
+            ordered = sorted(verts)
+        cycle_words = [words[v] for v in ordered if v < len(words)]
+        return float(pers[idx]), cycle_words
+
+    # Auto-pick target = archetype with max top-cycle persistence
+    if not target or target not in space.symbol_to_idx:
+        best_sym, best = None, -1.0
+        for sym in sym_emb.keys():
+            result = _top_cycle_for(sym)
+            if result and result[0] > best:
+                best = result[0]
+                best_sym = sym
+        target = best_sym or (next(iter(sym_emb.keys())) if sym_emb else "")
+
+    result = _top_cycle_for(target) if target else None
+    if result is None:
+        # No cycle for the requested dim — fall back to top-attention so the
+        # story doesn't fail.  Empty cycle = blank motifs and a fallback prompt.
+        return [], (
+            f"No persistent {req.cycle_dim.upper()} {'loop' if dim_idx == 1 else 'void'} found in {target}.  "
+            f"Tell a contemplative story about {target}'s inner stillness."
+        ), target
+
+    persistence, cycle_words = result
+    motifs = cycle_words[:density]
+    if dim_idx == 1:
+        trail = " → ".join(cycle_words) + (f" → {cycle_words[0]}" if cycle_words else "")
+        context_block = (
+            f"A persistent semantic loop in {target}: {trail}.  "
+            f"Use this loop as the narrative spine — let each word be a beat in the story, "
+            f"and let the ending echo back to where it began.  Persistence={persistence:.3f}."
+        )
+    else:
+        members = ", ".join(cycle_words)
+        context_block = (
+            f"A persistent void in {target} ({req.cycle_dim.upper()}), surrounded by: {members}.  "
+            f"Tell a story that circles the absence at the heart of these words — what is NOT there shapes everything that is.  "
+            f"Persistence={persistence:.3f}."
+        )
+
+    return motifs, context_block, target
+
+
 def _build_prompt(
     *,
     context_sentence: Optional[str],
@@ -111,6 +354,7 @@ def _build_prompt(
     language: str,
     form: str = "prose",
     anchor: Optional[str] = None,
+    source_block: Optional[str] = None,
 ) -> List[dict]:
     lang_code = {"English": "en", "Français": "fr", "Español": "es"}.get(language, "en")
     sys_by_lang = {
@@ -177,9 +421,14 @@ def _build_prompt(
         parts.append(anchor_line)
     extras_block = ("\n" + "\n".join(parts)) if parts else ""
 
+    # Optional source-specific narration block — e.g. transformation arc
+    # or cycle-loop walking instructions.  Placed BEFORE the motif list so
+    # the LLM reads the structural directive first.
+    source_section = f"\n\n{source_block.strip()}" if (source_block and source_block.strip()) else ""
+
     return [
         {"role": "system", "content": sys_by_lang[lang_code]},
-        {"role": "user", "content": f"{ctx_line}\n{motif_line}\nConstraints: {style}{extras_block}"},
+        {"role": "user", "content": f"{ctx_line}{source_section}\n{motif_line}\nConstraints: {style}{extras_block}"},
     ]
 
 
@@ -230,8 +479,32 @@ def generate(req: StoryRequest) -> StoryResponse:
 
     delta_motifs: List[str] = []
     att_motifs: List[str] = []
+    source_block: Optional[str] = None
+    auto_target: Optional[str] = None
 
-    if source in ("delta-graph", "mixed"):
+    # ── topology sources: transformation / cycle ──
+    if source == "transformation":
+        # If anchor is set (auto-resolved or explicit), use it; else auto-pick
+        # by transformation magnitude.
+        target = anchor  # already resolved (None / explicit symbol)
+        motifs_list, ctx_block, resolved = _transformation_motifs(space, req, target, density)
+        if anchor is None:
+            auto_target = resolved
+        source_block = ctx_block
+        motifs = motifs_list
+    elif source == "cycle":
+        target = anchor
+        motifs_list, ctx_block, resolved = _cycle_motifs(space, req, target, density)
+        if anchor is None:
+            auto_target = resolved
+        source_block = ctx_block
+        motifs = motifs_list
+    else:
+        motifs = None  # legacy sources will compute below
+
+    legacy_sources = source in ("delta-graph", "top-attention", "mixed")
+
+    if legacy_sources and source in ("delta-graph", "mixed"):
         # Use the Δ-graph the user sees in Explorer (delta_params from
         # frontend) — fall back to defaults if absent.
         dparams = req.delta_params or DeltaGraphRequest(space_id=req.space_id)
@@ -262,7 +535,7 @@ def generate(req: StoryRequest) -> StoryResponse:
             positive_only=req.positive_delta_only,
         )
 
-    if source in ("top-attention", "mixed"):
+    if legacy_sources and source in ("top-attention", "mixed"):
         att_motifs = _top_attention_motifs(
             space,
             sentence=req.sentence,
@@ -271,41 +544,46 @@ def generate(req: StoryRequest) -> StoryResponse:
             anchor=anchor,
         )
 
-    if source == "delta-graph":
-        motifs = delta_motifs[:density]
-    elif source == "top-attention":
-        motifs = att_motifs[:density]
-    else:  # mixed — interleave for variety, dedupe
-        motifs = []
-        seen: set = set()
-        for a, b in zip(delta_motifs, att_motifs):
-            for w in (a, b):
-                if w and w not in seen:
-                    motifs.append(w)
-                    seen.add(w)
+    if legacy_sources:
+        if source == "delta-graph":
+            motifs = delta_motifs[:density]
+        elif source == "top-attention":
+            motifs = att_motifs[:density]
+        else:  # mixed — interleave for variety, dedupe
+            motifs = []
+            seen: set = set()
+            for a, b in zip(delta_motifs, att_motifs):
+                for w in (a, b):
+                    if w and w not in seen:
+                        motifs.append(w)
+                        seen.add(w)
+                    if len(motifs) >= density:
+                        break
                 if len(motifs) >= density:
                     break
-            if len(motifs) >= density:
-                break
-        # top up from whichever pool still has words
-        for w in delta_motifs + att_motifs:
-            if len(motifs) >= density:
-                break
-            if w not in seen:
-                motifs.append(w)
-                seen.add(w)
+            # top up from whichever pool still has words
+            for w in delta_motifs + att_motifs:
+                if len(motifs) >= density:
+                    break
+                if w not in seen:
+                    motifs.append(w)
+                    seen.add(w)
 
-    # 2. build prompt (form + anchor + tone all plumbed in)
+    # 2. build prompt (form + anchor + tone all plumbed in).  When a
+    # topology source resolved a target, prefer it as the prompt-level
+    # anchor so the LLM sees the actual archetype the story is about.
+    effective_anchor = anchor or auto_target
     messages = _build_prompt(
         context_sentence=req.sentence,
-        motifs=motifs,
+        motifs=motifs or [],
         tone=req.tone,
         pov=req.pov,
         tense=req.tense,
         target_words=req.length_words,
         language=req.language,
         form=req.form,
-        anchor=anchor,
+        anchor=effective_anchor,
+        source_block=source_block,
     )
 
     # 3. call provider
@@ -319,4 +597,4 @@ def generate(req: StoryRequest) -> StoryResponse:
         )
     else:
         raise HTTPException(status_code=400, detail="local provider not yet wired in API server; use Cloudflare")
-    return StoryResponse(story=story, motifs=motifs, model=req.model)
+    return StoryResponse(story=story, motifs=motifs or [], model=req.model, auto_target=auto_target)
