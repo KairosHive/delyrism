@@ -76,8 +76,8 @@ function html(title: string, body: string, head = ""): string {
 <style>
   body { margin: 0; background: #0b0f1a; color: #cad4e0; font-family: Inter, system-ui, sans-serif; }
   .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
-  h1 { font-weight: 300; font-size: 1.4rem; letter-spacing: 0.06em; }
-  .sub { color: #6e7e95; font-size: 0.8rem; margin-top: -4px; }
+  h1 { font-weight: 300; font-size: 1.4rem; letter-spacing: 0.06em; margin: 0; }
+  .sub { color: #6e7e95; font-size: 0.8rem; margin-top: 4px; }
   .chart { min-height: 600px; }
 </style>
 ${head}
@@ -101,40 +101,128 @@ function escapeHtml(s: string): string {
 
 function plotlyShell(title: string, traces: any, layout: any): string {
   const cfg = { displaylogo: false, responsive: true };
-  return html(
-    title,
-    `<h1>${escapeHtml(title)}</h1>
-<div id="chart" class="chart"></div>
+  // Plotly charts use a full-bleed layout — header at top, plot fills the rest.
+  // Plotly itself handles its own canvas sizing via responsive:true.
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%;
+               background: #0b0f1a; color: #cad4e0;
+               font-family: Inter, system-ui, sans-serif; overflow: hidden; }
+  .wrap { display: flex; flex-direction: column; height: 100vh; }
+  .hdr { padding: 16px 24px; flex-shrink: 0;
+         border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .hdr h1 { margin: 0; font-weight: 300; font-size: 1.2rem; letter-spacing: 0.06em; }
+  #chart { flex: 1; min-height: 0; }
+</style>
+<script src="${PLOTLY_CDN}"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>${escapeHtml(title)}</h1></div>
+  <div id="chart"></div>
+</div>
 <script>
 const traces = ${JSON.stringify(traces)};
 const layout = ${JSON.stringify(layout)};
 Plotly.newPlot('chart', traces, layout, ${JSON.stringify(cfg)});
-</script>`,
-    `<script src="${PLOTLY_CDN}"></script>`,
-  );
+window.addEventListener('resize', () => Plotly.Plots.resize('chart'));
+</script>
+</body>
+</html>`;
 }
 
-function forceGraphShell(title: string, data: any, opts: { directed?: boolean } = {}): string {
-  const directed = !!opts.directed;
-  return html(
-    title,
-    `<h1>${escapeHtml(title)}</h1>
-<div class="sub">drag to pan, scroll to zoom, drag nodes to pin</div>
-<div id="graph" class="chart" style="height:720px"></div>
+function forceGraphShell(title: string, data: any, opts: { kind: "delta" | "subgraph" }): string {
+  // Subgraph nodes carry score; symbol nodes are bigger than descriptor nodes.
+  // Δ-graph nodes are uniform descriptor dots — labels at all zoom levels.
+  // Either way: full-bleed canvas, labels rendered next to each dot, auto
+  // zoomToFit after physics settle.
+  const isSubgraph = opts.kind === "subgraph";
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0f1a;
+               color: #cad4e0; font-family: Inter, system-ui, sans-serif;
+               overflow: hidden; }
+  .wrap { display: flex; flex-direction: column; height: 100vh; }
+  .hdr { padding: 16px 24px; flex-shrink: 0;
+         border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .hdr h1 { margin: 0; font-weight: 300; font-size: 1.2rem; letter-spacing: 0.06em; }
+  .sub { color: #6e7e95; font-size: 0.75rem; margin-top: 4px; }
+  #graph { flex: 1; min-height: 0; position: relative; }
+</style>
+<script src="${FORCE_GRAPH_CDN}"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <h1>${escapeHtml(title)}</h1>
+    <div class="sub">drag to pan · scroll to zoom · drag nodes to pin · click empty space to reset</div>
+  </div>
+  <div id="graph"></div>
+</div>
 <script>
 const data = ${JSON.stringify(data)};
-const g = ForceGraph()(document.getElementById('graph'))
+
+// Per-node base radius (visual).  Subgraph distinguishes symbol vs
+// descriptor by their score; Δ-graph uses a uniform smaller radius.
+const baseR = ${isSubgraph}
+  ? (n => (n && n.score && n.score >= 3) ? 9 : 4.5)
+  : (n => 4);
+
+const el = document.getElementById('graph');
+const g = ForceGraph()(el)
   .graphData(data)
+  .backgroundColor('#0b0f1a')
   .nodeId('id')
-  .nodeLabel('id')
-  .nodeColor(n => n.color || '#88c0d0')
-  .nodeVal(n => (n.score || 1) * 4 + 2)
+  .nodeRelSize(1)                     // we draw nodes ourselves
   .linkColor(l => l.color || 'rgba(202,212,224,0.35)')
-  .linkWidth(l => (l.weight ?? l.abs_delta ?? 0.5) * 2)
-  ${directed ? ".linkDirectionalArrowLength(4).linkDirectionalArrowRelPos(1)" : ""};
-</script>`,
-    `<script src="${FORCE_GRAPH_CDN}"></script>`,
-  );
+  .linkWidth(l => Math.max(0.5, (l.weight != null ? l.weight : (l.abs_delta != null ? l.abs_delta : 0.5)) * 1.6))
+  .nodeCanvasObjectMode(() => 'replace')
+  .nodeCanvasObject((node, ctx, globalScale) => {
+    const r = baseR(node);
+    // dot
+    ctx.beginPath();
+    ctx.fillStyle = node.color || '#88c0d0';
+    ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 0.5 / globalScale;
+    ctx.stroke();
+    // label
+    const fontSize = Math.max(9, 11 / globalScale);
+    ctx.font = (node.score && node.score >= 3 ? '600 ' : '') + fontSize + 'px Inter, system-ui, sans-serif';
+    ctx.fillStyle = '#dbe2ee';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    // strip leading "S:" / "D:" prefix the engine uses for subgraph nodes
+    const label = String(node.id || '').replace(/^[SD]:/, '');
+    ctx.fillText(label, node.x + r + 3 / globalScale, node.y);
+  })
+  .nodePointerAreaPaint((node, color, ctx) => {
+    const r = baseR(node) + 4;
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+    ctx.fill();
+  })
+  .cooldownTime(2500)
+  .onEngineStop(() => g.zoomToFit(600, 60));
+
+// Resize with the window
+window.addEventListener('resize', () => g.width(el.clientWidth).height(el.clientHeight));
+g.width(el.clientWidth).height(el.clientHeight);
+</script>
+</body>
+</html>`;
 }
 
 // ─────────────────── individual exporters ───────────────────
@@ -209,7 +297,7 @@ function buildMeaningSpaceHtml(
   }
   return plotlyShell("Meaning Space", traces, {
     ...PLOTLY_DARK_LAYOUT,
-    height: 720,
+    autosize: true,
     xaxis: { showgrid: true, gridcolor: "rgba(255,255,255,0.04)", zeroline: false, showticklabels: false },
     yaxis: { showgrid: true, gridcolor: "rgba(255,255,255,0.04)", zeroline: false, showticklabels: false },
     legend: { orientation: "h", y: -0.05 },
@@ -230,7 +318,7 @@ function buildAmbiguityHtml(a: AmbiguityResponse, colorMap: Record<string, strin
   return plotlyShell("Ambiguity", traces, {
     ...PLOTLY_DARK_LAYOUT,
     barmode: "group",
-    height: 520,
+    autosize: true,
     xaxis: { tickangle: -25 },
     yaxis: { title: "value" },
     legend: { orientation: "h", y: -0.15 },
@@ -255,7 +343,7 @@ function buildAttentionHtml(
   });
   return plotlyShell("Descriptor attention", traces, {
     ...PLOTLY_DARK_LAYOUT,
-    height: 640,
+    autosize: true,
     showlegend: true,
     legend: { orientation: "h", y: -0.1 },
     xaxis: { title: "attention weight" },
@@ -287,7 +375,7 @@ function buildSimilarityWithinHtml(
   }));
   return plotlyShell("Similarity (within-symbol)", traces, {
     ...PLOTLY_DARK_LAYOUT,
-    height: 720,
+    autosize: true,
     xaxis: { tickangle: -55 },
     yaxis: { autorange: "reversed" },
     updatemenus: [{ buttons, x: 0, y: 1.12, xanchor: "left", yanchor: "top" }],
@@ -304,19 +392,19 @@ function buildSimilarityBetweenHtml(data: SymbolSimilarityResponse): string {
     hovertemplate: "%{y} ↔ %{x}<br>Δ = %{z:.3f}<extra></extra>",
   }], {
     ...PLOTLY_DARK_LAYOUT,
-    height: 640,
+    autosize: true,
     yaxis: { autorange: "reversed" },
   });
 }
 
 function buildDeltaGraphHtml(d: DeltaGraphResponse): string {
-  const nodes = d.nodes.map((n) => ({ id: n.id, color: n.color, symbol: n.symbol, score: 1 }));
+  const nodes = d.nodes.map((n) => ({ id: n.id, color: n.color, symbol: n.symbol }));
   const links = d.edges.map((e) => ({
     source: e.source, target: e.target,
     weight: e.abs_delta,
     color: e.sign === "up" ? "rgba(95,207,196,0.55)" : "rgba(208,135,112,0.55)",
   }));
-  return forceGraphShell("Δ-graph", { nodes, links });
+  return forceGraphShell("Δ-graph", { nodes, links }, { kind: "delta" });
 }
 
 function buildSubgraphHtml(d: SubgraphResponse): string {
@@ -328,7 +416,7 @@ function buildSubgraphHtml(d: SubgraphResponse): string {
     source: e.source, target: e.target,
     weight: e.weight,
   }));
-  return forceGraphShell("Contextual subgraph", { nodes, links });
+  return forceGraphShell("Contextual subgraph", { nodes, links }, { kind: "subgraph" });
 }
 
 function buildTransformationsHtml(
