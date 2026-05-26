@@ -143,7 +143,7 @@ def topology_summary(req: dict):
         from ripser import ripser
         rows = []
         for sym, X in sym_emb.items():
-            dgms = ripser(X, maxdim=2, metric="euclidean")["dgms"]
+            dgms = ripser(X, maxdim=2, metric="cosine")["dgms"]
             H0, H1, H2 = dgms[0], dgms[1], dgms[2]
             # cohesion + outlier from H0
             if H0.size and np.isfinite(H0[:, 1]).any():
@@ -187,7 +187,7 @@ def topology_summary(req: dict):
         from delyrism.ph import h0_bar_lengths_from_mst
         for sym, X in sym_emb.items():
             try:
-                lens = h0_bar_lengths_from_mst(X, metric="euclidean")
+                lens = h0_bar_lengths_from_mst(X, metric="cosine")
                 coh = float(np.median(lens)) if lens.size else 0.0
                 out = float(np.max(lens)) if lens.size else 0.0
             except Exception:
@@ -229,7 +229,7 @@ def topology_diagram(req: dict):
     if symbol not in sym_emb:
         raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
     X = sym_emb[symbol]
-    dgms = ripser(X, maxdim=2, metric="euclidean")["dgms"]
+    dgms = ripser(X, maxdim=2, metric="cosine")["dgms"]
 
     pts: list[PersistencePoint] = []
     max_finite = 0.0
@@ -290,7 +290,7 @@ def topology_cycles(req: dict):
     words = words[:X.shape[0]]
 
     from ripser import ripser
-    out_r = ripser(X, maxdim=2, metric="euclidean", do_cocycles=True)
+    out_r = ripser(X, maxdim=2, metric="cosine", do_cocycles=True)
     H1, H2 = out_r["dgms"][1], out_r["dgms"][2]
     coc1 = out_r.get("cocycles", [[], [], []])[1] if "cocycles" in out_r else []
     coc2 = out_r.get("cocycles", [[], [], []])[2] if "cocycles" in out_r else []
@@ -307,7 +307,7 @@ def topology_cycles(req: dict):
         traversal of the loop's vertices.  Greedy: start at the lowest-index
         vertex, walk along edges.  Falls back to set order if the edges
         don't form a single loop."""
-        if not cyc:
+        if cyc is None or len(cyc) == 0:
             return []
         edges: dict[int, list[int]] = {}
         for row in cyc:
@@ -422,14 +422,16 @@ def topology_synergy(req: dict):
         X = _row_norm(X)
         nA = len(A)
         # union PH
-        d_union = ripser(X, maxdim=2, metric="euclidean")["dgms"]
+        d_union = ripser(X, maxdim=2, metric="cosine")["dgms"]
         sumH1_u = _sum_finite(d_union[1])
         sumH2_u = _sum_finite(d_union[2])
-        # union with cross-edges blocked
-        diff = X[:, None, :] - X[None, :, :]
-        D = np.sqrt((diff * diff).sum(-1))
+        # union with cross-edges blocked.  Cosine distance: 1 − cos(u, v)
+        # since X is already row-normalised (norm = 1).
+        S = X @ X.T
+        np.clip(S, -1.0, 1.0, out=S)
+        D = 1.0 - S
+        np.fill_diagonal(D, 0.0)
         big = 1e9
-        # block A↔B edges
         for i in range(len(X)):
             for j in range(i + 1, len(X)):
                 if (i < nA) != (j < nA):
@@ -494,13 +496,13 @@ def topology_pair_cycles(req: dict):
     ]
 
     from ripser import ripser
-    out_r = ripser(X, maxdim=2, metric="euclidean", do_cocycles=True)
+    out_r = ripser(X, maxdim=2, metric="cosine", do_cocycles=True)
     H1, H2 = out_r["dgms"][1], out_r["dgms"][2]
     coc1 = out_r.get("cocycles", [[], [], []])[1] if "cocycles" in out_r else []
     coc2 = out_r.get("cocycles", [[], [], []])[2] if "cocycles" in out_r else []
 
     def _h1_walk(cyc):
-        if not cyc:
+        if cyc is None or len(cyc) == 0:
             return []
         edges = {}
         for row in cyc:
@@ -633,7 +635,7 @@ def topology_catalysts(req: dict):
     words = list(space.symbols_to_descriptors[symbol])[:X.shape[0]]
 
     # baseline
-    base = ripser(X, maxdim=2, metric="euclidean", do_cocycles=True)
+    base = ripser(X, maxdim=2, metric="cosine", do_cocycles=True)
     H1 = base["dgms"][1]; H2 = base["dgms"][2]
     base_h1 = _sum_finite(H1); base_h2 = _sum_finite(H2)
     coc1 = base.get("cocycles", [[], [], []])[1] if "cocycles" in base else []
@@ -669,7 +671,7 @@ def topology_catalysts(req: dict):
         Xi = np.delete(X, i, axis=0)
         if Xi.shape[0] < 4:
             continue
-        dgmi = ripser(Xi, maxdim=2, metric="euclidean")["dgms"]
+        dgmi = ripser(Xi, maxdim=2, metric="cosine")["dgms"]
         delta_h1[i] = base_h1 - _sum_finite(dgmi[1])
         delta_h2[i] = base_h2 - _sum_finite(dgmi[2])
 

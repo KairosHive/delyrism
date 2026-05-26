@@ -67,10 +67,12 @@ export function TopologyDiagrams() {
 }
 
 function Diagram({ data, accent }: { data: PersistenceDiagramResponse; accent: string }) {
+  // Notebook-canonical palette: H0 blue · H1 orange · H2 green.  Matches
+  // the matplotlib defaults the user is comparing this view against.
   const HD_COLORS: Record<number, string> = {
-    0: "#9fadc1", // H0 — components, neutral grey-blue
-    1: "#3bbdb0", // H1 — loops, teal
-    2: "#d08770", // H2 — voids, warm
+    0: "#5fa8d3", // H0 — components, blue
+    1: "#e67e22", // H1 — loops, orange
+    2: "#2ecc71", // H2 — voids, green
   };
   const HD_LABEL: Record<number, string> = {
     0: "H0 · components",

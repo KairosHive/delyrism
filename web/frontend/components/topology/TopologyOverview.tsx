@@ -50,21 +50,57 @@ export function TopologyOverview() {
 
   const sorted = [...data.entries].sort((a, b) => b.topo_score - a.topo_score);
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.4fr]">
-      {/* ── ranked table ── */}
-      <TopoScoreTable
-        entries={sorted}
-        colorMap={colorMap}
-        hover={hover}
-        onHover={setHover}
-      />
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,1.4fr]">
+        {/* ── ranked table ── */}
+        <TopoScoreTable
+          entries={sorted}
+          colorMap={colorMap}
+          hover={hover}
+          onHover={setHover}
+        />
 
-      {/* ── cohesion-vs-loopiness map ── */}
+        {/* ── cohesion × loopiness ── */}
+        <TopologyMap
+          entries={data.entries}
+          colorMap={colorMap}
+          hover={hover}
+          onHover={setHover}
+          xKey="h0_cohesion"
+          yKey="h1_sum"
+          sizeKey="h2_sum"
+          xLabel="H0 cohesion (lower = tighter)"
+          yLabel="H1 loopiness"
+          title="Cohesion × Loopiness"
+          subtitle="left = tighter cluster · up = more loops · bigger dot = more voids"
+          quadrantLabels={[
+            "↘ lower-left — diffuse, no loops",
+            "↗ upper-right — loose but loopy",
+            "↖ upper-left — tight AND loopy (mythic core)",
+            "↙ lower-right — diffuse with hidden structure",
+          ]}
+        />
+      </div>
+
+      {/* ── H1 × H2 — loopiness vs voidiness ── */}
       <TopologyMap
         entries={data.entries}
         colorMap={colorMap}
         hover={hover}
         onHover={setHover}
+        xKey="h1_sum"
+        yKey="h2_sum"
+        sizeKey="topo_score"   // dot size = absolute topo score
+        xLabel="H1 loopiness"
+        yLabel="H2 voidiness"
+        title="Loopiness × Voidiness"
+        subtitle="bigger dot = bigger overall TopoScore"
+        quadrantLabels={[
+          "↘ lower-left — topologically flat",
+          "↗ upper-right — richly structured (loops AND cavities)",
+          "↖ upper-left — flat sheets of voids, few loops",
+          "↙ lower-right — many loops with no enclosed cavities",
+        ]}
       />
     </div>
   );
@@ -158,23 +194,37 @@ function InlineBar({ value, max, color, label }: { value: number; max: number; c
   );
 }
 
+type SumKey = "h0_cohesion" | "h0_outlier" | "h1_sum" | "h2_sum" | "topo_score";
+
 function TopologyMap({
   entries, colorMap, hover, onHover,
+  xKey, yKey, sizeKey,
+  xLabel, yLabel, title, subtitle,
+  quadrantLabels,
 }: {
   entries: TopologySummaryEntry[];
   colorMap: Record<string, string>;
   hover: string | null;
   onHover: (s: string | null) => void;
+  xKey: SumKey;
+  yKey: SumKey;
+  sizeKey: SumKey;
+  xLabel: string;
+  yLabel: string;
+  title: string;
+  subtitle: string;
+  /** [lower-left, upper-right, upper-left, lower-right] */
+  quadrantLabels: [string, string, string, string];
 }) {
-  // Plot one trace per archetype so each gets its own colour + name in legend.
-  const maxH2 = Math.max(...entries.map((e) => e.h2_sum), 1e-6);
+  const sizeVals = entries.map((e) => Math.abs(e[sizeKey]));
+  const maxSize = Math.max(...sizeVals, 1e-6);
   const traces = entries.map((e) => {
     const c = colorMap[e.symbol] ?? "#88c0d0";
-    const size = 12 + 32 * (e.h2_sum / maxH2);
+    const size = 12 + 32 * (Math.abs(e[sizeKey]) / maxSize);
     const dim = hover != null && hover !== e.symbol;
     return {
-      x: [e.h0_cohesion],
-      y: [e.h1_sum],
+      x: [e[xKey]],
+      y: [e[yKey]],
       text: [e.symbol],
       type: "scatter" as const,
       mode: "markers+text" as const,
@@ -202,10 +252,8 @@ function TopologyMap({
       onMouseLeave={() => onHover(null)}
     >
       <div className="mb-2">
-        <div className="section-title">Cohesion × Loopiness</div>
-        <div className="text-[11px] text-ink-400">
-          left = tighter cluster · up = more loops · bigger dot = more voids
-        </div>
+        <div className="section-title">{title}</div>
+        <div className="text-[11px] text-ink-400">{subtitle}</div>
       </div>
       <Plot
         data={traces}
@@ -218,11 +266,11 @@ function TopologyMap({
           plot_bgcolor: "rgba(0,0,0,0)",
           font: { color: "#cad4e0", family: "Inter, system-ui" },
           xaxis: {
-            title: { text: "H0 cohesion (lower = tighter)", standoff: 8 },
+            title: { text: xLabel, standoff: 8 },
             showgrid: true, gridcolor: "rgba(255,255,255,0.05)", zeroline: false,
           },
           yaxis: {
-            title: { text: "H1 loopiness", standoff: 8 },
+            title: { text: yLabel, standoff: 8 },
             showgrid: true, gridcolor: "rgba(255,255,255,0.05)", zeroline: false,
           },
           hoverlabel: { bgcolor: "#10131c", bordercolor: "#3a4458", font: { color: "#e8edf3" } },
@@ -237,10 +285,9 @@ function TopologyMap({
         config={{ displaylogo: false, responsive: true }}
       />
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-ink-400">
-        <div><span className="text-ink-200">↘ lower-left</span> — diffuse, no loops (boring)</div>
-        <div><span className="text-ink-200">↗ upper-right</span> — loose but loopy (rich but uncentered)</div>
-        <div><span className="text-ink-200">↖ upper-left</span> — tight AND loopy (the mythic core)</div>
-        <div><span className="text-ink-200">↙ lower-right</span> — diffuse with hidden structure</div>
+        {quadrantLabels.map((q, i) => (
+          <div key={i}><span className="text-ink-200">{q.split(" — ")[0]}</span> — {q.split(" — ")[1]}</div>
+        ))}
       </div>
     </div>
   );

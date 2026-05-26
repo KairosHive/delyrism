@@ -38,26 +38,44 @@ export function TopologySynergy() {
 
   return (
     <div className="space-y-4">
-      <div className="panel-tight">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div>
-            <div className="section-title">Pair synergy</div>
-            <div className="text-[11px] text-ink-400">
-              symbols that share structural topology — click a cell to see the cycles
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr,1fr]">
+        <div className="panel-tight">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <div className="section-title">Pair synergy</div>
+              <div className="text-[11px] text-ink-400">
+                symbols that share structural topology — click a cell to see the cycles
+              </div>
             </div>
+            <DimToggle dim={dim} onChange={setDim} />
           </div>
-          <DimToggle dim={dim} onChange={setDim} />
+          {q.isPending && <Skeleton height={460} />}
+          {q.error && <div className="text-sm text-danger">{(q.error as Error).message}</div>}
+          {q.data && (
+            <SynergyHeatmap
+              data={q.data}
+              dim={dim}
+              onPickPair={(a, b) => setPair({ a, b })}
+              active={pair}
+            />
+          )}
         </div>
-        {q.isPending && <Skeleton height={460} />}
-        {q.error && <div className="text-sm text-danger">{(q.error as Error).message}</div>}
-        {q.data && (
-          <SynergyHeatmap
-            data={q.data}
-            dim={dim}
-            onPickPair={(a, b) => setPair({ a, b })}
-            active={pair}
-          />
-        )}
+        <div className="panel-tight">
+          <div className="mb-2">
+            <div className="section-title">Ranked pairs</div>
+            <div className="text-[11px] text-ink-400">click a row to drill down</div>
+          </div>
+          {q.isPending && <Skeleton lines={8} />}
+          {q.data && (
+            <SynergyTable
+              data={q.data}
+              dim={dim}
+              colorMap={colorMap}
+              onPickPair={(a, b) => setPair({ a, b })}
+              active={pair}
+            />
+          )}
+        </div>
       </div>
 
       {pair && (
@@ -69,6 +87,92 @@ export function TopologySynergy() {
         />
       )}
     </div>
+  );
+}
+
+function SynergyTable({
+  data, dim, colorMap, onPickPair, active,
+}: {
+  data: TopologySynergyResponse;
+  dim: "h1" | "h2";
+  colorMap: Record<string, string>;
+  onPickPair: (a: string, b: string) => void;
+  active: { a: string; b: string } | null;
+}) {
+  const synKey = dim === "h1" ? "synergy_h1" : "synergy_h2";
+  const sumKey = dim === "h1" ? "sum_h1_union" : "sum_h2_union";
+  const rows = [...data.entries].sort((a, b) => b[synKey] - a[synKey]);
+  const maxAbs = Math.max(...rows.map((r) => Math.abs(r[synKey])), 1e-6);
+
+  return (
+    <>
+      <div className="grid grid-cols-[1fr,2.4fr,3rem,3rem] gap-2 px-1.5 pb-1 text-[10px] uppercase tracking-wider text-ink-500">
+        <div>pair</div>
+        <div>synergy</div>
+        <div className="text-right">∪ sum</div>
+        <div className="text-right">{dim.toUpperCase()}</div>
+      </div>
+      <div className="max-h-[420px] space-y-0.5 overflow-y-auto pr-1">
+        {rows.map((r, i) => {
+          const ca = colorMap[r.a] ?? "#88c0d0";
+          const cb = colorMap[r.b] ?? "#88c0d0";
+          const isActive =
+            active != null &&
+            ((active.a === r.a && active.b === r.b) ||
+              (active.a === r.b && active.b === r.a));
+          const val = r[synKey];
+          const norm = val / maxAbs;
+          const positive = norm >= 0;
+          return (
+            <button
+              key={i}
+              onClick={() => onPickPair(r.a, r.b)}
+              className="grid w-full grid-cols-[1fr,2.4fr,3rem,3rem] items-center gap-2 rounded-md px-1.5 py-1 text-left text-[11px] transition hover:bg-ink-800/40"
+              style={{
+                background: isActive ? "rgba(95,207,196,0.10)" : undefined,
+                boxShadow: isActive ? "inset 0 0 0 1px rgba(95,207,196,0.45)" : "none",
+              }}
+            >
+              <div className="flex items-center gap-1 truncate text-ink-100">
+                <span style={{ color: ca }} className="truncate">{r.a}</span>
+                <span className="text-ink-500">⋈</span>
+                <span style={{ color: cb }} className="truncate">{r.b}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-ink-800">
+                  <div className="absolute left-1/2 top-0 h-full w-px bg-ink-600/60" />
+                  <div
+                    className="absolute top-0 h-full rounded"
+                    style={{
+                      background: positive ? "#5fcfc4" : "#d08770",
+                      opacity: 0.85,
+                      left: positive ? "50%" : `${50 - Math.min(50, Math.abs(norm) * 50)}%`,
+                      width: `${Math.min(50, Math.abs(norm) * 50)}%`,
+                    }}
+                  />
+                </div>
+                <span
+                  className="w-12 shrink-0 text-right font-mono text-[10px] tabular-nums"
+                  style={{ color: positive ? "#5fcfc4" : "#d08770" }}
+                >
+                  {val >= 0 ? "+" : ""}{val.toFixed(3)}
+                </span>
+              </div>
+              <div className="text-right font-mono text-[10px] text-ink-400">
+                {r[sumKey].toFixed(3)}
+              </div>
+              <div className="text-right font-mono text-[10px] text-ink-500">
+                {dim === "h1" ? "H1" : "H2"}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-2 border-t border-ink-700/40 pt-2 text-[10px] leading-relaxed text-ink-400">
+        Positive synergy = some loops/voids require both archetypes to exist. Negative =
+        the union has *less* topology than the pieces alone (their clouds compete).
+      </div>
+    </>
   );
 }
 
