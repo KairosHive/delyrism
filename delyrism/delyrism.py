@@ -1026,14 +1026,30 @@ class SymbolSpace:
             leaks.append(sum(1 for lab in labs if lab != symbol) / k)
         return float(np.mean(leaks))
 
-    def soft_entropy(self, symbol, tau=0.5):
+    def soft_entropy(self, symbol, tau=0.5, zscore_logits: bool = True):
+        """Average entropy of soft archetype-assignment over the symbol's
+        descriptors.  Higher = more ambiguous (descriptor projects onto
+        many archetypes).
+
+        `zscore_logits=True` (default) z-scores each descriptor's
+        similarity-to-centroids vector before the softmax.  Without this
+        step the entropy is nearly uniform across symbols because typical
+        cosine similarities live in a narrow band (~[0.3, 0.8]) and the
+        softmax flattens.  Z-scoring re-spreads them and makes the entropy
+        actually discriminate.  Borrowed from egregore's archetype-quality
+        metrics — same fix applied to a different intent.
+        """
         idx = self.symbol_to_idx[symbol]
         if not idx:
             return 0.0
         cent = np.stack(list(self.symbol_centroids.values()))
         ents = []
         for i in idx:
-            p = softmax(self.D[i] @ cent.T, tau)
+            logits = self.D[i] @ cent.T
+            if zscore_logits:
+                m = logits.mean(); s = logits.std() + 1e-9
+                logits = (logits - m) / s
+            p = softmax(logits, tau)
             ents.append(entropy(p))
         return float(np.mean(ents))
 
