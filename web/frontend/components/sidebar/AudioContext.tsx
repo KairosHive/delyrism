@@ -60,9 +60,9 @@ export function AudioContext() {
         fd,
       );
       await api.post("/context/set-override", { space_id: spaceId, vector: enc.vector });
-      // Audio, image, and the alchemist blend all share the same backend
+      // Audio, image, and the morphing blend all share the same backend
       // override slot — flipping audio on means the others just got
-      // replaced.  Sync UI state to match (also turn alchemist *mode* off
+      // replaced.  Sync UI state to match (also turn morphing *mode* off
       // so its effect doesn't immediately push its own blend back).
       const st = useSidebar.getState();
       if (st.imageActive) {
@@ -72,10 +72,10 @@ export function AudioContext() {
         set("imageThumbnail", null);
         set("imageNonce", Date.now());
       }
-      if (st.alchemistMode || st.alchemistActive) {
-        set("alchemistMode", false);
-        set("alchemistActive", false);
-        set("alchemistNonce", Date.now());
+      if (st.morphMode || st.morphActive) {
+        set("morphMode", false);
+        set("morphActive", false);
+        set("morphNonce", Date.now());
       }
       set("audioActive", true);
       set("audioNonce", Date.now());

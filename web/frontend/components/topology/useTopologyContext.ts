@@ -30,17 +30,17 @@ export function useTopologyContext() {
 
   const audioActive = useSidebar((s) => s.audioActive);
   const imageActive = useSidebar((s) => s.imageActive);
-  const alchemistActive = useSidebar((s) => s.alchemistActive);
+  const morphActive = useSidebar((s) => s.morphActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
-  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
+  const morphNonce = useSidebar((s) => s.morphNonce);
 
   const hasContext =
     !!sentence.trim() ||
     !!weights ||
     audioActive ||
     imageActive ||
-    alchemistActive;
+    morphActive;
 
   const active = show && hasContext;
 
@@ -62,12 +62,12 @@ export function useTopologyContext() {
     : {};
 
   const keyTail = active
-    ? ["ctx", sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, audioNonce, imageNonce, alchemistNonce] as const
+    ? ["ctx", sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, audioNonce, imageNonce, morphNonce] as const
     : ["intrinsic"] as const;
 
   // Human label for the header badge
   let sourceLabel: string;
-  if (alchemistActive) sourceLabel = "alchemist blend";
+  if (morphActive) sourceLabel = "morphing blend";
   else if (audioActive) sourceLabel = "audio override";
   else if (imageActive) sourceLabel = "image override";
   else if (sentence.trim()) {

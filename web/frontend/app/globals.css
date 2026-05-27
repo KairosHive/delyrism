@@ -185,9 +185,9 @@
   margin-bottom: 0.65rem;
 }
 
-/* Alchemist morph slider — wider track + larger thumb than the sidebar
+/* Morphing blend slider — wider track + larger thumb than the sidebar
  * sliders, and a gradient that visually anchors A → B. */
-input[type="range"].alchemist-slider {
+input[type="range"].morph-slider {
   -webkit-appearance: none;
   appearance: none;
   height: 8px;
@@ -196,7 +196,7 @@ input[type="range"].alchemist-slider {
   outline: none;
   cursor: pointer;
 }
-input[type="range"].alchemist-slider::-webkit-slider-thumb {
+input[type="range"].morph-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 18px;
@@ -207,8 +207,8 @@ input[type="range"].alchemist-slider::-webkit-slider-thumb {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(59, 189, 176, 0.25);
   cursor: grab;
 }
-input[type="range"].alchemist-slider::-webkit-slider-thumb:active { cursor: grabbing; }
-input[type="range"].alchemist-slider::-moz-range-thumb {
+input[type="range"].morph-slider::-webkit-slider-thumb:active { cursor: grabbing; }
+input[type="range"].morph-slider::-moz-range-thumb {
   width: 18px;
   height: 18px;
   border-radius: 50%;

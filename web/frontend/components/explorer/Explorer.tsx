@@ -74,7 +74,7 @@ function EmptyState() {
           body={
             <>
               Type a sentence into <span className="text-accent-300">Context Prompt</span>. Or drop
-              an image, record audio, or flip on <span className="text-accent-300">alchemist mode</span>{" "}
+              an image, record audio, or flip on <span className="text-accent-300">morphing mode</span>{" "}
               to morph between two contexts with a slider.
             </>
           }

@@ -173,7 +173,7 @@ function ContextOverlayBar() {
               </>
             ) : show ? (
               <span className="text-warmth">
-                Set a context (sentence, audio, image, or alchemist) to compare.
+                Set a context (sentence, audio, image, or morphing blend) to compare.
               </span>
             ) : (
               <span>

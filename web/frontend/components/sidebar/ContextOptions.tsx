@@ -15,7 +15,7 @@ export function ContextOptions() {
   const sentence = useSidebar((s) => s.contextSentence);
   const selected = useSidebar((s) => s.selectedContextSymbols);
   const weights = useSidebar((s) => s.symbolWeights);
-  const alch = useSidebar((s) => s.alchemistMode);
+  const alch = useSidebar((s) => s.morphMode);
   const set = useSidebar((s) => s.set);
   const setWeight = useSidebar((s) => s.setWeight);
 
@@ -86,10 +86,10 @@ export function ContextOptions() {
 
       <div className="border-t border-ink-700/60 pt-3 space-y-2">
         <Toggle
-          label="Alchemist mode (Context A ⇄ B)"
+          label="Morphing mode (Context A ⇄ B)"
           help="Adds a second context (B) and a morph slider in the main page's Context Prompt card. Drag the slider to interpolate the override vector between A and B — every panel (Δ-graph, attention, rankings, similarity matrix) updates live."
           value={alch}
-          onChange={(v) => set("alchemistMode", v)}
+          onChange={(v) => set("morphMode", v)}
         />
         {alch && (
           <p className="text-[10px] leading-snug text-ink-400">

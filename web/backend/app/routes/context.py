@@ -39,15 +39,15 @@ def encode_text(req: EncodeTextRequest) -> dict:
     return {"vector": v.astype(float).tolist(), "dim": int(v.shape[0])}
 
 
-class AlchemistBlendRequest(BaseModel):
+class MorphBlendRequest(BaseModel):
     space_id: str
     sentence_a: str
     sentence_b: str
     blend: float = 0.5  # 0 → pure A, 1 → pure B
 
 
-@router.post("/set-alchemist-blend")
-def set_alchemist_blend(req: AlchemistBlendRequest) -> dict:
+@router.post("/set-morphing-blend")
+def set_morphing_blend(req: MorphBlendRequest) -> dict:
     """Morph between two context sentences and install the result as the
     space's context_override.
 

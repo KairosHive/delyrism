@@ -42,19 +42,19 @@ export function ContextualTransformations() {
 
   const audioActive = useSidebar((s) => s.audioActive);
   const imageActive = useSidebar((s) => s.imageActive);
-  const alchemistActive = useSidebar((s) => s.alchemistActive);
+  const morphActive = useSidebar((s) => s.morphActive);
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
-  const alchemistNonce = useSidebar((s) => s.alchemistNonce);
+  const morphNonce = useSidebar((s) => s.morphNonce);
 
-  const hasCtx = !!sentence.trim() || !!weights || audioActive || imageActive || alchemistActive;
+  const hasCtx = !!sentence.trim() || !!weights || audioActive || imageActive || morphActive;
 
   const q = useQuery({
     enabled: !!sid && hasCtx,
     placeholderData: keepPreviousData,
     queryKey: [
       "transformations", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma,
-      poolType, poolW, mAlpha, audioNonce, imageNonce, alchemistNonce,
+      poolType, poolW, mAlpha, audioNonce, imageNonce, morphNonce,
     ],
     queryFn: () =>
       api.post<TransformationsResponse>("/transformations", {
@@ -92,7 +92,7 @@ export function ContextualTransformations() {
 
       {!hasCtx && (
         <div className="p-6 text-sm text-ink-300">
-          Add a context (sentence, weights, audio, image, or alchemist blend) to see what changes.
+          Add a context (sentence, weights, audio, image, or morphing blend) to see what changes.
         </div>
       )}
       {hasCtx && q.isPending && !q.data && (

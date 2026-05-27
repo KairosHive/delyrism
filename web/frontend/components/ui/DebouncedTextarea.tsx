@@ -26,7 +26,7 @@ export function DebouncedTextarea({ value, onChange, delay = 280, onBlur, ...res
     onChangeRef.current = onChange;
   }, [onChange]);
 
-  // Resync down whenever the external value moves (preset pick, alchemist
+  // Resync down whenever the external value moves (preset pick, morphing
   // clear, programmatic reset).
   React.useEffect(() => {
     setLocal(value);
