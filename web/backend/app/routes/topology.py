@@ -347,9 +347,18 @@ def topology_summary(req: dict):
         # Parallelise across symbols — ripser releases the GIL inside its
         # C++ VR core so ThreadPoolExecutor gets real wall-clock speedup.
         # `_get_ph` is process-wide cached so warm calls are instant.
+        #
+        # IMPORTANT: /summary only consumes `dgms`, not cocycles.  H2 cocycles
+        # are the *single most expensive* part of ripser at maxdim=2, so we
+        # explicitly request cocycles=False here — /cycles still warms its
+        # own cocycles=True entry separately when the user actually opens it.
+        # thresh=1.0 caps the filtration at cosine-distance 1 (anti-correlated
+        # vectors), which never carries meaningful persistence anyway.  On a
+        # 4-archetype × ~15-descriptor preset this drops /summary from ~10s
+        # to <2s on a cold cache.
         def _one(item):
             sym, X = item
-            return sym, _get_ph(space_id, sym, X)
+            return sym, _get_ph(space_id, sym, X, maxdim=2, thresh=1.0, cocycles=False)
         items = list(sym_emb.items())
         max_workers = min(8, max(1, len(items)))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -511,7 +520,8 @@ def topology_diagram(req: dict):
     if symbol not in sym_emb:
         raise HTTPException(status_code=400, detail=f"symbol '{symbol}' has too few descriptors for PH")
     X = sym_emb[symbol]
-    dgms = _get_ph(space_id, symbol, X)["dgms"]
+    # Only `dgms` is consumed below — skip the expensive cocycles computation.
+    dgms = _get_ph(space_id, symbol, X, maxdim=2, thresh=1.0, cocycles=False)["dgms"]
 
     pts: list[PersistencePoint] = []
     max_finite = 0.0
@@ -561,10 +571,11 @@ def topology_diagrams_all(req: dict):
     sym_emb = _symbol_embeddings_from(space, D)
 
     # First pass: compute all PH (parallel + cached) and find the global
-    # max-finite-death so the minis share an axis frame.
+    # max-finite-death so the minis share an axis frame.  Diagrams-only —
+    # no cocycles needed (see /summary for rationale).
     def _one(item):
         sym, X = item
-        return sym, _get_ph(space_id, sym, X)["dgms"]
+        return sym, _get_ph(space_id, sym, X, maxdim=2, thresh=1.0, cocycles=False)["dgms"]
     items = list(sym_emb.items())
     max_workers = min(8, max(1, len(items)))
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
