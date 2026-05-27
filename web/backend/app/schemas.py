@@ -423,6 +423,12 @@ class SetQualityMetrics(BaseModel):
     # normalised to [0, 1] by log2(S).  1 = perfectly balanced counts;
     # 0 = one archetype hoards everything.
     count_balance: float
+    # Field focus — inverse of average within-symbol H0 cohesion.
+    # Computed as 1 / (1 + mean H0 cohesion).  Goes UP when context
+    # tightens the per-symbol clouds.  Designed as the counter-signal
+    # to richness / coverage / separation, which all go DOWN under
+    # typical focusing context — focus rises in concert.
+    focus: float
 
 
 class TopologySummaryResponse(BaseModel):

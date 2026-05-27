@@ -469,6 +469,12 @@ def topology_summary(req: dict):
         else:
             count_balance = 0.0
 
+        # Focus — counter-signal to richness/coverage/separation.  Higher
+        # = the per-symbol clouds are tighter on average.  Bounded to
+        # (0, 1] by the 1/(1+x) form regardless of cohesion scale.
+        mean_coh = float(coh_vals.mean()) if coh_vals.size else 0.0
+        focus = 1.0 / (1.0 + mean_coh) if mean_coh >= 0 else 0.5
+
         set_q = SetQualityMetrics(
             coverage_h1=coverage_h1,
             coverage_h2=coverage_h2,
@@ -476,6 +482,7 @@ def topology_summary(req: dict):
             cohesion_balance=cohesion_balance,
             separation_tightness=separation_tightness,
             count_balance=count_balance,
+            focus=focus,
         )
 
     out = TopologySummaryResponse(entries=entries, points=pts,

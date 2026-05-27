@@ -249,6 +249,7 @@ export interface SetQualityMetrics {
   cohesion_balance: number;       // [0, 1] higher = more even tightness
   separation_tightness: number;   // [0, ~2] higher = archetypes more distinct
   count_balance: number;          // [0, 1] higher = balanced descriptor counts
+  focus: number;                  // (0, 1] higher = tighter per-symbol clouds
 }
 
 export interface TopologySummaryResponse {
