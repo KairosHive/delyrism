@@ -62,10 +62,16 @@ SYMBOLS_TO_DESCRIPTORS = {
 #
 # Working set drawn from the Great Vision in *Black Elk Speaks: Being the Life
 # Story of a Holy Man of the Oglala Sioux as told through John G. Neihardt*
-# (Neihardt 1932).  Six fragments span distinct moments of the vision and its
-# closing — the sacred hoop, the flowering tree at the centre, the thunder
-# voice and the dawn horse, the sacred voice calling, the dream's end at
-# Wounded Knee, and an atmospheric scene combining storm and dawn.
+# (Neihardt 1932).  C1 / C2 / C3 are deliberately chosen to span DISTINCT
+# registers of the vision so the per-context relational rewiring is visibly
+# different in fig01:
+#
+#   C1 — cosmic wholeness    (the sacred hoop / highest mountain)
+#   C2 — thunder & power     (the rumbling cloud, the bay horse, the west)
+#   C3 — sorrow & dissolution (the dream's end at Wounded Knee)
+#
+# C_A and C_B are the morph endpoints in fig03 (vision-arrival ↔ vision-loss).
+# C_scene is for fig05 cross-modal (text + audio + image probes of one scene).
 #
 # IMPORTANT: these are sacred-tradition fragments selected from a widely-
 # cited source.  Co-author / knowledge-holder (Kite) review is required
@@ -77,12 +83,12 @@ CONTEXTS = {
         "and round about beneath me was the whole hoop of the world."
     ),
     "C2": (
-        "And I saw that the sacred hoop of my people was one of many hoops "
-        "that made one circle, and in the center grew one mighty flowering tree."
-    ),
-    "C3": (
         "Then the Voice that was in the rumbling cloud spoke to me, "
         "and there at the dawn of the morning was a beautiful bay horse."
+    ),
+    "C3": (
+        "A people's dream died there. It was a beautiful dream. "
+        "The nation's hoop is broken and scattered; the sacred tree is dead."
     ),
     "C_A": (
         "Behold a sacred voice is calling you; "
@@ -101,8 +107,8 @@ CONTEXTS = {
 # Short human labels for figures.  Keep these short — they live on plot titles.
 CONTEXT_LABELS = {
     "C1":      "the sacred hoop",
-    "C2":      "the flowering tree",
-    "C3":      "thunder voice & dawn horse",
+    "C2":      "thunder voice & dawn horse",
+    "C3":      "the dream's end",
     "C_A":     "sacred voice calling",
     "C_B":     "the dream's end",
     "C_scene": "horse at dawn (storm + light)",

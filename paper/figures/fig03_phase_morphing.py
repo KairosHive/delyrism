@@ -124,9 +124,13 @@ def main():
     coverage_h1 = []
     focus_vals  = []
     migrations  = []           # count of descriptors that changed archetype vs intrinsic
-    edge_flips  = []           # count of top-edge signs flipped vs previous step
 
-    prev_signs: dict[frozenset, int] | None = None
+    # Pre-compute upper-triangle indices once
+    n_desc = D0.shape[0]
+    tri_i, tri_j = np.triu_indices(n_desc, k=1)
+    # Store Δ for every pair at every α — we'll pick the most-varying ones for panel (a).
+    # Shape: (n_alphas, n_pairs).  For 140 descriptors × 21 α this is ~204K floats, fine.
+    delta_trace = np.zeros((len(alphas), len(tri_i)), dtype=np.float32)
 
     # Baseline nearest archetype on intrinsic field
     base_nearest = _nearest_archetype(space, D0)
@@ -178,86 +182,73 @@ def main():
         nearest = _nearest_archetype(space, D1)
         migrations.append(sum(int(a != b) for a, b in zip(nearest, base_nearest)))
 
-        # Top-edge sign flips vs previous step
+        # Δ matrix at this α — store the upper-triangle values for the
+        # descriptor-pair trajectory panel below.
         Delta = D1 @ D1.T - C0
         np.fill_diagonal(Delta, 0.0)
-        tri_i, tri_j = np.triu_indices_from(Delta, k=1)
-        vals = Delta[tri_i, tri_j]
-        order = np.argsort(-np.abs(vals))[:TOP_EDGES_PER_STEP]
-        signs = {
-            frozenset((int(tri_i[k]), int(tri_j[k]))): int(np.sign(vals[k]))
-            for k in order
-        }
-        if prev_signs is None:
-            edge_flips.append(0)
-        else:
-            common = set(prev_signs.keys()) & set(signs.keys())
-            flips = sum(1 for e in common if prev_signs[e] * signs[e] < 0)
-            # Edges that left or entered the top-N count as "structural change" too,
-            # but at half weight so true sign flips dominate.
-            churn = len(prev_signs.keys() ^ signs.keys())
-            edge_flips.append(flips + churn // 2)
-        prev_signs = signs
+        delta_trace[k, :] = Delta[tri_i, tri_j]
 
         print(f"[fig03] α={alpha:.2f}  H1+H2={h12_total:3d}  "
               f"migrations={migrations[-1]:2d}  "
-              f"edge-churn={edge_flips[-1]:2d}")
+              f"cov_h1={coverage_h1[-1]:.3f}  focus={focus_vals[-1]:.3f}")
 
     # ─── Render ────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(14.5, 5.0))
     gs = fig.add_gridspec(1, 3, width_ratios=[1.3, 1.0, 1.0], wspace=0.36,
                           top=0.86, bottom=0.18, left=0.06, right=0.96)
-
-    # (a) field-total topology over α — most per-symbol lines stay near
-    # 1 under heavy compression, so the meaningful signal is the SUM over
-    # symbols.  Plot the field total, with thin colored ticks at the bottom
-    # showing which symbols contribute non-zero at each α.
-    ax_a = fig.add_subplot(gs[0, 0])
     cdict = space.get_symbol_color_dict(palette="Nord")
-    field_total = np.array([sum(per_sym_h12[s][k] for s in space.symbols)
-                            for k in range(len(alphas))])
-    ax_a.plot(alphas, field_total, "-o", markersize=4, lw=1.6,
-              color="black", label="field total H1+H2")
-    # Mark per-symbol contributions as colored ticks (stacked) at the bottom
-    bar_y_base = -0.5
-    for s in space.symbols:
-        vals = np.array(per_sym_h12[s])
-        active = vals > 0
-        if active.any():
-            ax_a.scatter(alphas[active], np.full(active.sum(), bar_y_base),
-                         color=cdict.get(s, "0.5"), s=22,
-                         marker="s", label=s if vals.max() > 0 else None,
-                         edgecolors="none")
-            bar_y_base -= 0.45
+
+    # ── (a) Top-varying descriptor-pair Δ trajectories across α ─────────────
+    # Pick the pairs whose Δ varies most across the morph — these are the
+    # couplings that "phase-transition" rather than staying constant.  We use
+    # std over α to rank, then take the top-N.  Plot each as a coloured line.
+    pair_std = delta_trace.std(axis=0)
+    top_pair_idx = np.argsort(-pair_std)[:8]
+    ax_a = fig.add_subplot(gs[0, 0])
+    for rank, idx in enumerate(top_pair_idx):
+        i, j = int(tri_i[idx]), int(tri_j[idx])
+        di, dj = space.descriptors[i], space.descriptors[j]
+        si, sj = space.owner[di], space.owner[dj]
+        # Colour line by the "stronger" symbol in the pair (alphabetically tie-break)
+        color = cdict.get(si if si <= sj else sj, "0.5")
+        label = f"{di[:16]} ↔ {dj[:16]}"
+        ax_a.plot(alphas, delta_trace[:, idx], "-",
+                  color=color, lw=1.4, alpha=0.85, label=label)
+    ax_a.axhline(0, color="0.7", lw=0.5)
     ax_a.set_xlabel("α (A → B)")
-    ax_a.set_ylabel("persistent H1 + H2 (count)")
-    ax_a.set_title(f"(a) Field topology over morphing  ({lab_a} → {lab_b})",
+    ax_a.set_ylabel("Δ coupling   (D'D'ᵀ − DDᵀ)")
+    ax_a.set_title(f"(a) Most-varying descriptor pairs  ({lab_a} → {lab_b})",
                    fontsize=9)
-    handles = [plt.Line2D([0], [0], color="black", marker="o", label="field total")]
-    handles += [plt.Line2D([0], [0], color=cdict.get(s, "0.5"), marker="s",
-                           linestyle="", label=s)
-                for s in space.symbols if max(per_sym_h12[s]) > 0]
-    ax_a.legend(handles=handles, ncol=2, fontsize=6.4, loc="upper left",
-                frameon=False)
+    ax_a.legend(ncol=1, fontsize=6.0, loc="best", frameon=False,
+                handlelength=1.4, handletextpad=0.4)
     ax_a.set_xlim(0, 1)
-    ax_a.axhline(0, color="0.85", lw=0.5)
 
-    # (b) migration + edge-churn events
+    # ── (b) Phase portrait — coverage_h1 vs focus, parametric over α ───────
+    # The trajectory in (cov, focus) phase-space.  Loops or sharp turns
+    # indicate phase transitions; a clean curve means the morph is smooth.
     ax_b = fig.add_subplot(gs[0, 1])
-    ax_b.bar(alphas, migrations, width=0.04, color="#b3262a", alpha=0.85,
-             label="migrations vs intrinsic")
-    ax_b.set_xlabel("α (A → B)")
-    ax_b.set_ylabel("migrations (count)", color="#b3262a")
-    ax_b.tick_params(axis="y", labelcolor="#b3262a")
-    ax_b2 = ax_b.twinx()
-    ax_b2.plot(alphas, edge_flips, "-o", color="#2f5d8f", markersize=3,
-               lw=1.0, label="top-edge churn vs prev")
-    ax_b2.set_ylabel("top-edge churn (count)", color="#2f5d8f")
-    ax_b2.tick_params(axis="y", labelcolor="#2f5d8f")
-    ax_b.set_title("(b) Phase-transition events")
-    ax_b.set_xlim(0, 1)
+    cov = np.array(coverage_h1); foc = np.array(focus_vals)
+    # Colour the trajectory by α so we can read direction
+    pts = ax_b.scatter(cov, foc, c=alphas, cmap="viridis",
+                       s=42, edgecolors="black", linewidths=0.4, zorder=3)
+    # Connect consecutive points
+    ax_b.plot(cov, foc, "-", color="0.5", lw=0.8, alpha=0.7, zorder=2)
+    # Mark endpoints
+    ax_b.annotate(f"α=0\n({lab_a})", xy=(cov[0], foc[0]),
+                  xytext=(8, 8), textcoords="offset points",
+                  fontsize=7.5, ha="left", va="bottom",
+                  arrowprops=dict(arrowstyle="-", color="0.4", lw=0.5))
+    ax_b.annotate(f"α=1\n({lab_b})", xy=(cov[-1], foc[-1]),
+                  xytext=(-8, -8), textcoords="offset points",
+                  fontsize=7.5, ha="right", va="top",
+                  arrowprops=dict(arrowstyle="-", color="0.4", lw=0.5))
+    ax_b.set_xlabel("coverage_h1")
+    ax_b.set_ylabel("focus")
+    ax_b.set_title("(b) Phase portrait  (cov_h1, focus)", fontsize=9)
+    cb = plt.colorbar(pts, ax=ax_b, shrink=0.7, pad=0.02)
+    cb.set_label("α", fontsize=7.5)
 
-    # (c) coverage_h1 + focus
+    # ── (c) coverage_h1 + focus over α (unchanged — this is the clean panel) ─
     ax_c = fig.add_subplot(gs[0, 2])
     ax_c.plot(alphas, coverage_h1, "-o", markersize=3, color="#b3262a",
               label="coverage_h1")
@@ -268,7 +259,7 @@ def main():
     ax_c2.plot(alphas, focus_vals, "-o", markersize=3, color="#2f5d8f", label="focus")
     ax_c2.set_ylabel("focus", color="#2f5d8f")
     ax_c2.tick_params(axis="y", labelcolor="#2f5d8f")
-    ax_c.set_title("(c) Set-level signals")
+    ax_c.set_title("(c) Set-level signals over α", fontsize=9)
     ax_c.set_xlim(0, 1)
 
     fig.suptitle(

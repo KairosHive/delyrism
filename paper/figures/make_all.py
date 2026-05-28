@@ -24,6 +24,7 @@ FIGURES = [
     "fig_v1_umap",
     "fig_v1_attention",
     "fig_v1_ppr",
+    "fig_v1_starplots",
     "fig01_delta_graph",
     "fig02_topology",
     "fig03_phase_morphing",

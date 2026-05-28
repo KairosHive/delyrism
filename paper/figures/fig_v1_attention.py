@@ -1,8 +1,13 @@
 """V1 Figure 2 — Context-conditioned attention violins for EARTH.
 
-Preserved from the original NeurIPS 2025 submission (PLAN.md §4.5).  V2 should
-pair this with a Δ-graph view of the same context shifts to give attention-level
-*and* relational-coupling-level pictures side by side.
+Mirrors the v1 paper's `plot_thematic_first_descriptor_violins`:
+  • uses `space.conditioned_symbol(...)` for the attention map (the engine
+    function, not manual softmax),
+  • one column per emotional theme,
+  • descriptors sorted PER COLUMN by their median attention under that theme
+    (so each panel's leftmost descriptors are the theme's top facets — this
+    is the v1 visual layout that makes per-theme differentiation legible),
+  • τ = 0.2 (the v1 default).
 
 Output: paper/v2/figures/fig_v1_attention.{pdf,png}
 """
@@ -12,74 +17,63 @@ import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
 
 from _setup import build_space, save_fig, set_paper_style
 
 
-# Four emotion themes from the v1 paper — 10 sentences per theme.
+# Ten-sentence emotional themes — v1-style.
 EMOTION_THEMES = {
-    "Fear": [
-        "Cold sweat clings to my skin as shadows shift.",
-        "Every footstep behind me sounds louder than thunder.",
-        "I can't breathe; the walls are closing in.",
-        "My heart pounds against the silence of the night.",
-        "Something is watching from the dark.",
-        "The unknown spreads through me like ice.",
-        "I clutch the doorframe, knees trembling, voice gone.",
-        "A storm is coming and I have nowhere to hide.",
-        "Even my own thoughts feel like strangers.",
-        "Every sound at the edge of hearing is a threat.",
+    "FEAR": [
+        "A shadow moves behind the trees; breath turns shallow.",
+        "Cold wind rattles the window as footsteps approach.",
+        "Eyes watch from the dark water below the boat.",
+        "The cave narrows; the light behind fades away.",
+        "An animal scream splits the night and then silence.",
+        "A sudden howl echoes across the empty field.",
+        "The lantern flickers as something brushes past.",
+        "Footsteps stop just outside the locked door.",
+        "A cold hand grips the back of my neck.",
+        "The silence grows heavier with every heartbeat.",
     ],
-    "Love": [
-        "Her laughter is sunlight on a slow river.",
-        "I hold his hand and the world feels still.",
-        "My grandmother's voice carries every winter through.",
-        "We share silence the way others share songs.",
-        "Coming home to you is the only place I know.",
-        "Their joy moves through me like warm rain.",
-        "Tenderness has its own gravity.",
-        "I would carry your name through any storm.",
-        "Every small act of care is a quiet vow.",
-        "You are the long answer to a brief question.",
+    "LOVE": [
+        "Their hands met by the river at dusk.",
+        "Breath synced with a heartbeat under warm light.",
+        "A letter folded in a pocket carries a smile.",
+        "Two paths converged beside the old willow.",
+        "A quiet morning coffee became a promise.",
+        "Eyes meet and laughter fills the room.",
+        "A gentle touch lingers after goodbye.",
+        "Shared secrets whispered beneath the stars.",
+        "A song played softly in the kitchen.",
+        "The warmth of an embrace on a cold night.",
     ],
-    "Sadness": [
-        "The empty chair holds more than memory.",
-        "Rain settles on the window like a slow exhale.",
-        "I find old photographs and forget how to breathe.",
-        "Grief moves through me without asking.",
-        "Some days the weight is the morning itself.",
-        "The road home is longer than it used to be.",
-        "There is a quiet I cannot name.",
-        "Everything I loved has gone somewhere I can't follow.",
-        "I am tired in a place sleep does not reach.",
-        "The river keeps moving and I cannot.",
+    "SADNESS": [
+        "Rain kept the chair by the window empty.",
+        "Echoes lingered after the song stopped.",
+        "Footprints on the shore washed away too fast.",
+        "The room remembered the laughter better than we did.",
+        "A cracked cup waiting on the shelf.",
+        "A faded photograph tucked in a drawer.",
+        "The last light in the hallway flickers out.",
+        "A suitcase packed but never opened.",
+        "The scent of perfume long after she's gone.",
+        "A single tear stains the letter unread.",
     ],
-    "Gratitude": [
-        "The bread is warm and there is enough.",
-        "I keep the morning light in my hands a moment longer.",
-        "Tonight I will remember each small kindness by name.",
-        "The seeds I planted have come back as a garden.",
-        "Even my mistakes have taught me something to carry.",
-        "I am held by people I never asked to hold me.",
-        "The wind is gentle today and I am paying attention.",
-        "My body has carried me through more than I knew.",
-        "Each meal we share writes a longer story.",
-        "The river thanks me back when I sit beside it.",
+    "GRATITUDE": [
+        "Warm bread shared at sunrise after a long night.",
+        "A stranger's umbrella in sudden rain.",
+        "Hands washed clean in the cold river.",
+        "A soft blanket after the journey home.",
+        "The last apple given without asking.",
+        "A smile offered when hope was thin.",
+        "A friend's call just when it was needed.",
+        "A gentle word that eased the pain.",
+        "A door held open on a heavy day.",
+        "A memory cherished more with each year.",
     ],
 }
-
-
-def _attention_weights(space, symbol: str, sentence: str, tau: float = 0.2) -> np.ndarray:
-    """Softmax(cosine(descriptor, context) / tau) over the symbol's descriptors."""
-    idx = space.symbol_to_idx[symbol]
-    Xs = space.D[idx]
-    v = space.embedder.encode([sentence])[0]
-    v = v / (np.linalg.norm(v) + 1e-12)
-    sims = Xs @ v
-    s = sims / max(tau, 1e-6)
-    s = s - s.max()
-    e = np.exp(s)
-    return e / e.sum()
 
 
 def main():
@@ -87,66 +81,99 @@ def main():
     ap.add_argument("--backend", default="qwen3")
     ap.add_argument("--model", default=None)
     ap.add_argument("--symbol", default="EARTH")
-    ap.add_argument("--tau", type=float, default=0.05,
-                    help="Softmax temperature; lower = sharper peaks. "
-                         "0.05 works well with Qwen3-Embedding-0.6B.")
+    ap.add_argument("--tau", type=float, default=0.2,
+                    help="Softmax temperature for the engine's "
+                         "`conditioned_symbol` attention.  v1 used 0.2.")
+    ap.add_argument("--top-n", type=int, default=10,
+                    help="Limit to the top-N descriptors by overall mean "
+                         "attention (None = show all).")
     args = ap.parse_args()
 
     set_paper_style()
     space = build_space(backend=args.backend, model=args.model)
 
     if args.symbol not in space.symbols:
-        raise SystemExit(f"symbol {args.symbol!r} not in space; available: {space.symbols}")
+        raise SystemExit(f"symbol {args.symbol!r} not in space; "
+                         f"available: {space.symbols}")
 
     descriptors = list(space.symbols_to_descriptors[args.symbol])
-    n_desc = len(descriptors)
 
-    # weights[theme] -> shape (n_sentences, n_descriptors)
-    weights = {}
-    for theme, sentences in EMOTION_THEMES.items():
-        W = np.stack([_attention_weights(space, args.symbol, s, tau=args.tau)
-                      for s in sentences])
-        weights[theme] = W
+    # ── Collect attention weights per sentence × context × descriptor ─────
+    rows = []
+    for ctx_label, sentences in EMOTION_THEMES.items():
+        for sent_ix, sent in enumerate(sentences):
+            _, attn = space.conditioned_symbol(
+                args.symbol, sentence=sent, tau=args.tau,
+            )
+            for d in descriptors:
+                rows.append({
+                    "context": ctx_label,
+                    "descriptor": d,
+                    "attention": float(attn.get(d, 0.0)),
+                    "sentence_ix": sent_ix,
+                })
+    df = pd.DataFrame(rows)
 
-    # Sort descriptors by median weight across all themes — readable left→right
-    all_W = np.concatenate(list(weights.values()), axis=0)
-    order = np.argsort(-np.median(all_W, axis=0))
-    descriptors = [descriptors[i] for i in order]
-    for t in weights:
-        weights[t] = weights[t][:, order]
+    # ── Optional global top-N filter ──────────────────────────────────────
+    if args.top_n is not None and args.top_n < len(descriptors):
+        top_desc = (df.groupby("descriptor")["attention"]
+                      .mean()
+                      .sort_values(ascending=False)
+                      .head(args.top_n)
+                      .index.tolist())
+        df = df[df["descriptor"].isin(top_desc)]
 
-    # ─── Render — one row of violins per theme ────────────────────────────
+    # ── Per-context descriptor ordering — by that context's median, desc ──
+    ctx_orders = {}
+    for ctx in EMOTION_THEMES.keys():
+        sub = df[df["context"] == ctx]
+        order = (sub.groupby("descriptor")["attention"]
+                    .median()
+                    .sort_values(ascending=False)
+                    .index.tolist())
+        ctx_orders[ctx] = order
+
+    # Stable per-descriptor colours via tab20
+    unique_desc = sorted(df["descriptor"].unique())
+    palette = sns.color_palette("tab20", n_colors=len(unique_desc))
+    color_for = {d: palette[i] for i, d in enumerate(unique_desc)}
+
+    # ── Render — one column per theme, shared y-axis ─────────────────────
     theme_names = list(EMOTION_THEMES.keys())
-    theme_colors = {"Fear": "#5a4a91", "Love": "#b3262a",
-                    "Sadness": "#2f5d8f", "Gratitude": "#3a6b4f"}
-    n_themes = len(theme_names)
+    n_ctx = len(theme_names)
+    minval = float(df["attention"].min())
+    maxval = float(df["attention"].max())
 
-    fig, axes = plt.subplots(n_themes, 1,
-                             figsize=(max(8.5, 0.45 * n_desc + 2.0), 2.0 * n_themes),
-                             sharex=True)
-    if n_themes == 1:
+    fig, axes = plt.subplots(1, n_ctx, figsize=(3.4 * n_ctx, 5.2),
+                             sharey=True)
+    if n_ctx == 1:
         axes = [axes]
-    for ax, theme in zip(axes, theme_names):
-        W = weights[theme]
-        parts = ax.violinplot(W, positions=np.arange(n_desc), showmeans=False,
-                              showmedians=True, widths=0.85)
-        for body in parts["bodies"]:
-            body.set_facecolor(theme_colors[theme]); body.set_edgecolor("black")
-            body.set_alpha(0.78); body.set_linewidth(0.4)
-        for k in ("cmedians", "cbars", "cmins", "cmaxes"):
-            if k in parts:
-                parts[k].set_color("black"); parts[k].set_linewidth(0.6)
-        ax.set_ylabel("attention", fontsize=8)
-        ax.set_title(f"{theme}", loc="left", fontsize=9)
-        ax.set_ylim(0, max(0.18, float(W.max()) * 1.08))
-    axes[-1].set_xticks(np.arange(n_desc))
-    axes[-1].set_xticklabels(descriptors, rotation=50, ha="right", fontsize=6.8)
+
+    for ax, ctx in zip(axes, theme_names):
+        sub = df[df["context"] == ctx]
+        order = ctx_orders[ctx]
+        ordered_colors = [color_for[d] for d in order]
+        sns.violinplot(
+            data=sub, x="descriptor", y="attention", order=order,
+            cut=0, density_norm="width", inner="quartile",
+            ax=ax, palette=ordered_colors,
+            linewidth=1.0, bw_method=0.3, hue="descriptor", legend=False,
+        )
+        ax.set_title(ctx, fontsize=10)
+        ax.set_xlabel("descriptor", fontsize=8)
+        ax.set_ylabel("attention weight" if ax is axes[0] else "")
+        ax.set_ylim(minval - 0.002, maxval + 0.01)
+        ax.tick_params(axis="x", rotation=75)
+        for tick in ax.get_xticklabels():
+            tick.set_horizontalalignment("right")
+            tick.set_fontsize(7)
 
     fig.suptitle(
-        f"Context-conditioned attention over {args.symbol} descriptors  "
-        f"(four emotional themes; tau={args.tau})",
-        fontsize=11, y=1.00,
+        f"{args.symbol} — descriptor attention per thematic context "
+        f"(top-{args.top_n}, sorted within each panel; τ={args.tau})",
+        fontsize=11, y=1.02,
     )
+    plt.tight_layout()
     save_fig(fig, "fig_v1_attention")
     plt.close(fig)
 
