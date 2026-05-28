@@ -46,7 +46,7 @@ SHIFT_KW = dict(
     pool_type="avg", pool_w=0.7, membership_alpha=0.0,
 )
 
-TOP_EDGES = 28              # match the UI's typical top-N feel
+TOP_EDGES = 10              # legible — top-10 strongest pairs per panel
 MIN_ABS_DELTA = 0.005
 WITHIN_SYMBOL = False
 CONNECTED_ONLY = True

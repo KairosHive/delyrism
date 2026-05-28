@@ -29,6 +29,7 @@ FIGURES = [
     "fig01_delta_graph",
     "fig02_topology",
     "fig03_phase_morphing",
+    "fig03b_morph_gallery",
     "fig04_catalysts",
     "fig05_crossmodal",
 ]
