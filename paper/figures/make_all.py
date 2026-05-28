@@ -22,6 +22,7 @@ if str(_HERE) not in sys.path:
 
 FIGURES = [
     "fig_v1_umap",
+    "fig_v1_ambiguity",
     "fig_v1_attention",
     "fig_v1_ppr",
     "fig_v1_starplots",
