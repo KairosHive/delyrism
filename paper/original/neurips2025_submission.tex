@@ -1,0 +1,128 @@
+\documentclass[final,creativeai]{article}
+\usepackage{neurips_2025}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+
+\title{Decoding Ambiguous Signs: Context-Sensitive Alignment of Visual Symbolic Systems and \\Language Embedding Models}
+
+\author{%
+  Antoine Bellemare-Pepin \\
+  Department of Psychology \\
+  Université de Montréal \\
+  Montreal, QC, Canada \\
+  \texttt{antoine.bellemare9@gmail.com} \\
+  \And
+  Suzanne Kite \\
+  Wihanble S'a Center \\
+  Bard College \\
+  Annandale-on-Hudson, NY, USA \\
+  \texttt{skite@bard.edu} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Visual symbolic systems often embody ambiguity, polysemy, and context-dependent meaning, qualities that standard language models struggle to capture. The Lakota Shape Kit, a traditional storytelling tool, exemplifies this richness by juxtaposing multiple possible interpretations within symbolic imagery. We introduce a computational framework that uses language embedding models to represent each symbol as a context-weighted distribution over semantic descriptors, enabling dynamic meaning shifts in response to narrative context. Through visualizations of context-conditioned semantic trajectories, network-based salience maps, and quantitative ambiguity metrics, we show how thematic framing reconfigures the semantic landscape of symbols. Demonstrated with Lakota symbols, our approach advances the modeling of context-sensitive meaning, opening new possibilities for computational linguistics, cross-cultural knowledge representation, and creative AI systems.
+\end{abstract}
+
+\section{The Lakota Shape Kit}
+Language can be understood fundamentally as a relational web, where each word derives its meaning through differences and positional relationships with all other elements in a linguistic system\cite{stawarska_saussures_2020, wood_derrida_1988}. Words seldom possess static meanings; rather, their interpretations shift dynamically according to context, usage, and narrative positioning. This inherent polysemy and context-dependence is particularly pronounced in visual symbolic languages, systems where symbols encapsulate broad, multilayered semantic fields \citep{saint-martin_semiotics_1990}.
+
+The Lakota Shape Kit \cite{wing_learning_2016} exemplifies a visual symbolic system characterized by high degrees of polysemy, interpretive openness, and nonlinear combinatoriality. Traditionally, it provides a nuanced framework for narrating dreams \citep{kite_hel_2023}, inherently designed to preserve and explore multiple concurrent meanings and storylines. Each Lakota symbol, such as the dragonfly or the house, can evoke diverse and sometimes divergent meanings depending on its cultural and situational context, with the relative prominence of each meaning shifting fluidly according to the narrative surroundings.
+
+\begin{figure}[tbp]
+    \centering
+    \includegraphics[width=0.4\linewidth]{fig_symbols.png}
+    \caption{Lakota Shape Kit, a visual storytelling tool rooted in Lakota traditions (from \citep{wing_learning_2016}}
+    \label{fig:lakota_symbols}
+\end{figure}
+
+Despite advances in Natural Language Processing (NLP) and Artificial Intelligence (AI), standard computational models largely fall short in effectively capturing and exploring this kind of symbolic ambiguity and context-dependent polysemy \cite{haber_polysemyevidence_2024, loureiro_analysis_2021, ferrari_identification_2018}. Indeed, traditional text-based AI methodologies, often represent words or symbols as fixed, singular embeddings in latent semantic spaces, effectively flattening ambiguity into averaged semantic points and thus obscuring the very richness and fluidity that gives visual symbolism its interpretive power. Thus, there remains a significant research gap regarding computational models that not only accommodate but actively leverage the interpretive complexity inherent in visual symbolic systems.
+
+In this paper, we introduce a context-weighted embedding framework explicitly designed to address this gap, enabling dynamic semantic shifts in symbols within narrative and contextual landscapes. Our methodology leverages modern language embedding models to represent symbolic meanings as flexible semantic distributions rather than static points. By calculating soft attention weights over multiple symbolic descriptors conditioned on narrative context—either as free-form text or through combinations of related symbols—we model symbolic interpretation as fluid trajectories in semantic space rather than isolated, static embeddings. This approach represents a novel departure from conventional models, offering both quantitative metrics (e.g., dispersion and leakage measures of ambiguity) and visual tools (e.g., PCA/UMAP projections) to characterize and explore meaning ambiguity.
+
+Our contribution is threefold: (1) we provide a computational framework that explicitly models semantic ambiguity and multistability, moving beyond traditional static embedding methods; (2) we demonstrate how shifting contexts dynamically alter symbolic interpretations, closely mirroring the polysemous nature of dream and visual symbolic languages; and (3) we open new possibilities for AI applications that creatively leverage interpretive complexity, particularly in nonlinear storytelling. Ultimately, this research aims to inform future AI methodologies developed in active collaboration with Indigenous research projects and grounded in their knowledge systems, thereby enriching computational linguistic theory and practice.
+
+
+\section{The Inherent Ambiguity of Meaning}
+Ambiguity occurs when a signal supports multiple valid interpretations even when well-formed. In language, polysemy, where a single form is linked to multiple related senses, is increasingly regarded by research as the norm rather than the exception. Empirical and theoretical work shows that ambiguity is not a flaw to be eliminated but a structural feature that supports communicative efficiency\citep{piantadosi_communicative_2012, hermalin_efficient_2019}. In language networks, ambiguity emerges as an inevitable byproduct of growth, constrained by universal scaling laws such as Zipf's law, and serves as a resource that increases expressive power while minimizing effort \citep{sole_ambiguity_2015}.
+
+Information-theoretic accounts further show that all efficient communication systems will be ambiguous if context carries information about meaning \citep{piantadosi_communicative_2012}. Ambiguity enables the reuse of compact, efficient linguistic units, with context selecting the intended interpretation.
+
+Visual symbolic systems display similar properties\citep{cohn_visual_2013}. Symbols in pictorial narratives or ideographic languages follow conventional compositional rules yet remain underspecified, with meaning resolved through surrounding context. The same visual form can activate distinct interpretations depending on its narrative, situational and cultural embedding.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.9\linewidth]{fig1_umap.png}
+    \caption{Symbol–descriptor semantic map with ambiguity metrics. A UMAP projection shows all symbol descriptors (points, color-coded by symbol) in shared embedding space. Stars mark symbol centroids; colored convex hulls outline each symbol's semantic extent, with overlaps indicating shared meaning. The inset bar chart reports three metrics—dispersion (spread of a symbol's descriptors), leakage (proximity to other symbols' descriptors), and entropy (evenness of descriptor–context attention weights)—sorted by dispersion. Together, the map and metrics reveal both clearly bounded symbols and those with high contextual fluidity or semantic overlap.}
+    \label{fig:umap_metrics}
+\end{figure}
+
+
+From a semiotic perspective, meaning is triadic: a sign links to its object through the interpretant, the situated act of interpretation \citep{kilstrup_naturalizing_2015, smythe_formal_1998, innis_semiotics_1985}. Context thus stabilizes one among many possible readings. This property is central to our framework, which treats ambiguity as a measurable, dynamic resource in the semantic space of language.
+
+\section{Context-Conditioned Symbol Embeddings}
+Building on this notion of meaning ambiguity, we introduce a context-conditioned embedding approach that operationalizes meaning ambiguity as a dynamic, context-sensitive process. Instead of relying on a static vector, each symbol is defined by a set of textual descriptors spanning its possible interpretations (e.g., "flight," "balance," "fertility" for the symbol "dragonfly").
+
+
+Inspired by prior work on semantic network analysis and distributional semantics \citep{steyvers_large-scale_2005, mikolov_efficient_2013, arora_simple_2017}, we quantify the structure of this meaning space with three complementary metrics: dispersion, the average dissimilarity among a symbol's descriptor embeddings, indicating the spread of its facets in semantic space; leakage, the proportion of each descriptor's nearest neighbors belonging to other symbols, capturing cross-symbol overlap; and inter-symbolic entropy, the average Shannon entropy of the softmax-normalized similarities between each descriptor and all symbol centroids, reflecting how evenly attention can be distributed across possible interpretations. Together, these metrics characterize different structural aspects of the meaning network—distinguishing between symbols whose ambiguity is due to internally diverse facets (dispersion) and those whose ambiguity arises from external overlap with other symbols (leakage) or from context-sensitive distribution of attention across multiple possible interpretations (inter-symbolic entropy). Figure \ref{fig:umap_metrics} illustrates this structure.
+
+\subsection{Contextual Attention Mechanism}
+We then use context to probe how these structural properties relate to the facets of meaning that become salient in a given situation. Context can be provided either as a weighted set of neighboring symbols (e.g., Clouds: 0.3, Earth: 0.2) or as a free-form sentence (e.g., "The shimmering insect hovers over the pond"). This context vector, encoded using a state-of-the-art language embedding model (Qwen3-Embedding-0.6B), is used to compute a soft attention over all descriptors belonging to each symbol: cosine similarities between the context and each descriptor are passed through a softmax to assign normalized attention weights. Rather than treating all facets equally, the most contextually relevant descriptors are given higher weight. This mechanism enables the visualization of activation of different facets of a symbol depending on context, mirroring the interpretive flexibility observed in dream language and oral storytelling. \ref{fig:attention_violin} shows an example for the symbol Earth, where attention weight distributions for its descriptors shift across four emotional themes—Fear, Love, Sadness, and Gratitude—each constructed from 10 sentences written to convey the corresponding emotional tone. These themes were selected as they represent distinct and contrasting affective states, providing a broad range of contextual variation for examining how emotional framing shapes semantic associations. This illustrates how varying thematic contexts foreground distinct aspects of meaning, with different descriptors gaining prominence depending on the emotional framing.
+
+\subsection{Graph-Based Relational Modeling}
+Beyond contextualized descriptor attention, our framework models the relational structure of the symbolic system as a bipartite symbol–descriptor graph. Symbols and their descriptors are nodes, connected by explicit edges, with additional descriptor–descriptor links when their embeddings are highly similar, capturing shared meaning across the lexicon. The Personalized PageRank (PPR) \citep{lofgren_personalized_2016} process can be initialized either from symbol weights or directly from a free-text context by distributing personalization mass to descriptors according to semantic similarity.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.9\linewidth]{fig2_violin_attention.png}
+    \caption{Context-conditioned attention weights for Earth's descriptors across four emotional themes (Fear, Love, Sadness, Gratitude). Violin plots show descriptor weight distributions for 10 sentences per theme, sorted by median weight. Higher attention weights indicate greater relative relevance of a descriptor to the given thematic context.}
+    \label{fig:attention_violin}
+\end{figure}
+
+
+When the context is given as symbols (with weights for importance), probability mass is injected at these nodes and propagates through symbol–descriptor and descriptor–descriptor links. If the context is a sentence or free-text, mass is first distributed across descriptors according to their semantic similarity to the sentence, and then propagated in the same way. After convergence, each symbol's PageRank score reflects the proportion of mass it absorbs via all direct and indirect paths from the context, capturing structural salience from both semantic and topological proximity. For prediction, we combine each symbol's context-conditioned embedding similarity with its PageRank-derived salience, producing rankings that integrate local semantic fit with global network relevance. This surfaces symbols that are contextually resonant by meaning, structure, or both, yielding a nuanced and interpretable prediction mechanism.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.7\linewidth]{fig3_ppr_subgraph.png}
+    \caption{Contextual subgraph from Personalized PageRank for the sentence "Below the threshold, many faces embrace…". Symbols (squares) and top descriptors (circles) are colored by symbol, with edge thickness indicating association strength. Baseline centrality is subtracted to highlight relevance emerging specifically from the current context.}
+    \label{fig:ppr_subgraph}
+\end{figure}
+
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.9\linewidth]{fig4_starplots.png}
+    \caption{Star plots showing how each root symbol, when paired with any other symbol as context, increases the predicted salience of a specific symbol (each point on the star). Bars represent the relative activation for that symbol across all pairings, while radial violin plots summarize the distribution of activation scores.}
+    \label{fig:starplots}
+\end{figure}
+
+The contextual subgraph in Figure \ref{fig:ppr_subgraph} offers an interpretable view of how a given input "sees" the symbolic network. It contains the top-scoring nodes from the PPR output, where scores reflect the probability mass each node absorbs from the context. Retaining only nodes and edges most influenced by PPR highlights the semantic and structural pathways through which context propagates. Symbols and descriptors in the subgraph act as key conduits for probability flow—either directly linked to the context or bridging multiple high-relevance regions. This focused view reveals latent thematic clusters, intermediary concepts, and context-specific meaning shifts that would be obscured in the full network, and serves as a diagnostic tool for tracing associations, auditing model reasoning, and guiding human–AI co-creation by pinpointing the most contextually fertile areas of the symbolic space.
+
+Figure \ref{fig:starplots} complements this with a topology-level perspective, showing how each symbol—paired with every other in turn—reshapes the predicted salience of all remaining symbols. In the star plots, each panel centers on a root symbol, with bars indicating the relative likelihood that other symbols become salient under that root + partner combination. Values are estimated via bootstrapping ($n=20$) over randomly assigned context weights. This reveals higher-order structures: stable semantic "neighbors," co-activation clusters, and highly context-sensitive relationships. Such patterns expose both direct semantic links and indirect, network-mediated associations absent from embedding similarity alone.
+
+Together, these analyses move beyond static semantic representations, providing a computational model of polysemy and context-dependent meaning. By combining attention-weighted descriptor sets with network-based salience, the framework formalizes how symbols express multiple facets in response to context—offering insights into ambiguity, metaphor, and the emergent structure of visual languages, particularly in systems like the Lakota Shape Kit where meanings are layered, interwoven, and contingent on narrative or ceremonial context.
+
+\section{Creative Potential and Applications}
+While our primary focus is on modeling and analyzing symbolic ambiguity, the framework naturally lends itself to creative practices that bridge computational analysis and artistic exploration. In the context of dream interpretation, the generation of symbol–descriptor subgraphs for a given narrative fragment can inspire poets, storytellers, or visual artists to explore associative pathways they might not have otherwise considered, aligning with prior work showing how computational systems can support human creativity through generative association and idea exploration \citep{varshney_associative_2016, gross_lexical_2012, rick_supermind_2023}. For example, when a dream sentence activates a cluster of descriptors across several symbols, these can serve as prompts for assisted poetry composition, narrative continuation, or multimodal art generation.
+
+Because the descriptor recommendations are context-conditioned, they can adaptively guide a creative process, suggesting shifts in tone, imagery, or metaphor that remain grounded in the symbolic system's internal logic. This makes it possible to blend traditional narrative frameworks—such as Lakota dream storytelling—with AI-assisted generation in a way that preserves cultural specificity while fostering novel expression.
+
+\section{Ethical Considerations}
+This project is conducted in active collaboration with Indigenous community partners, with the last author being an Oglala Lakota knowledge holder. All symbolic material and interpretations are developed in accordance with community protocols and with guidance from cultural experts. The work is supported by the Abundant Intelligences program, which fosters the development of new AI systems in respectful interaction with Indigenous knowledge systems. This framework ensures that research design, data use, and dissemination honor Indigenous data sovereignty and cultural values, and that the resulting tools serve both scholarly inquiry and community benefit.
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
