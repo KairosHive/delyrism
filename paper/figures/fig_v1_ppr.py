@@ -37,9 +37,9 @@ def main():
 
     from delyrism.delyrism import plot_contextual_subgraph_colored
 
-    # The legacy plot_contextual_subgraph_colored draws onto plt.gcf();
-    # we wrap it in our own figure so save_fig sees the right object.
-    fig = plt.figure(figsize=(8.5, 6.0))
+    # The legacy plot_contextual_subgraph_colored creates its own figure via
+    # plt.figure(figsize=...) and calls plt.show() implicitly via tight_layout.
+    # We swallow plt.show, let it run, then grab the current figure.
     plot_contextual_subgraph_colored(
         space,
         context_sentence=sentence,
@@ -50,9 +50,11 @@ def main():
         tau=args.tau,
         normalize=args.normalize,
         global_color_map=space.get_symbol_color_dict(palette="Nord"),
-        figsize=(8.5, 6.0),
+        figsize=(9.0, 6.5),
     )
-    plt.suptitle(f"PPR contextual subgraph  —  {sentence!r}", fontsize=10, y=1.01)
+    fig = plt.gcf()
+    fig.suptitle(f"PPR contextual subgraph  —  context: {sentence[:60]}…",
+                 fontsize=10, y=1.01)
     save_fig(fig, "fig_v1_ppr")
     plt.close(fig)
 

@@ -202,8 +202,9 @@ def main():
     metrics_ctx  = _set_metrics(D_shifted,  space.symbol_to_idx)
 
     # ─── Render ────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(13.5, 4.4))
-    gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.4, 1.0], wspace=0.30)
+    fig = plt.figure(figsize=(14.5, 5.4))
+    gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.5, 1.0], wspace=0.32,
+                          top=0.86, bottom=0.18, left=0.05, right=0.97)
 
     ax_a = fig.add_subplot(gs[0, 0])
     _draw_diagram(ax_a, dgms_intr, dgms_ctx,

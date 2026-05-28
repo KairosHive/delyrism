@@ -87,7 +87,9 @@ def main():
     ap.add_argument("--backend", default="qwen3")
     ap.add_argument("--model", default=None)
     ap.add_argument("--symbol", default="EARTH")
-    ap.add_argument("--tau", type=float, default=0.2)
+    ap.add_argument("--tau", type=float, default=0.05,
+                    help="Softmax temperature; lower = sharper peaks. "
+                         "0.05 works well with Qwen3-Embedding-0.6B.")
     args = ap.parse_args()
 
     set_paper_style()

@@ -23,6 +23,14 @@ from typing import Optional
 
 import numpy as np
 
+# Windows consoles default to cp1252; force UTF-8 so Unicode in log lines
+# (arrows, en-dashes, Δ, α, etc.) doesn't crash the script.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except (AttributeError, OSError):
+    pass
+
 # Make the project root importable when scripts are run as `python paper/figures/figXX.py`
 _HERE = Path(__file__).resolve().parent
 _PROJECT_ROOT = _HERE.parents[1]

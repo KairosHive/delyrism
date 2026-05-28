@@ -114,7 +114,7 @@ def main():
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=7)
     ax.invert_yaxis()
-    ax.set_xlabel("Δ persistent (H1 + H2)  ⟶  load-bearing")
+    ax.set_xlabel("Δ persistent (H1 + H2)  →  load-bearing")
     ax.set_title(f"Top-{args.top} catalysts per archetype  (Lakota Shape Kit, intrinsic)")
     ax.axvline(0, color="0.7", lw=0.6)
     save_fig(fig, "fig04_catalysts")

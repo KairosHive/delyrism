@@ -204,20 +204,43 @@ def main():
               f"edge-churn={edge_flips[-1]:2d}")
 
     # ─── Render ────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(13.0, 4.0))
-    gs = fig.add_gridspec(1, 3, width_ratios=[1.5, 1.0, 1.0], wspace=0.32)
+    fig = plt.figure(figsize=(14.5, 5.0))
+    gs = fig.add_gridspec(1, 3, width_ratios=[1.3, 1.0, 1.0], wspace=0.36,
+                          top=0.86, bottom=0.18, left=0.06, right=0.96)
 
-    # (a) per-symbol H1+H2 trajectories
+    # (a) field-total topology over α — most per-symbol lines stay near
+    # 1 under heavy compression, so the meaningful signal is the SUM over
+    # symbols.  Plot the field total, with thin colored ticks at the bottom
+    # showing which symbols contribute non-zero at each α.
     ax_a = fig.add_subplot(gs[0, 0])
     cdict = space.get_symbol_color_dict(palette="Nord")
+    field_total = np.array([sum(per_sym_h12[s][k] for s in space.symbols)
+                            for k in range(len(alphas))])
+    ax_a.plot(alphas, field_total, "-o", markersize=4, lw=1.6,
+              color="black", label="field total H1+H2")
+    # Mark per-symbol contributions as colored ticks (stacked) at the bottom
+    bar_y_base = -0.5
     for s in space.symbols:
-        ax_a.plot(alphas, per_sym_h12[s], "-o", markersize=2.6, lw=1.0,
-                  color=cdict.get(s, "0.5"), label=s)
+        vals = np.array(per_sym_h12[s])
+        active = vals > 0
+        if active.any():
+            ax_a.scatter(alphas[active], np.full(active.sum(), bar_y_base),
+                         color=cdict.get(s, "0.5"), s=22,
+                         marker="s", label=s if vals.max() > 0 else None,
+                         edgecolors="none")
+            bar_y_base -= 0.45
     ax_a.set_xlabel("α (A → B)")
     ax_a.set_ylabel("persistent H1 + H2 (count)")
-    ax_a.set_title(f"(a) Per-symbol topology over morphing  ({lab_a} → {lab_b})")
-    ax_a.legend(ncol=2, fontsize=6.4, loc="upper right", frameon=False)
+    ax_a.set_title(f"(a) Field topology over morphing  ({lab_a} → {lab_b})",
+                   fontsize=9)
+    handles = [plt.Line2D([0], [0], color="black", marker="o", label="field total")]
+    handles += [plt.Line2D([0], [0], color=cdict.get(s, "0.5"), marker="s",
+                           linestyle="", label=s)
+                for s in space.symbols if max(per_sym_h12[s]) > 0]
+    ax_a.legend(handles=handles, ncol=2, fontsize=6.4, loc="upper left",
+                frameon=False)
     ax_a.set_xlim(0, 1)
+    ax_a.axhline(0, color="0.85", lw=0.5)
 
     # (b) migration + edge-churn events
     ax_b = fig.add_subplot(gs[0, 1])
