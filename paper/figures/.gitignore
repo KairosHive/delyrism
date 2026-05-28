@@ -1,0 +1,6 @@
+# Cached spaces — large, regenerate from descriptors.
+.cache/
+
+# Python
+__pycache__/
+*.pyc
