@@ -1,20 +1,36 @@
-"""Figure 3b — Morphing gallery: four A↔B context pairs side by side.
+"""Figure 3b — Morphing gallery: semantic symbol reorganization across A<->B pairs.
 
-Companion to fig03 (which analyses one pair in depth).  This figure shows
-that the U-shaped phase transition in (coverage_h1, focus) generalizes
-across multiple Black Elk Speaks vision morphs, not just the C_A ↔ C_B
-pair.
+WHAT THIS SHOWS (and why it changed)
+------------------------------------
+The previous version tracked (coverage_H1, focus) over a linear context blend and
+read the U-shape / inverted-U as a "phase transition".  A diagnostic
+(paper/figures/_explore_morph_artifact.py, _explore_morph_semantic.py) showed
+that signal is a GEOMETRIC ARTIFACT, not semantics:
 
-Each column is one (A, B) morph; the four pairs systematically cover the
-three vision-register contexts plus the visionary-call ↔ vision-loss pair:
+  • coverage_H1 / focus are a near-deterministic function of the gate drive
+    energy  mean_d relu(D @ vctx)  (R^2 = 0.94-1.00; focus is ~100% energy).
+  • That energy is structurally inverted-U over ANY blend of two directions,
+    because a renormalized average has weaker peak-alignment than its endpoints.
+    The U survives SLERP, so it is not an interpolation-speed quirk.
 
-  col 1  C_A ↔ C_B    sacred voice calling  ↔  the dream's end
-  col 2  C1  ↔ C3     the sacred hoop       ↔  the dream's end
-  col 3  C1  ↔ C2     the sacred hoop       ↔  thunder voice & dawn horse
-  col 4  C2  ↔ C3     thunder voice & dawn horse ↔ the dream's end
+So this figure now tracks a SHIFT-MAGNITUDE-INVARIANT, genuinely semantic signal:
+the personalized-PageRank symbol ranking across the morph (same pipeline as
+fig_v1_ppr / POST /subgraph), DEGREE-NORMALIZED (PPR score / #descriptors) to
+remove the bipartite-graph bias that otherwise makes the highest-degree symbol
+(EARTH, 19 descriptors) win at every alpha.  The degree-normalized rank-1 symbol
+then *reorganizes* as the context morphs A->B, and the transition is real and
+pair-specific:
 
-Top row    — phase portrait in (coverage_h1, focus), α-coloured trajectory.
-Bottom row — coverage_h1 and focus as a function of α.
+  C_A->C3     CLOUDS -> THUNDER
+  C1->C_scene EARTH -> CLOUDS -> THUNDER
+  C2->C_A     THUNDER -> CLOUDS
+  C_scene->C3 THUNDER throughout  (both ends are storm-register: correctly flat)
+
+Layout (one column per pair):
+  • thin top stripe — degree-normalized rank-1 symbol vs alpha (the transition)
+  • main panel      — degree-normalized PPR trajectory per symbol; symbols that
+                      ever reach top-3 are bold + coloured (Nord palette, shared
+                      with fig_v1_ppr and the app), the rest faint grey.
 
 Output: paper/v2/figures/fig03b_morph_gallery.{pdf,png}
 """
@@ -24,55 +40,21 @@ import argparse
 import time
 
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 
-from _setup import (
-    CONTEXTS, CONTEXT_LABELS,
-    build_space, save_fig, set_paper_style,
-)
+from _setup import CONTEXTS, CONTEXT_LABELS, build_space, save_fig, set_paper_style
 
-SHIFT_KW = dict(
-    strategy="gate", gate="relu", beta=1.2, tau=0.3,
-    within_symbol_softmax=True, gamma=0.5,
-    pool_type="avg", pool_w=0.7, membership_alpha=0.0,
-)
-
-# Default morphing pairs — each draws on the existing CONTEXTS dict so swap-
-# ping any context propagates here too.
 MORPH_PAIRS = [
-    ("C_A", "C_B"),
-    ("C1", "C3"),
-    ("C1", "C2"),
-    ("C2", "C3"),
+    ("C_A", "C3"),       # sacred voice calling       <-> the dream's end
+    ("C1",  "C_scene"),  # the sacred hoop            <-> horse at dawn (storm + light)
+    ("C2",  "C_A"),      # thunder voice & dawn horse <-> sacred voice calling
+    ("C_scene", "C3"),   # horse at dawn (storm+light) <-> the dream's end
 ]
 
 ALPHA_STEPS = 21
-
-
-def _ripser():
-    try:
-        from ripser import ripser
-        return ripser
-    except ImportError as e:
-        raise SystemExit(f"ripser required — `pip install ripser`  ({e})")
-
-
-def _row_norm(X):
-    return X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
-
-
-def _ph_dgms(X, *, maxdim=2, thresh=1.0):
-    return _ripser()(X, maxdim=maxdim, metric="cosine",
-                     thresh=thresh, do_cocycles=False)["dgms"]
-
-
-def _sum_finite(dgm):
-    if dgm.size == 0:
-        return 0.0
-    fin = np.isfinite(dgm[:, 1])
-    if not fin.any():
-        return 0.0
-    return float(np.sum(dgm[fin, 1] - dgm[fin, 0]))
+PPR_ALPHA = 0.85     # PageRank teleport (graph diffusion), NOT the morph alpha
+PPR_TAU = 0.1        # softmax temperature for descriptor personalization
 
 
 def _blend_vec(space, sent_a, sent_b, alpha):
@@ -81,39 +63,44 @@ def _blend_vec(space, sent_a, sent_b, alpha):
     return (1.0 - alpha) * v_a + alpha * v_b
 
 
+def _ppr_symbol_scores(space):
+    """Degree-normalized PPR symbol scores for the CURRENT context override.
+
+    Mirrors POST /subgraph's personalized PageRank, then divides each symbol's
+    score by its descriptor count to remove the high-degree bias of the
+    bipartite symbol<->descriptor graph (otherwise EARTH always wins).
+    """
+    from delyrism.delyrism import softmax
+
+    vctx = space.context_override
+    pers = {f"D:{d}": float(w)
+            for d, w in zip(space.descriptors, softmax(space.D @ vctx, tau=PPR_TAU))}
+    pr = nx.pagerank(space.G, alpha=PPR_ALPHA, personalization=pers, weight="weight")
+    raw = {n[2:]: v for n, v in pr.items() if n.startswith("S:")}
+    return {s: raw.get(s, 0.0) / len(space.symbols_to_descriptors[s])
+            for s in space.symbols}
+
+
 def _sweep(space, sent_a, sent_b, alphas):
-    """Return (coverage_h1, focus) trajectories over α."""
-    coverage_h1 = []
-    focus_vals  = []
+    """Return {symbol: trajectory over alpha} of degree-normalized PPR scores."""
+    syms = list(space.symbols)
+    traj = {s: [] for s in syms}
     for alpha in alphas:
-        v = _blend_vec(space, sent_a, sent_b, float(alpha))
-        space.set_context_vec(v)
-        D1 = space.make_shifted_matrix(**SHIFT_KW)
+        space.set_context_vec(_blend_vec(space, sent_a, sent_b, float(alpha)))
+        sc = _ppr_symbol_scores(space)
         space.set_context_vec(None)
+        for s in syms:
+            traj[s].append(sc[s])
+    return {s: np.array(v) for s, v in traj.items()}
 
-        # Union PH (coverage_h1)
-        union_X = _row_norm(D1)
-        if union_X.shape[0] > 150:
-            rng = np.random.default_rng(42)
-            sel = rng.choice(union_X.shape[0], 150, replace=False)
-            union_X = union_X[sel]
-        union_dgms = _ph_dgms(union_X, maxdim=2, thresh=1.0)
-        coverage_h1.append(_sum_finite(union_dgms[1]))
 
-        # Focus from per-symbol H0 median bar-length
-        cohs = []
-        for idx in space.symbol_to_idx.values():
-            if len(idx) < 4:
-                continue
-            X = _row_norm(D1[idx])
-            d0 = _ph_dgms(X, maxdim=0, thresh=1.0)[0]
-            fin = np.isfinite(d0[:, 1])
-            if fin.any():
-                cohs.append(float(np.median(d0[fin, 1] - d0[fin, 0])))
-        focus_vals.append(
-            1.0 / (1.0 + float(np.mean(cohs))) if cohs else 0.5
-        )
-    return np.array(coverage_h1), np.array(focus_vals)
+def _runs(seq):
+    """Collapse a sequence into ordered unique tokens, e.g. [A,A,B,A]->[A,B,A]."""
+    out = []
+    for x in seq:
+        if not out or out[-1] != x:
+            out.append(x)
+    return out
 
 
 def main():
@@ -125,79 +112,81 @@ def main():
 
     set_paper_style()
     space = build_space(backend=args.backend, model=args.model)
+    cdict = space.get_symbol_color_dict(palette="Nord")
 
     alphas = np.linspace(0.0, 1.0, args.steps)
-    trajectories: list[tuple[str, str, np.ndarray, np.ndarray]] = []
-
+    trajectories = []
     t0 = time.time()
     for ca, cb in MORPH_PAIRS:
-        sent_a = CONTEXTS[ca]; sent_b = CONTEXTS[cb]
-        lab_a  = CONTEXT_LABELS[ca]; lab_b = CONTEXT_LABELS[cb]
-        print(f"[fig03b] morph  {ca} ↔ {cb}   ({lab_a}  ↔  {lab_b})")
-        cov, foc = _sweep(space, sent_a, sent_b, alphas)
-        trajectories.append((ca, cb, cov, foc))
-        print(f"[fig03b]   done  elapsed {time.time() - t0:.1f}s   "
-              f"cov range [{cov.min():.3f}, {cov.max():.3f}]   "
-              f"focus range [{foc.min():.4f}, {foc.max():.4f}]")
+        print(f"[fig03b] morph  {ca} -> {cb}   "
+              f"({CONTEXT_LABELS[ca]}  ->  {CONTEXT_LABELS[cb]})")
+        traj = _sweep(space, CONTEXTS[ca], CONTEXTS[cb], alphas)
+        trajectories.append((ca, cb, traj))
 
-    # ── Render — 2 rows × n_pairs cols ──────────────────────────────────
+    print(f"[fig03b] swept {len(MORPH_PAIRS)} pairs in {time.time() - t0:.1f}s")
+
+    # ── Layout: per pair, a thin rank-1 stripe over a trajectory panel ────────
     n_cols = len(MORPH_PAIRS)
-    fig = plt.figure(figsize=(3.4 * n_cols, 6.6))
+    fig = plt.figure(figsize=(3.5 * n_cols, 4.6))
     gs = fig.add_gridspec(
-        2, n_cols,
-        height_ratios=[1.0, 1.0],
-        hspace=0.40, wspace=0.35,
-        top=0.90, bottom=0.10, left=0.06, right=0.97,
+        2, n_cols, height_ratios=[0.10, 1.0],
+        hspace=0.06, wspace=0.26,
+        top=0.80, bottom=0.13, left=0.06, right=0.99,
     )
 
-    for col, (ca, cb, cov, foc) in enumerate(trajectories):
-        lab_a = CONTEXT_LABELS[ca]; lab_b = CONTEXT_LABELS[cb]
+    syms = list(space.symbols)
 
-        # Top row — phase portrait (α-coloured trajectory)
-        ax_top = fig.add_subplot(gs[0, col])
-        pts = ax_top.scatter(cov, foc, c=alphas, cmap="viridis",
-                             s=36, edgecolors="black", linewidths=0.4, zorder=3)
-        ax_top.plot(cov, foc, "-", color="0.5", lw=0.8, alpha=0.7, zorder=2)
-        ax_top.annotate(
-            "α=0", xy=(cov[0], foc[0]),
-            xytext=(7, 7), textcoords="offset points",
-            fontsize=7, ha="left", va="bottom",
-            arrowprops=dict(arrowstyle="-", color="0.4", lw=0.5),
-        )
-        ax_top.annotate(
-            "α=1", xy=(cov[-1], foc[-1]),
-            xytext=(-7, -7), textcoords="offset points",
-            fontsize=7, ha="right", va="top",
-            arrowprops=dict(arrowstyle="-", color="0.4", lw=0.5),
-        )
-        ax_top.set_xlabel("coverage_h1", fontsize=8)
-        ax_top.set_ylabel("focus", fontsize=8)
-        ax_top.set_title(
-            f"{ca} ↔ {cb}\n{lab_a}  ↔  {lab_b}",
-            fontsize=8.5,
-        )
-        if col == n_cols - 1:
-            cb_axes = plt.colorbar(pts, ax=ax_top, shrink=0.7, pad=0.04)
-            cb_axes.set_label("α", fontsize=7.5)
+    for col, (ca, cb, traj) in enumerate(trajectories):
+        M = np.vstack([traj[s] for s in syms])            # (n_sym, n_alpha)
+        winners = [syms[i] for i in M.argmax(axis=0)]     # rank-1 per alpha
+        ever_top3 = set()
+        for j in range(M.shape[1]):
+            ever_top3.update(syms[i] for i in np.argsort(M[:, j])[-3:])
 
-        # Bottom row — coverage_h1 + focus over α (dual axis)
-        ax_bot = fig.add_subplot(gs[1, col])
-        ax_bot.plot(alphas, cov, "-o", markersize=3, color="#b3262a",
-                    label="coverage_h1")
-        ax_bot.set_xlabel("α (A → B)", fontsize=8)
-        ax_bot.set_ylabel("coverage_h1", color="#b3262a", fontsize=8)
-        ax_bot.tick_params(axis="y", labelcolor="#b3262a")
-        ax_bot2 = ax_bot.twinx()
-        ax_bot2.plot(alphas, foc, "-o", markersize=3, color="#2f5d8f",
-                     label="focus")
-        ax_bot2.set_ylabel("focus", color="#2f5d8f", fontsize=8)
-        ax_bot2.tick_params(axis="y", labelcolor="#2f5d8f")
-        ax_bot.set_xlim(0, 1)
+        # ── rank-1 dominance stripe ──────────────────────────────────────────
+        ax_s = fig.add_subplot(gs[0, col])
+        for j, w in enumerate(winners):
+            ax_s.axvspan(alphas[j] - 0.5 / (len(alphas) - 1),
+                         alphas[j] + 0.5 / (len(alphas) - 1),
+                         color=cdict.get(w, "0.5"), lw=0)
+        ax_s.set_xlim(0, 1)
+        ax_s.set_yticks([])
+        ax_s.set_xticks([])
+        for sp in ax_s.spines.values():
+            sp.set_visible(False)
+        ax_s.set_title(f"${ca}$ $\\to$ ${cb}$", fontsize=10, fontweight="bold", pad=18)
+        ax_s.text(0.5, 1.04, f"{CONTEXT_LABELS[ca]}  →  {CONTEXT_LABELS[cb]}",
+                  transform=ax_s.transAxes, ha="center", va="bottom",
+                  fontsize=6.6, color="0.45", style="italic")
+        ax_s.set_ylabel("rank-1", fontsize=6.5, rotation=0, ha="right", va="center",
+                        labelpad=2)
+
+        # ── trajectory panel ─────────────────────────────────────────────────
+        ax = fig.add_subplot(gs[1, col])
+        for i, s in enumerate(syms):
+            if s in ever_top3:
+                ax.plot(alphas, M[i], color=cdict.get(s, "0.4"), lw=1.9, zorder=3)
+                # label at whichever end the line is higher
+                end = -1 if M[i, -1] >= M[i, 0] else 0
+                ax.text(alphas[end] + (0.01 if end == -1 else -0.01), M[i, end], s,
+                        ha="left" if end == -1 else "right", va="center",
+                        fontsize=6.8, fontweight="bold", color=cdict.get(s, "0.4"),
+                        zorder=4)
+            else:
+                ax.plot(alphas, M[i], color="0.7", lw=0.6, alpha=0.5, zorder=1)
+
+        ax.set_xlim(0, 1)
+        ax.set_xlabel(r"$\alpha\;$ (A $\to$ B)", fontsize=8, labelpad=2)
+        if col == 0:
+            ax.set_ylabel("degree-normalized PPR score", fontsize=8)
+        ax.margins(x=0.12)
+        # annotate the rank-1 transition path under the panel
+        ax.set_title(" → ".join(_runs(winners)), fontsize=6.8, color="0.35", pad=3)
 
     fig.suptitle(
-        "Morphing gallery — phase portraits and α-trajectories across "
-        "four context pairs from Black Elk Speaks",
-        fontsize=11, y=0.96,
+        "Morphing gallery — degree-normalized PPR symbol reorganization across "
+        "four context pairs (Black Elk Speaks)",
+        fontsize=10.5, y=0.95,
     )
 
     save_fig(fig, "fig03b_morph_gallery")
