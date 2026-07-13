@@ -114,8 +114,8 @@ def main():
                         fontsize=7)
     axA.set_xlim(-0.5, 2.5)
     axA.set_ylabel("confidence margin (ws$_z$ top-1 − top-2)", fontsize=8)
-    axA.set_title(f"(A) The margin separates hits from\nmisses (AUC {auc:.2f}); "
-                  f"ambiguous phrases\nland with the misses", fontsize=8.3, pad=5)
+    axA.set_title(f"(A) The margin separates settled from\nopen readings (AUC {auc:.2f}); "
+                  f"ambiguous\nphrases land with the open ones", fontsize=8.3, pad=5)
 
     # (B) coverage–accuracy curve
     axB = fig.add_subplot(gs[0, 1])
@@ -134,13 +134,13 @@ def main():
     axB.set_ylabel("top-1 accuracy on answered probes", fontsize=8)
     axB.set_ylim(0.55, 1.02)
     axB.tick_params(labelsize=6.5)
-    axB.set_title("(B) Selective answering — abstaining on\nlow-margin probes raises accuracy",
+    axB.set_title("(B) High-margin probes are the confident ones;\nanswering only those raises accuracy",
                   fontsize=8.3, pad=5)
 
     # (C) exemplar profiles
     for col, (k, tag, color) in enumerate([
-        (k_hi, "high margin, correct", "#1a9850"),
-        (k_lo, "low margin, miss", "#b2182b"),
+        (k_hi, "high margin, settled", "#1a9850"),
+        (k_lo, "low margin, open", "#b2182b"),
     ]):
         ax = fig.add_subplot(gs[0, 2 + col])
         z = Z[k] - np.nanmean(Z[k])
@@ -160,11 +160,10 @@ def main():
         phr = REF_PROBES[k][2]
         ax.set_title(f"(C{col+1}) {tag}  (margin {margins[k]:.2f})\n"
                      f"“{phr[:46]}…”\nintended {short_sym(intended[k])}"
-                     + ("" if correct[k] else f" — read as {short_sym(dr.syms[top1[k]])}"),
+                     + ("" if correct[k] else f", read as {short_sym(dr.syms[top1[k]])}"),
                      fontsize=7.2, pad=4)
 
-    fig.suptitle("The readout knows when it doesn't know — the Δ profile margin as "
-                 "an uncertainty signal", fontsize=12, y=0.97)
+    fig.suptitle("The recoupling margin as an ambiguity meter", fontsize=12, y=0.97)
     save_fig(fig, "fig_delta_ambiguity")
     plt.close(fig)
 
