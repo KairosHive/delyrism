@@ -14,6 +14,45 @@ python paper/figures/make_all.py
 
 Figures are written to `paper/v2/figures/` as PDF (paper-ready) + PNG (preview).
 
+## Reproducing the v2 paper
+
+The compiled paper is `paper/v2/neurips2025_v2.pdf`. To rebuild it from source:
+
+```bash
+# 1. regenerate the figures used by the paper (writes to paper/v2/figures/)
+python paper/figures/make_all.py --only fig_v1_umap fig_v1_attention fig_v1_ppr \
+    fig_v1_starplots fig01_delta_graph fig_delta_narrative fig_delta_ambiguity \
+    fig_delta_kernel fig_delta_robustness fig_delta_soundscape_clap
+
+# 2. compile (from paper/v2/)
+cd paper/v2 && tectonic neurips2025_v2.tex        # or: latexmk -pdf neurips2025_v2.tex
+```
+
+Every figure the paper includes, and the script that produces it:
+
+| `\includegraphics{...}` in the paper | Script |
+|---|---|
+| `fig_symbols`             | Shape Kit plate (community asset, not generated) |
+| `fig1_umap`               | `fig_v1_umap.py` |
+| `fig_v1_attention`        | `fig_v1_attention.py` |
+| `fig_v1_ppr`              | `fig_v1_ppr.py` |
+| `fig4_starplots`          | `fig_v1_starplots.py` |
+| `fig01_delta_graph`       | `fig01_delta_graph.py` |
+| `fig_delta_narrative`     | `fig_delta_narrative.py` |
+| `fig_delta_ambiguity`     | `fig_delta_ambiguity.py` |
+| `fig_delta_kernel`        | `fig_delta_kernel.py` |
+| `fig_delta_robustness`    | `fig_delta_robustness.py` |
+| `fig_delta_soundscape_clap` | `fig_delta_soundscape_clap.py` |
+
+Reproduction inputs:
+- The `delyrism` package (repo root) — the engine every figure script imports.
+- `lakota_descriptors.py` — the knowledge-holder-authored descriptor set per symbol (the community-curated coordinate system); community material, do not modify without consultation.
+- `paper/v2/references.bib` (+ `references_v2_additions.bib`) and `neurips_2025.sty`.
+- `paper/figures/_audio/` — CC/PD field recordings (Wikimedia Commons) for `fig_delta_soundscape_clap`; re-fetchable via `_fetch_sounds.py`. Verify each file's license before publication.
+- Extra Python deps beyond `requirements.txt`: `umap-learn` (fig1_umap), `soundfile` (audio loading), and a CLAP-capable `transformers` (audio figure).
+
+The remaining scripts (`fig02_topology`, `fig03_*`, `fig04_catalysts`, `fig05_crossmodal`) are exploratory and are not part of the v2 paper; some need extra dependencies such as `ripser`.
+
 ## Layout
 
 | Script | Figure | Analysis | Notes |

@@ -146,7 +146,7 @@ def main():
         fontsize=11, y=1.00,
     )
     plt.tight_layout()
-    save_fig(fig, "fig_v1_starplots")
+    save_fig(fig, "fig4_starplots")
     plt.close(fig)
 
     # ──────────────────────────────────────────────────────────────────────

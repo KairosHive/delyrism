@@ -37,7 +37,7 @@ def main():
         title="Symbol descriptor map  (Lakota Shape Kit · UMAP)",
     )
     fig = plt.gcf()
-    save_fig(fig, "fig_v1_umap")
+    save_fig(fig, "fig1_umap")
     plt.close(fig)
 
 

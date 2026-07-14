@@ -33,7 +33,8 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import TwoSlopeNorm
-from scipy.cluster.hierarchy import leaves_list, linkage
+from matplotlib.patches import Rectangle
+from scipy.cluster.hierarchy import dendrogram, fcluster, leaves_list, linkage
 
 from _setup import build_space, save_fig, set_paper_style
 from _delta_common import DeltaReadout
@@ -120,7 +121,8 @@ def main():
 
     # orders: (A) by activation magnitude, (B) by cleaned-kernel clustering
     ord_mag = np.argsort(mag)
-    ord_clu = leaves_list(linkage(1 - kc, method="average"))
+    Zc_link = linkage(1 - kc, method="average")
+    ord_clu = leaves_list(Zc_link)
 
     def _trunc(s, w=44):
         return s if len(s) <= w else s[: w - 1] + "…"
@@ -138,26 +140,61 @@ def main():
     axA.set_xticks([]); axA.set_yticks([])
     axA.set_xlabel("probes sorted by activation strength →", fontsize=7)
     axA.set_ylabel("← probes sorted by activation strength", fontsize=7)
-    axA.set_title(f"(A) Raw Δ kernel — one mode ({ev1:.0%} of variance)\n"
+    axA.set_title(f"(A) Raw Δ kernel, one mode ({ev1:.0%} of variance)\n"
                   f"tracks overall activation strength (r = {r_mag_raw:.2f});\n"
                   f"kit-independent (cross-kit r = {r_kit_raw:.2f})",
                   fontsize=8.3, pad=5)
 
-    # (B) cleaned kernel, cluster order, sentences as labels
-    axB = fig.add_subplot(gs[:, 1])
-    imB = axB.imshow(K_clean[np.ix_(ord_clu, ord_clu)], cmap="RdBu_r", norm=norm)
-    axB.set_yticks(range(n))
-    axB.set_yticklabels([_trunc(phrases[i]) for i in ord_clu], fontsize=4.8,
-                        fontfamily="monospace")
+    # (B) cleaned kernel as a clustermap: the kernel's own hierarchical
+    #     clustering (dendrogram, right) partitions the probes into registers
+    #     (boxes), each labelled by a representative probe sentence.
+    KREG = 4
+    Kc_ord = K_clean[np.ix_(ord_clu, ord_clu)]
+    v = float(np.percentile(np.abs(Kc_ord[np.triu_indices(n, 1)]), 92)) or 1.0
+    normB = TwoSlopeNorm(vmin=-v, vcenter=0, vmax=v)
+
+    gsB = gs[:, 1].subgridspec(1, 2, width_ratios=[1.0, 0.16], wspace=0.015)
+    axB = fig.add_subplot(gsB[0, 0])
+    axD = fig.add_subplot(gsB[0, 1])
+
+    # dendrogram first: it defines the cluster colours reused for boxes + labels
+    thr = Zc_link[-(KREG - 1), 2]
+    dn = dendrogram(Zc_link, orientation="right", no_labels=True, ax=axD,
+                    color_threshold=thr, above_threshold_color="0.6")
+    axD.set_ylim(10 * n, 0)
+    axD.axis("off")
+    leaf_col = dn["leaves_color_list"]              # one colour per row, in ord_clu order
+    bnd = [i for i in range(1, n) if leaf_col[i] != leaf_col[i - 1]]
+    starts = np.r_[0, bnd].astype(int)
+    ends = np.r_[bnd, n].astype(int)
+
+    imB = axB.imshow(Kc_ord, cmap="RdBu_r", norm=normB,
+                     extent=[0, n, n, 0], aspect="auto", interpolation="nearest")
+    yt, yl, yc = [], [], []
+    for s, e in zip(starts, ends):
+        col = leaf_col[s]
+        axB.add_patch(Rectangle((s, s), e - s, e - s, fill=False,
+                                edgecolor=col, lw=2.4, zorder=3))
+        mp = s + int(np.argmax(Kc_ord[s:e, s:e].mean(axis=1)))     # cluster medoid
+        yt.append(mp + 0.5)
+        yl.append(_trunc(phrases[ord_clu[mp]], 42))
+        yc.append(col)
+    axB.set_yticks(yt)
+    axB.set_yticklabels(yl, fontsize=6.4)
+    for lab, col in zip(axB.get_yticklabels(), yc):
+        lab.set_color(col)
+        lab.set_fontweight("bold")
+    axB.tick_params(axis="y", length=0)
     axB.set_xticks([])
     axB.set_xlabel("columns = same probes, same order", fontsize=6.5)
-    axB.set_title(f"(B) After removing that single mode (“all-but-the-top”):\n"
-                  f"coherent registers emerge, readable off the sentences themselves\n"
-                  f"(no labels used — rows ordered by the kernel's own clustering)",
+    axB.set_title("(B) Removing that mode lets the kernel's own clustering\n"
+                  "split the probes into coherent registers (boxes),\n"
+                  "each labelled by a representative probe sentence",
                   fontsize=8.3, pad=5)
-    cbB = fig.colorbar(imB, ax=axB, fraction=0.030, pad=0.015)
-    cbB.set_label("cos(res Δ$_i$, res Δ$_j$)", fontsize=6.5)
-    cbB.ax.tick_params(labelsize=6)
+
+    cbB = fig.colorbar(imB, ax=[axB, axD], fraction=0.022, pad=0.02)
+    cbB.set_label("cos(res Δ$_i$, res Δ$_j$)", fontsize=6)
+    cbB.ax.tick_params(labelsize=5.5)
 
     # (C1) raw vs magnitude product; (C2) cleaned vs embedding similarity
     for row, (x, y, rr, xl, yl, ttl) in enumerate([
@@ -181,7 +218,7 @@ def main():
                     f"(kit choice only matters\nafter cleaning)",
                     transform=ax.transAxes, fontsize=5.8, color="0.35", va="top")
 
-    fig.suptitle("Inside the Δ context kernel — removing one global mode turns an "
+    fig.suptitle("Inside the Δ context kernel: removing one global mode turns an "
                  "artifact into a content-bearing similarity", fontsize=12, y=0.965)
     save_fig(fig, "fig_delta_kernel")
     plt.close(fig)

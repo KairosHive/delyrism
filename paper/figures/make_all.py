@@ -39,6 +39,7 @@ FIGURES = [
     "fig_delta_ambiguity",
     "fig_delta_robustness",
     "fig_delta_soundscape",
+    "fig_delta_soundscape_clap",
     "fig04_catalysts",
     "fig05_crossmodal",
 ]
