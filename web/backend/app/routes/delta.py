@@ -12,6 +12,7 @@ from ..schemas import (
     SymbolSimilarityRequest, SymbolSimilarityResponse,
     TransformationsRequest, TransformationsResponse,
     MigrationEntry, ArchetypeIdentityCard, IdentityEntry,
+    GlobalModeRequest, GlobalModeResponse,
 )
 from .. import engine_cache
 from ..util import to_hex
@@ -26,6 +27,26 @@ def _require(space_id: str):
     if space is None:
         raise HTTPException(status_code=404, detail="unknown space_id")
     return space
+
+
+@router.get("/global-mode/{space_id}", response_model=GlobalModeResponse)
+def get_global_mode(space_id: str) -> GlobalModeResponse:
+    """Current global-mode setting of a space, with its diagnostics."""
+    return GlobalModeResponse(**_require(space_id).global_mode_info())
+
+
+@router.post("/global-mode", response_model=GlobalModeResponse)
+def set_global_mode(req: GlobalModeRequest) -> GlobalModeResponse:
+    """Choose the geometry the Δ readout works in for this space.
+
+    The descriptor offset and principal directions are fitted when the space
+    is built; this only switches which geometry Δ uses.  Result memos are
+    keyed on request params, which do not include this setting, so they are
+    dropped here (same contract as /context/set-override)."""
+    space = _require(req.space_id)
+    space.set_global_mode(req.mode, req.pcs)
+    engine_cache.invalidate_results(req.space_id)
+    return GlobalModeResponse(**space.global_mode_info())
 
 
 @router.post("/shift", response_model=ShiftResponse)

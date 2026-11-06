@@ -249,14 +249,31 @@ class DeltaWalker:
 
     # ------------------------------------------------------------------- field
 
-    def _shift(self, vctx: np.ndarray) -> np.ndarray:
+    def _delta_basis(self):
+        """Descriptor matrix and resting coupling the Δ field is measured in.
+        Follows the space's global mode (raw, or descriptor offset removed);
+        cached until that setting changes."""
+        gm = self.space.get_global_mode() if hasattr(self.space, "get_global_mode") else {"mode": "none", "pcs": 0}
+        key = (gm["mode"], gm["pcs"])
+        if getattr(self, "_basis_key", None) != key:
+            if gm["mode"] == "descriptor":
+                Db = self.space.remove_descriptor_offset(self.D, gm["pcs"]).astype(np.float32)
+                C0b = Db @ Db.T
+                np.fill_diagonal(C0b, 0.0)
+            else:
+                Db, C0b = self.D, self.C0
+            self._basis_key, self._basis = key, (Db, C0b)
+        return self._basis
+
+    def _shift(self, vctx: np.ndarray, base: Optional[np.ndarray] = None) -> np.ndarray:
         p = self.params
+        base = self.D if base is None else base
         if float(np.linalg.norm(vctx)) < 1e-6:
-            return self.D
+            return base
         if p.strategy == "pooling":
-            D1 = self.space._pool_with_context(self.D, vctx, pool_type=p.pool_type, pool_w=p.pool_w)
+            D1 = self.space._pool_with_context(base, vctx, pool_type=p.pool_type, pool_w=p.pool_w)
         else:
-            sims = self.D @ vctx
+            sims = base @ vctx
             if p.gate == "relu":
                 g = np.maximum(0.0, sims)
             elif p.gate == "cos":
@@ -273,23 +290,29 @@ class DeltaWalker:
                     g = softmax(sims, tau=p.tau)
             else:
                 g = np.ones_like(sims)
-            D1 = l2_normalize(self.D + (p.beta * g[:, None]) * vctx[None, :], axis=1)
+            D1 = l2_normalize(base + (p.beta * g[:, None]) * vctx[None, :], axis=1)
         if float(p.membership_alpha) > 0:
-            D1 = self.space._apply_membership_blend(self.D, D1, float(p.membership_alpha))
+            D1 = self.space._apply_membership_blend(base, D1, float(p.membership_alpha))
         return D1.astype(np.float32)
 
     def compute_field(self) -> None:
-        """Recompute D1, Δ and per-node alignment for the current context."""
+        """Recompute D1, Δ and per-node alignment for the current context.
+        Δ and alignment are measured in the space's global-mode geometry;
+        layout, coherence and the context itself stay in the raw space."""
         self.ctx = self._effective_context()
-        self.D1 = self._shift(self.ctx)
-        if self.D1 is self.D:
+        Db, C0b = self._delta_basis()
+        ctx = self.ctx
+        if Db is not self.D:
+            ctx = self.space.remove_descriptor_offset(ctx, self.space.get_global_mode()["pcs"]).astype(np.float32)
+        self.D1 = self._shift(ctx, Db)
+        if self.D1 is Db:
             self.Delta = np.zeros_like(self.C0)
             self.align = np.zeros(self.N, dtype=np.float32)
         else:
             C1 = self.D1 @ self.D1.T
             np.fill_diagonal(C1, 0.0)
-            self.Delta = C1 - self.C0
-            self.align = (self.D1 @ self.ctx).astype(np.float32)
+            self.Delta = C1 - C0b
+            self.align = (self.D1 @ ctx).astype(np.float32)
         self._field_version += 1
 
     def _signed(self) -> np.ndarray:

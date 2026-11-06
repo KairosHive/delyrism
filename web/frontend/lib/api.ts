@@ -161,6 +161,17 @@ export interface DeltaEdge {
 }
 export interface DeltaGraphResponse { nodes: DeltaNode[]; edges: DeltaEdge[]; }
 
+/** Geometry the Δ readout works in for a space (mirrors GlobalModeResponse). */
+export interface GlobalModeResponse {
+  mode: "none" | "descriptor";
+  pcs: number;
+  max_pcs: number;
+  shared_energy: number;    // |mean descriptor|², share of each vector all descriptors have in common
+  mean_cos_raw: number;     // mean descriptor–descriptor cosine, raw
+  mean_cos_active: number;  // same, in the geometry Δ currently uses
+  pc_share: number[];       // variance share of the top principal directions
+}
+
 export interface SubgraphNode {
   id: string; kind: "symbol" | "descriptor"; symbol: string;
   color: string; score: number;

@@ -89,6 +89,17 @@ export interface SidebarState {
   symbolFilter: string[];
   deltaSign: "up" | "down" | "both"; // strengthens / weakens / both
 
+  // ----- Global mode (Δ geometry) -----
+  // Lives on the cached space server-side (POST /global-mode), like the
+  // audio override.  `globalModeNonce` is bumped once the server has applied
+  // a change, so Δ queries refetch only after the new geometry is in place.
+  globalMode: "none" | "descriptor";
+  globalModePcs: number;
+  globalModeNonce: number;
+  // bumped on every successful build — space ids are config hashes, so a
+  // rebuild after a backend restart returns the same id with fresh state
+  buildNonce: number;
+
   // ----- Story Generator -----
   // Persisted across tab switches so settings + generated story aren't lost
   // when the user flips back to Explorer.  All fields mirror the StoryRequest
@@ -212,6 +223,11 @@ export const useSidebar = create<SidebarState>((set) => ({
   symbolFilter: [],
   // default to strengthens-only — most users want the positive associations
   deltaSign: "up",
+
+  globalMode: "none",
+  globalModePcs: 0,
+  globalModeNonce: 0,
+  buildNonce: 0,
 
   topologyShowContext: false,
 

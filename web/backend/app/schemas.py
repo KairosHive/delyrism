@@ -195,6 +195,31 @@ class DeltaGraphResponse(BaseModel):
     edges: List[DeltaEdge]
 
 
+# ----------------------- global mode -----------------------
+# A property of the cached space (like the audio context override): every
+# Δ readout on that space (Explorer Δ graph, Live graph, story motifs, the
+# walker) follows it.
+
+class GlobalModeRequest(BaseModel):
+    space_id: str
+    # "none" → raw geometry; "descriptor" → descriptor offset removed
+    mode: Literal["none", "descriptor"] = "none"
+    # top principal directions of the descriptor cloud also removed (0–5)
+    pcs: int = Field(0, ge=0, le=5)
+
+
+class GlobalModeResponse(BaseModel):
+    mode: Literal["none", "descriptor"]
+    pcs: int
+    max_pcs: int
+    # |mean descriptor vector|², the share of each descriptor's energy that
+    # every descriptor has in common
+    shared_energy: float
+    mean_cos_raw: float      # mean descriptor–descriptor cosine, raw
+    mean_cos_active: float   # same, in the geometry Δ currently uses
+    pc_share: List[float]    # variance share of the top principal directions
+
+
 # ----------------------- per-symbol similarity matrices -----------------------
 
 class SimilarityRequest(ShiftRequest):

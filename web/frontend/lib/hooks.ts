@@ -167,11 +167,13 @@ export function useDeltaGraph() {
   const audioNonce = useSidebar((s) => s.audioNonce);
   const imageNonce = useSidebar((s) => s.imageNonce);
   const morphNonce = useSidebar((s) => s.morphNonce);
+  // bumped after the server switches Δ geometry (GlobalModeControl)
+  const globalModeNonce = useSidebar((s) => s.globalModeNonce);
 
   return useQuery({
     enabled: !!sid && (!!sentence.trim() || !!weights || audioActive || imageActive || morphActive),
     placeholderData: keepPreviousData,
-    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce, imageNonce, morphNonce],
+    queryKey: ["delta-graph", sid, sentence, weights, strategy, beta, gate, tau, wss, gamma, poolType, poolW, mAlpha, topAbs, minAbs, withinSym, conn, symFilter, deltaSign, audioNonce, imageNonce, morphNonce, globalModeNonce],
     queryFn: () =>
       api.post<DeltaGraphResponse>("/delta-graph", {
         ...shiftPayload(),

@@ -89,6 +89,11 @@ def l2_normalize(X, axis=1, eps=1e-9):
     return X / n
 
 
+# Global-mode options for the Δ readout (see SymbolSpace.set_global_mode).
+GLOBAL_MODES = ("none", "descriptor")
+OFFSET_MAX_PCS = 5
+
+
 def _l2norm_torch(x, eps=1e-9):
     return torch.nn.functional.normalize(x, p=2, dim=1)
 
@@ -765,6 +770,11 @@ class SymbolSpace:
             s: self.D[idx].mean(0)
             for s, idx in self.symbol_to_idx.items()
         }
+        # Global mode: the descriptor offset (mean descriptor vector) and the
+        # top principal directions of the centred descriptor cloud, fitted
+        # once here.  The Δ readout uses them when set_global_mode() is on.
+        self._fit_descriptor_offset()
+        self.global_mode = {"mode": "none", "pcs": 0}
 
 
         self.G = self._build_graph()
@@ -836,6 +846,83 @@ class SymbolSpace:
             v = vec.astype(np.float32)
             v /= (np.linalg.norm(v) + 1e-9)
             self.context_override = v
+
+    # -------- global mode (descriptor offset) --------
+    # Embedders place every descriptor inside a narrow cone, so every context
+    # looks about equally relevant to every descriptor and the Δ readout is
+    # dominated by one context-independent pattern.  Removing the descriptor
+    # offset (and optionally the top principal directions of the descriptor
+    # cloud) from descriptors AND context before the shift lets Δ follow
+    # what the context is about.  Only the Δ readout uses this geometry.
+    def _fit_descriptor_offset(self) -> None:
+        D = np.asarray(self.D, dtype=np.float64)
+        mu = D.mean(axis=0)
+        _, S, Vt = np.linalg.svd(D - mu, full_matrices=False)
+        var = S ** 2
+        self.descriptor_offset = mu.astype(np.float32)
+        self.descriptor_pcs = Vt[:OFFSET_MAX_PCS].astype(np.float32)
+        self.descriptor_pc_share = (var[:OFFSET_MAX_PCS] / max(var.sum(), 1e-12)).astype(np.float32)
+
+    def get_global_mode(self) -> Dict:
+        gm = getattr(self, "global_mode", None)
+        return dict(gm) if gm else {"mode": "none", "pcs": 0}
+
+    def set_global_mode(self, mode: str = "none", pcs: int = 0) -> Dict:
+        if mode not in GLOBAL_MODES:
+            raise ValueError(f"Unknown global mode '{mode}' (expected one of {GLOBAL_MODES})")
+        pcs = int(min(max(int(pcs), 0), OFFSET_MAX_PCS))
+        self.global_mode = {"mode": mode, "pcs": pcs if mode == "descriptor" else 0}
+        return self.get_global_mode()
+
+    def remove_descriptor_offset(self, X: np.ndarray, pcs: int = 0) -> np.ndarray:
+        """Subtract the descriptor offset, project out the top `pcs` principal
+        directions of the descriptor cloud, and L2-normalise.  Works on one
+        vector or a matrix of row vectors; all-zero rows (no context) stay zero."""
+        if getattr(self, "descriptor_offset", None) is None:
+            self._fit_descriptor_offset()
+        X = np.asarray(X, dtype=np.float32)
+        Y = X - self.descriptor_offset
+        k = int(min(max(int(pcs), 0), OFFSET_MAX_PCS))
+        if k > 0:
+            P = self.descriptor_pcs[:k]
+            Y = Y - (Y @ P.T) @ P
+        Y = l2_normalize(Y, axis=-1)
+        empty = np.linalg.norm(X, axis=-1) < 1e-8
+        if np.any(empty):
+            Y = np.where(np.expand_dims(empty, -1), 0.0, Y).astype(np.float32)
+        return Y
+
+    def delta_geometry(self, mode: Optional[str] = None, pcs: Optional[int] = None) -> Dict:
+        """Resolve the geometry the Δ readout works in: the explicit arguments,
+        else the space's current global mode."""
+        gm = self.get_global_mode()
+        mode = gm["mode"] if mode is None else mode
+        pcs = gm["pcs"] if pcs is None else int(pcs)
+        on = mode == "descriptor"
+        D0 = self.remove_descriptor_offset(self.D, pcs) if on else self.D
+        return {"remove_offset": on, "offset_pcs": pcs if on else 0, "D0": D0}
+
+    def global_mode_info(self) -> Dict:
+        """Numbers the UI shows: how much of each descriptor vector is shared,
+        and the mean descriptor–descriptor cosine before and after removal."""
+        if getattr(self, "descriptor_offset", None) is None:
+            self._fit_descriptor_offset()
+        gm = self.get_global_mode()
+        n = len(self.descriptors)
+
+        def _mean_offdiag(M: np.ndarray) -> float:
+            C = M @ M.T
+            return float((C.sum() - np.trace(C)) / max(n * (n - 1), 1))
+
+        Dr = self.remove_descriptor_offset(self.D, gm["pcs"]) if gm["mode"] == "descriptor" else self.D
+        return {
+            **gm,
+            "max_pcs": OFFSET_MAX_PCS,
+            "shared_energy": float(np.dot(self.descriptor_offset, self.descriptor_offset)),
+            "mean_cos_raw": _mean_offdiag(np.asarray(self.D, dtype=np.float32)),
+            "mean_cos_active": _mean_offdiag(np.asarray(Dr, dtype=np.float32)),
+            "pc_share": [float(v) for v in self.descriptor_pc_share],
+        }
 
     def _sent_vec(self, text: Optional[str], ignore_override=False):
         # <-- CHANGED: honor audio override first
@@ -1051,9 +1138,17 @@ class SymbolSpace:
         pool_w: float = 0.7,
         # NEW ▼
         membership_alpha: float = 0.0,
+        # Global mode: shift in the offset-free geometry.  The result is then
+        # comparable to remove_descriptor_offset(self.D, offset_pcs), not to self.D.
+        remove_offset: bool = False,
+        offset_pcs: int = 0,
     ):
         ...
         vctx = self.ctx_vec(weights=weights, sentence=sentence)
+        base = self.D
+        if remove_offset:
+            base = self.remove_descriptor_offset(self.D, offset_pcs)
+            vctx = self.remove_descriptor_offset(vctx, offset_pcs)
         # `reembed` / `hybrid` need a *text* sentence to feed the embedder.
         # If the user has an audio/image override active but no typed sentence,
         # there's no text to re-embed against — silently returning D unchanged
@@ -1065,10 +1160,10 @@ class SymbolSpace:
             strategy = "gate"
         # --- pooling ---
         if strategy == "pooling":
-            Dtmp = self._pool_with_context(self.D, vctx, pool_type=pool_type, pool_w=pool_w)
+            Dtmp = self._pool_with_context(base, vctx, pool_type=pool_type, pool_w=pool_w)
         # --- gate / hybrid ---
         elif strategy in ("gate", "hybrid"):
-            sims = self.D @ vctx
+            sims = base @ vctx
             if gate == "relu":
                 g = np.maximum(0.0, sims)
             elif gate == "cos":
@@ -1086,7 +1181,7 @@ class SymbolSpace:
                 g = np.ones_like(sims)
             else:
                 raise ValueError(f"Unknown gate '{gate}'")
-            D_gate = l2_normalize(self.D + (beta * g[:, None]) * vctx[None, :], axis=1)
+            D_gate = l2_normalize(base + (beta * g[:, None]) * vctx[None, :], axis=1)
 
             if strategy == "gate":
                 Dtmp = D_gate
@@ -1094,18 +1189,22 @@ class SymbolSpace:
                 # hybrid: blend gate + reembed, then norm
                 desc_texts = [prompt_template.format(sent=sentence, desc=d) for d in self.descriptors]
                 D_re = l2_normalize(self.embedder.encode(desc_texts), axis=1)
+                if remove_offset:
+                    D_re = self.remove_descriptor_offset(D_re, offset_pcs)
                 D_mix = (1.0 - float(gamma)) * D_gate + float(gamma) * D_re
                 Dtmp = l2_normalize(D_mix, axis=1)
         # --- reembed ---
         elif strategy == "reembed":
             desc_texts = [prompt_template.format(sent=sentence, desc=d) for d in self.descriptors]
             Dtmp = l2_normalize(self.embedder.encode(desc_texts), axis=1)
+            if remove_offset:
+                Dtmp = self.remove_descriptor_offset(Dtmp, offset_pcs)
         else:
             raise ValueError(f"Unknown strategy '{strategy}'")
 
         # NEW: apply membership blend so downstream (heatmaps/Δ-graph) see the same α effect
         if float(membership_alpha) > 0.0:
-            return self._apply_membership_blend(self.D, Dtmp, float(membership_alpha))
+            return self._apply_membership_blend(base, Dtmp, float(membership_alpha))
         return Dtmp
 
 
@@ -2328,8 +2427,13 @@ def context_delta_graph(
     # respects the filter (you always get N edges of the chosen sign rather
     # than N mixed minus whatever didn't survive filtering).
     sign_filter: Optional[str] = None,  # "up" | "down" | None
+    # Global mode ("none" | "descriptor") and principal directions removed.
+    # None → use the space's own setting (SymbolSpace.set_global_mode).
+    global_mode: Optional[str] = None,
+    global_mode_pcs: Optional[int] = None,
 ):
-    D0 = space.D
+    geo = space.delta_geometry(global_mode, global_mode_pcs)
+    D0 = geo["D0"]
     D1 = space.make_shifted_matrix(
         weights=weights, sentence=sentence,
         strategy=strategy,
@@ -2339,6 +2443,8 @@ def context_delta_graph(
         pool_type=pool_type, pool_w=pool_w,
         # NEW ▼
         membership_alpha=membership_alpha,
+        remove_offset=geo["remove_offset"],
+        offset_pcs=geo["offset_pcs"],
     )
 
     # --- choose which descriptors to keep ---

@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api, SpaceConfig, SpaceCreateResponse } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { ExportButton } from "./ExportButton";
+import { GlobalModeControl } from "./GlobalModeControl";
 
 /**
  * Build / rebuild the SymbolSpace.  Lives directly under the Console cards
@@ -50,6 +51,7 @@ export function BuildButton() {
         spaceId: data.space_id,
         symbols: data.symbols,
         colorMap: data.color_map,
+        buildNonce: useSidebar.getState().buildNonce + 1,
       });
     },
   });
@@ -57,13 +59,16 @@ export function BuildButton() {
   return (
     <div className="mx-auto mt-3 flex w-full max-w-5xl flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-col gap-1">
-        <button
-          className="btn-primary w-full sm:w-auto sm:min-w-[200px]"
-          onClick={() => build.mutate()}
-          disabled={build.isPending || !json}
-        >
-          {build.isPending ? "Building space…" : spaceId ? "Rebuild space" : "Build space"}
-        </button>
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <button
+            className="btn-primary w-full sm:w-auto sm:min-w-[200px]"
+            onClick={() => build.mutate()}
+            disabled={build.isPending || !json}
+          >
+            {build.isPending ? "Building space…" : spaceId ? "Rebuild space" : "Build space"}
+          </button>
+          <GlobalModeControl />
+        </div>
         {build.isError && (
           <div className="text-xs text-danger">{(build.error as Error).message}</div>
         )}
