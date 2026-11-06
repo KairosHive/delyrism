@@ -2,9 +2,9 @@
 // Continuous microphone capture for the CLAP query.
 //
 // Keeps a rolling window of mono PCM and, every `intervalMs`, hands the last
-// `windowSec` seconds to `onWindow` as a binary frame:
+// `windowSec` seconds to `onWindow` as:
 //   uint32 LE sample-rate · int16 LE PCM
-// That's what the live graph socket expects for an audio query.  Also
+// The socket layer prefixes the kind byte before sending.  Also
 // reports a smoothed RMS level for the meter.
 
 export interface MicCapture {

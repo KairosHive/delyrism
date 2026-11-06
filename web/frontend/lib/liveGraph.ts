@@ -13,6 +13,7 @@ import { wsUrl } from "./api";
 import { useSidebar } from "./store";
 import type { DeltaEdge } from "./api";
 import { startMicCapture, type MicCapture } from "./liveAudio";
+import { startCameraCapture, type CameraCapture } from "./liveCamera";
 
 export interface LiveNode { id: string; symbol: string; color: string; pull: number; }
 export interface LiveGraph {
@@ -48,18 +49,23 @@ interface LiveState {
   relevance: Record<string, number>;
   relevanceSeq: number;          // bumps on every relevance payload
   queryActive: boolean;
-  queryKind: "text" | "audio";   // what the server's current relevance came from
+  queryKind: "text" | "audio" | "image";   // what the server's current relevance came from
   audioCapable: boolean;         // the space's embedder has an audio tower (CLAP)
+  imageCapable: boolean;         // … an image tower (CLIP)
   pending: number;               // in-flight recomputes (for the status pulse)
 
-  // ----- CLAP query (continuous microphone) -----
-  queryMode: "text" | "clap";
+  // ----- CLAP query (continuous microphone) / CLIP query (camera) -----
+  queryMode: "text" | "clap" | "clip";
   listening: boolean;
   micError: string | null;
   audioLevel: number;            // smoothed RMS 0..~0.5
   audioWindow: number;           // seconds of audio per embedding
   audioInterval: number;         // ms between embeddings
-  audioSmoothing: number;        // server-side EMA on successive audio vectors
+  audioSmoothing: number;        // server-side EMA on successive audio / image vectors
+  watching: boolean;
+  camError: string | null;
+  camInterval: number;           // ms between camera frames
+  camVideo: HTMLVideoElement | null;
 
   // the two live inputs (local echo; the socket gets debounced copies)
   context: string;
@@ -72,14 +78,17 @@ interface LiveState {
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
-  _sendBinary: ((buf: ArrayBuffer) => void) | null;
+  _sendBinary: ((kind: 1 | 2, buf: ArrayBuffer) => void) | null;
   _mic: MicCapture | null;
+  _cam: CameraCapture | null;
   setContext: (t: string) => void;
   setQuery: (t: string) => void;
   setParams: (patch: Partial<LiveParams>) => void;
-  setQueryMode: (m: "text" | "clap") => void;
+  setQueryMode: (m: "text" | "clap" | "clip") => void;
   startListening: () => Promise<void>;
   stopListening: () => void;
+  startWatching: () => Promise<void>;
+  stopWatching: () => void;
   setAudioSmoothing: (v: number) => void;
   set: <K extends keyof LiveState>(k: K, v: LiveState[K]) => void;
 }
@@ -99,6 +108,7 @@ export const useLive = create<LiveState>((set, get) => ({
   queryActive: false,
   queryKind: "text",
   audioCapable: false,
+  imageCapable: false,
   pending: 0,
 
   queryMode: "text",
@@ -108,6 +118,10 @@ export const useLive = create<LiveState>((set, get) => ({
   audioWindow: 2.5,
   audioInterval: 600,
   audioSmoothing: 0.5,
+  watching: false,
+  camError: null,
+  camInterval: 500,
+  camVideo: null,
 
   context: "",
   query: "",
@@ -120,6 +134,7 @@ export const useLive = create<LiveState>((set, get) => ({
   _send: null,
   _sendBinary: null,
   _mic: null,
+  _cam: null,
   setContext: (context) => {
     set({ context });
     if (ctxTimer) clearTimeout(ctxTimer);
@@ -138,14 +153,13 @@ export const useLive = create<LiveState>((set, get) => ({
   setQueryMode: (queryMode) => {
     const s = get();
     if (queryMode === s.queryMode) return;
-    if (queryMode === "text") {
-      s.stopListening();
-      set({ queryMode });
-      s._send?.({ type: "query", text: s.query });        // back to the typed query
-    } else {
-      set({ queryMode });
-      s._send?.({ type: "query_clear" });                 // audio takes over once listening
-    }
+    // leaving a live mode stops its capture; the server is told to drop
+    // the old vector so the new mode starts clean
+    if (s.queryMode === "clap") s.stopListening();
+    if (s.queryMode === "clip") s.stopWatching();
+    set({ queryMode });
+    if (queryMode === "text") s._send?.({ type: "query", text: s.query });
+    else s._send?.({ type: "query_clear" });
   },
   startListening: async () => {
     const s = get();
@@ -155,7 +169,7 @@ export const useLive = create<LiveState>((set, get) => ({
       const mic = await startMicCapture({
         windowSec: () => get().audioWindow,
         intervalMs: () => get().audioInterval,
-        onWindow: (buf) => get()._sendBinary?.(buf),
+        onWindow: (buf) => get()._sendBinary?.(1, buf),
         onLevel: (rms) => set({ audioLevel: rms }),
       });
       set({ _mic: mic, listening: true });
@@ -168,6 +182,26 @@ export const useLive = create<LiveState>((set, get) => ({
     s._mic?.stop();
     set({ _mic: null, listening: false, audioLevel: 0 });
     if (s.queryMode === "clap") s._send?.({ type: "query_clear" });
+  },
+  startWatching: async () => {
+    const s = get();
+    if (s._cam) return;
+    set({ camError: null });
+    try {
+      const cam = await startCameraCapture({
+        intervalMs: () => get().camInterval,
+        onFrame: (buf) => get()._sendBinary?.(2, buf),
+      });
+      set({ _cam: cam, watching: true, camVideo: cam.video });
+    } catch (e: any) {
+      set({ camError: e?.message ?? String(e), watching: false });
+    }
+  },
+  stopWatching: () => {
+    const s = get();
+    s._cam?.stop();
+    set({ _cam: null, watching: false, camVideo: null });
+    if (s.queryMode === "clip") s._send?.({ type: "query_clear" });
   },
   setAudioSmoothing: (v) => { set({ audioSmoothing: v }); get()._send?.({ type: "audio_smoothing", value: v }); },
   setParams: (patch) => {
@@ -223,7 +257,13 @@ export function useLiveSocket() {
       sock.onopen = () => {
         attempt = 0;
         const send = (msg: object) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg)); };
-        const sendBinary = (buf: ArrayBuffer) => { if (sock.readyState === WebSocket.OPEN && sock.bufferedAmount < 2_000_000) sock.send(buf); };
+        const sendBinary = (kind: 1 | 2, buf: ArrayBuffer) => {
+          if (sock.readyState !== WebSocket.OPEN || sock.bufferedAmount > 2_000_000) return;
+          const out = new Uint8Array(1 + buf.byteLength);
+          out[0] = kind;
+          out.set(new Uint8Array(buf), 1);
+          sock.send(out.buffer);
+        };
         useLive.setState({ _send: send, _sendBinary: sendBinary });
         // seed: Explorer's Δ params + whatever is already typed
         const st = useLive.getState();
@@ -238,7 +278,7 @@ export function useLiveSocket() {
         let msg: any;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === "ready") {
-          useLive.setState((s) => ({ status: "ready", params: { ...msg.params, ...(s.params ?? {}) }, audioCapable: !!msg.audio_capable }));
+          useLive.setState((s) => ({ status: "ready", params: { ...msg.params, ...(s.params ?? {}) }, audioCapable: !!msg.audio_capable, imageCapable: !!msg.image_capable }));
         } else if (msg.type === "graph") {
           useLive.setState((s) => ({
             graph: { nodes: msg.nodes, edges: msg.edges, context: msg.context },
@@ -246,7 +286,7 @@ export function useLiveSocket() {
             relevance: msg.relevance ?? {},
             relevanceSeq: s.relevanceSeq + 1,
             queryActive: !!msg.active,
-            queryKind: msg.kind === "audio" ? "audio" : "text",
+            queryKind: msg.kind === "audio" ? "audio" : msg.kind === "image" ? "image" : "text",
             pending: Math.max(0, s.pending - 1),
           }));
         } else if (msg.type === "relevance") {
@@ -254,7 +294,7 @@ export function useLiveSocket() {
             relevance: msg.relevance ?? {},
             relevanceSeq: s.relevanceSeq + 1,
             queryActive: !!msg.active,
-            queryKind: msg.kind === "audio" ? "audio" : "text",
+            queryKind: msg.kind === "audio" ? "audio" : msg.kind === "image" ? "image" : "text",
           }));
         } else if (msg.type === "error") {
           useLive.setState((s) => ({ error: String(msg.detail ?? "error"), pending: Math.max(0, s.pending - 1) }));
@@ -275,6 +315,7 @@ export function useLiveSocket() {
       if (retry) clearTimeout(retry);
       ws?.close();
       useLive.getState().stopListening();
+      useLive.getState().stopWatching();
       useLive.setState({ status: "closed", _send: null, _sendBinary: null });
     };
   }, [spaceId]);

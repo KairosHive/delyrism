@@ -323,6 +323,17 @@ def _text_vec(space, text: str) -> Optional[np.ndarray]:
 _CLAP_SR = 48000
 
 
+def _image_vec(space, jpeg: bytes) -> np.ndarray:
+    """Embed a camera frame through the space's image tower (CLIP)."""
+    if not hasattr(space.embedder, "embed_image") or not hasattr(space.embedder, "oc_model"):
+        raise RuntimeError("the space's embedder has no image tower — rebuild it with the CLIP backend")
+    import io
+    from PIL import Image
+    img = Image.open(io.BytesIO(jpeg))
+    v = np.asarray(space.embedder.embed_image(img), dtype=np.float32)
+    return v / (float(np.linalg.norm(v)) + 1e-9)
+
+
 def _audio_vec(space, pcm16: np.ndarray, sr: int) -> np.ndarray:
     """Embed a mic window through the space's audio tower (CLAP / AudioCLIP).
     Resamples to 48 kHz with linear interpolation — plenty for a query."""
@@ -350,16 +361,19 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     state: Dict[str, Any] = {
         "context": "", "params": dict(_GRAPH_DEFAULTS),
-        "query_text": "", "query_kind": "text",     # text | audio
+        "query_text": "", "query_kind": "text",     # text | audio | image
         "vq": None,                                 # active query vector
         "audio_pending": None,                      # latest (pcm16, sr) not yet embedded
-        "audio_smoothing": 0.5,                     # EMA on successive audio vectors
+        "image_pending": None,                      # latest jpeg bytes not yet embedded
+        "audio_smoothing": 0.5,                     # EMA on successive audio / image vectors
         "graph_dirty": False, "query_dirty": False,
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
     wake = asyncio.Event()
+    emb = space.embedder
     await ws.send_json({"type": "ready", "params": state["params"],
-                        "audio_capable": bool(getattr(space.embedder, "audio_capable", False) or hasattr(space.embedder, "_clap"))})
+                        "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
+                        "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model"))})
 
     def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
         return {"relevance": rel, "active": state["vq"] is not None,
@@ -371,13 +385,23 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if msg.get("type") == "websocket.disconnect":
                 raise WebSocketDisconnect(msg.get("code", 1000))
             if msg.get("bytes"):
-                # binary frame: uint32 LE sample-rate + int16 PCM mono
+                # binary frame, first byte = kind:
+                #   0x01 audio  → uint32 LE sample-rate + int16 PCM mono
+                #   0x02 image  → JPEG bytes
                 buf = msg["bytes"]
-                if len(buf) > 4 + 2 * 1000:
-                    sr = int(np.frombuffer(buf[:4], dtype="<u4")[0])
-                    pcm = np.frombuffer(buf[4:], dtype="<i2")
+                kind = buf[0] if buf else 0
+                if kind == 1 and len(buf) > 5 + 2 * 1000:
+                    sr = int(np.frombuffer(buf[1:5], dtype="<u4")[0])
+                    pcm = np.frombuffer(buf[5:], dtype="<i2")
                     state["audio_pending"] = (pcm, sr)   # latest wins
+                    state["image_pending"] = None
                     state["query_kind"] = "audio"
+                    state["query_dirty"] = True
+                    wake.set()
+                elif kind == 2 and len(buf) > 100:
+                    state["image_pending"] = bytes(buf[1:])
+                    state["audio_pending"] = None
+                    state["query_kind"] = "image"
                     state["query_dirty"] = True
                     wake.set()
                 continue
@@ -396,11 +420,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["query_text"] = str(m.get("text") or "")
                 state["query_kind"] = "text"
                 state["audio_pending"] = None
+                state["image_pending"] = None
                 state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
                 state["query_dirty"] = True
             elif t == "query_clear":
                 state["vq"] = None
                 state["audio_pending"] = None
+                state["image_pending"] = None
                 state["query_text"] = ""
                 state["query_dirty"] = True
             elif t == "audio_smoothing":
@@ -411,20 +437,29 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["graph_dirty"] = True
             wake.set()
 
-    async def _embed_pending_audio() -> None:
-        pend = state["audio_pending"]
-        if pend is None:
+    async def _embed_pending() -> None:
+        """Embed the latest queued audio window or camera frame (latest
+        wins, one at a time) and EMA-blend it into the active query."""
+        pend_a, pend_i = state["audio_pending"], state["image_pending"]
+        if pend_a is None and pend_i is None:
             return
         state["audio_pending"] = None
-        pcm, sr = pend
-        v = await asyncio.to_thread(_audio_vec, space, pcm, sr)
+        state["image_pending"] = None
+        if pend_i is not None:
+            v = await asyncio.to_thread(_image_vec, space, pend_i)
+            kind, label = "image", "(camera)"
+        else:
+            pcm, sr = pend_a
+            v = await asyncio.to_thread(_audio_vec, space, pcm, sr)
+            kind, label = "audio", "(audio)"
         a = state["audio_smoothing"]
-        prev = state["vq"] if state["query_kind"] == "audio" else None
+        prev = state["vq"] if state["query_kind"] == kind else None
         if prev is not None and a > 0:
             v = a * prev + (1.0 - a) * v
             v = v / (float(np.linalg.norm(v)) + 1e-9)
         state["vq"] = v
-        state["query_text"] = "(audio)"
+        state["query_kind"] = kind
+        state["query_text"] = label
 
     async def worker() -> None:
         nonlocal graph
@@ -436,14 +471,14 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     state["graph_dirty"] = False
                     ctx, params = state["context"], dict(state["params"])
                     graph = await asyncio.to_thread(_live_graph, space_id, space, ctx, params)
-                    await _embed_pending_audio()
+                    await _embed_pending()
                     rel = _relevance_vec(graph, state["vq"])
                     state["query_dirty"] = False
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
-                    await _embed_pending_audio()
+                    await _embed_pending()
                     rel = _relevance_vec(graph, state["vq"])
                     await ws.send_json({"type": "relevance", **_rel_msg(rel)})
             except Exception as e:

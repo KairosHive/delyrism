@@ -29,7 +29,7 @@ from delyrism import SymbolSpace, TextEmbedder  # noqa: E402
 
 
 # The engine knows only these primitive backend ids:
-_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap"}
+_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip"}
 
 # UI-facing Cloudflare presets — same mapping the Streamlit app uses.  Each UI
 # id collapses to backend="cloudflare" + a specific @cf/... model.

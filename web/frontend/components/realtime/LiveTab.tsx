@@ -66,15 +66,29 @@ function Inputs() {
 
 function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; status: string; nEdges: number; queryActive: boolean; error: string | null }) {
   const { query, setQuery, queryMode, setQueryMode, listening, startListening, stopListening, audioLevel, micError, audioCapable,
-          audioWindow, audioInterval, audioSmoothing, setAudioSmoothing, set, queryKind } = useLive(useShallow((s) => ({
+          audioWindow, audioInterval, audioSmoothing, setAudioSmoothing, set, queryKind,
+          imageCapable, watching, startWatching, stopWatching, camError, camInterval, camVideo } = useLive(useShallow((s) => ({
     query: s.query, setQuery: s.setQuery, queryMode: s.queryMode, setQueryMode: s.setQueryMode, listening: s.listening,
     startListening: s.startListening, stopListening: s.stopListening, audioLevel: s.audioLevel, micError: s.micError,
     audioCapable: s.audioCapable, audioWindow: s.audioWindow, audioInterval: s.audioInterval, audioSmoothing: s.audioSmoothing,
     setAudioSmoothing: s.setAudioSmoothing, set: s.set, queryKind: s.queryKind,
+    imageCapable: s.imageCapable, watching: s.watching, startWatching: s.startWatching, stopWatching: s.stopWatching,
+    camError: s.camError, camInterval: s.camInterval, camVideo: s.camVideo,
   })));
   const backend = useSidebar((s) => s.embedderBackend);
   const clapOk = audioCapable || backend === "clap";
+  const clipOk = imageCapable || backend === "clip";
   const level = Math.min(1, audioLevel * 6);
+  const previewRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const host = previewRef.current;
+    if (!host) return;
+    host.innerHTML = "";
+    if (camVideo) {
+      camVideo.className = "h-full w-full object-cover";
+      host.appendChild(camVideo);
+    }
+  }, [camVideo, queryMode]);
 
   return (
     <div className="console-card" data-accent style={{ borderColor: "rgba(194,166,254,0.35)" }}>
@@ -83,14 +97,14 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
         <span className="font-normal normal-case tracking-normal text-ink-500">pulls its overlap together · stretches the rest</span>
         <span className="ml-auto flex items-center gap-2 normal-case tracking-normal">
           <span className="inline-flex overflow-hidden rounded-md border border-ink-700 text-[10px]">
-            {(["text", "clap"] as const).map((m) => (
+            {(["text", "clap", "clip"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setQueryMode(m)}
                 className={`px-2 py-0.5 transition ${queryMode === m ? "bg-[#c2a6fe]/25 text-ink-50" : "text-ink-400 hover:text-ink-100"}`}
-                title={m === "clap" ? "continuous microphone through the CLAP audio tower" : "typed sentence"}
+                title={m === "clap" ? "continuous microphone through the CLAP audio tower" : m === "clip" ? "live camera through the CLIP image tower" : "typed sentence"}
               >
-                {m === "clap" ? "CLAP · mic" : "text"}
+                {m === "clap" ? "CLAP · mic" : m === "clip" ? "CLIP · camera" : "text"}
               </button>
             ))}
           </span>
@@ -109,6 +123,33 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
         />
+      ) : queryMode === "clip" ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <button
+              className={`btn ${watching ? "border-[#c2a6fe] text-[#e2d6ff]" : ""}`}
+              onClick={() => (watching ? stopWatching() : startWatching())}
+              disabled={!clipOk}
+              title={clipOk ? "toggle the camera" : "build the space with the CLIP backend first"}
+            >
+              {watching ? "■ stop" : "● watch"}
+            </button>
+            <div ref={previewRef} className="h-[76px] w-[102px] shrink-0 overflow-hidden rounded-md bg-ink-950/60" />
+            <div className="min-w-0 flex-1">
+              <Slider label="frame rate" value={camInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={(v) => set("camInterval", v)} help="How often a camera frame is embedded." />
+              <div className="mt-2">
+                <Slider label="smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous frame's vector — higher is calmer." />
+              </div>
+            </div>
+          </div>
+          {!clipOk && (
+            <div className="text-[11px] text-warning">
+              This space was built with <span className="font-mono">{backend}</span>, which has no image tower. Choose
+              <span className="mx-1 font-mono">Local · CLIP ViT-B/32 (image+text)</span> in the sidebar and rebuild — descriptors and frames then share one space.
+            </div>
+          )}
+          {camError && <div className="text-[11px] text-danger">{camError}</div>}
+        </div>
       ) : (
         <div className="space-y-2">
           <div className="flex items-center gap-3">

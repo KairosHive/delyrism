@@ -162,6 +162,7 @@ class TextEmbedder:
         self._tokenizer = None
         self._proj = None
         self.audio_capable = False        # <-- ADD
+        self.image_capable = False
 
         if self.backend_type == "sentence-transformer":
             self._init_original(model or "sentence-transformers/all-mpnet-base-v2")
@@ -175,12 +176,14 @@ class TextEmbedder:
             self._init_audioclip(model)                  # <-- ADD
         elif self.backend_type == "clap":
             self._init_clap(model or "laion/clap-htsat-fused")
+        elif self.backend_type == "clip":
+            self._init_clip(model)
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip")
 
         # Check if backend was properly initialized
-        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap"):
+        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip"):
             raise RuntimeError(f"[Embedder] FAILED to initialize backend '{backend}'. Check dependencies and model availability.")
 
     # ---------- init helpers ----------
@@ -395,6 +398,40 @@ class TextEmbedder:
         raise RuntimeError(
             f"Could not extract audio features from {type(out).__name__}"
         )
+
+    def _init_clip(self, model_name: Optional[str] = None):
+        """CLIP via open_clip — text tower embeds descriptors/queries, image
+        tower embeds camera frames into the SAME space.  `model_name` is
+        "ARCH/PRETRAINED" (default ViT-B-32/laion2b_s34b_b79k)."""
+        try:
+            import open_clip
+            arch, pretrained = "ViT-B-32", "laion2b_s34b_b79k"
+            if model_name and "/" in model_name:
+                arch, pretrained = model_name.split("/", 1)
+            self.oc_model, _, self.oc_preprocess = open_clip.create_model_and_transforms(
+                arch, pretrained=pretrained, device=self.device
+            )
+            self.oc_model.eval()
+            self.oc_tokenizer = open_clip.get_tokenizer(arch)
+            self.dim = int(self.oc_model.text_projection.shape[1]) if hasattr(self.oc_model, "text_projection") else 512
+            self.image_capable = True
+            print(f"[Embedder] CLIP (open_clip {arch}/{pretrained}) ready, dim={self.dim}.")
+        except Exception as e:
+            raise RuntimeError(f"CLIP init failed (open_clip): {e}")
+
+    @torch.no_grad()
+    def embed_image(self, image) -> np.ndarray:
+        """Embed a PIL image (or HxWx3 uint8 array) through the CLIP image
+        tower.  Available on the `clip` and `audioclip` backends."""
+        if not hasattr(self, "oc_model"):
+            raise RuntimeError("embed_image called but this backend has no image tower (use clip).")
+        from PIL import Image
+        if not isinstance(image, Image.Image):
+            image = Image.fromarray(np.asarray(image))
+        x = self.oc_preprocess(image.convert("RGB")).unsqueeze(0).to(self.device)
+        z = self.oc_model.encode_image(x)[0]
+        z = z / (z.norm() + 1e-8)
+        return z.detach().cpu().float().numpy()
 
     def _init_audioclip(self, model_name: Optional[str] = None):
         """
@@ -627,8 +664,8 @@ class TextEmbedder:
         if self.backend_type == "sentence-transformer" and self._backend is not None:
             return np.asarray(self._backend.encode(texts, normalize_embeddings=True, batch_size=batch_size), dtype=np.float32)
 
-        # --- NEW: AudioCLIP text path (open_clip) ---
-        if self.backend_type == "audioclip":
+        # --- open_clip text path (CLIP + AudioCLIP) ---
+        if self.backend_type in ("audioclip", "clip"):
             toks = self.oc_tokenizer(texts).to(self.device)   # list[str] -> token ids
             with torch.no_grad():
                 z = self.oc_model.encode_text(toks)           # [B, D]
