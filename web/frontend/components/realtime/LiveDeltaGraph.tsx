@@ -85,12 +85,19 @@ export function LiveDeltaGraph() {
     setData({ nodes, links });
   }, [graphSeq, graph]);
 
-  // ---- forces: damped springs that settle ----------------------------------
-  // The simulation is only kept hot while a relevance tween is running (see
-  // the animation loop); afterwards alpha decays and the engine stops, so
-  // the graph comes to rest instead of wiggling / drifting forever.
+  // ---- forces: temperature-controlled springs + rigid-mode damping --------
+  // d3's alpha is pinned at 1 (no decay); instead every force strength is
+  // scaled by our own temperature T: 1 while a relevance tween runs, then an
+  // exponential fade to exactly 0, so the graph is truly at rest between
+  // changes.  A separate "rigid" force removes the net rotation and net
+  // translation of the velocity field each tick — charge/link/radial are all
+  // rotation-invariant, so without this any asymmetric impulse leaves the
+  // whole layout spinning with nothing to stop it.
   const radialRef = React.useRef<any>(null);
-  const applyForces = React.useCallback(() => {
+  const rigidRef = React.useRef<any>(null);
+  const tempRef = React.useRef({ T: 1, hotUntil: 0 });
+
+  const applyForces = React.useCallback((T: number) => {
     const fg = fgRef.current;
     if (!fg) return;
     const st = useLive.getState();
@@ -100,31 +107,42 @@ export function LiveDeltaGraph() {
     try {
       const link = fg.d3Force("link");
       const charge = fg.d3Force("charge");
-      if (charge) charge.strength(-160);
+      if (charge) charge.strength(-160 * T);
       if (link) {
         link
           .distance((l: GLink) => (active ? long + (SHORT_DIST - long) * l.overlap : BASE_DIST))
-          .strength((l: GLink) => (active ? 0.18 + 0.4 * l.overlap : 0.35));
+          .strength((l: GLink) => (active ? 0.18 + 0.4 * l.overlap : 0.35) * T);
       }
       if (!radialRef.current) radialRef.current = makeRelevanceRadial();
-      radialRef.current.configure(active, 0.6 + 0.6 * contraction);
+      radialRef.current.configure(active, (0.6 + 0.6 * contraction) * T);
       if (fg.d3Force("radial") !== radialRef.current) fg.d3Force("radial", radialRef.current);
+      if (!rigidRef.current) rigidRef.current = makeRigidDamper();
+      // registered last so it sees the velocities every other force produced
+      if (fg.d3Force("rigid") !== rigidRef.current) fg.d3Force("rigid", rigidRef.current);
     } catch (err) {
       console.warn("[live] applyForces failed", err);
     }
   }, []);
 
-  // first mount / data swap: install forces (new link arrays need the distance fn re-bound)
-  React.useEffect(() => { applyForces(); fgRef.current?.d3ReheatSimulation?.(); }, [data, applyForces]);
+  /** Keep the layout hot for `ms` (new data, drag, slider) — the envelope fades after. */
+  const wake = React.useCallback((ms = 600) => {
+    tempRef.current.hotUntil = Math.max(tempRef.current.hotUntil, performance.now() + ms);
+    fgRef.current?.d3ReheatSimulation?.();
+  }, []);
 
-  // animation: tween rel → relT over `transition` seconds (ease-in-out), keep
-  // the simulation hot while the rest lengths are moving, then let it cool.
+  // first mount / data swap: install forces (new link arrays need the distance fn re-bound)
+  React.useEffect(() => { applyForces(1); wake(1200); }, [data, applyForces, wake]);
+
+  // animation: tween rel → relT over `transition` seconds (ease-in-out); the
+  // temperature stays 1 while rest lengths move, then fades with τ = 0.7 s.
   const lastActive = React.useRef(false);
   React.useEffect(() => {
     let raf = 0;
     let lastSeq = -1;
     let tweenStart = 0;
     let tweening = false;
+    let lastT = -1;
+    const FADE_TAU = 700;
     const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
     const tick = () => {
       raf = requestAnimationFrame(tick);
@@ -142,23 +160,37 @@ export function LiveDeltaGraph() {
         tweenStart = now;
         tweening = true;
       }
-      const activeChanged = st.queryActive !== lastActive.current;
-      if (!tweening && !activeChanged) return;
-      lastActive.current = st.queryActive;
-      const dur = Math.max(100, st.transition * 1000);
-      const u = Math.min(1, (now - tweenStart) / dur);
-      const k = ease(u);
-      for (const n of nodes) n.rel = n.relFrom + (n.relT - n.relFrom) * k;
-      for (const l of links) {
-        const a = typeof l.source === "object" ? (l.source as GNode).rel : 0;
-        const b = typeof l.target === "object" ? (l.target as GNode).rel : 0;
-        l.overlap = Math.sqrt(Math.max(0, a * b));
+      if (st.queryActive !== lastActive.current) {
+        lastActive.current = st.queryActive;
+        tempRef.current.hotUntil = Math.max(tempRef.current.hotUntil, now + 400);
+        if (!tweening) { tweenStart = now; tweening = true; }
       }
-      applyForces();
-      // hold alpha high while the springs are still moving; once the tween
-      // ends we stop reheating and d3AlphaDecay brings the graph to rest
-      fgRef.current?.d3ReheatSimulation?.();
-      if (u >= 1) tweening = false;
+      let restMoved = false;
+      if (tweening) {
+        const dur = Math.max(100, st.transition * 1000);
+        const u = Math.min(1, (now - tweenStart) / dur);
+        const k = ease(u);
+        for (const n of nodes) n.rel = n.relFrom + (n.relT - n.relFrom) * k;
+        for (const l of links) {
+          const a = typeof l.source === "object" ? (l.source as GNode).rel : 0;
+          const b = typeof l.target === "object" ? (l.target as GNode).rel : 0;
+          l.overlap = Math.sqrt(Math.max(0, a * b));
+        }
+        restMoved = true;
+        // hot while moving, plus a short tail so the springs can reach the new lengths
+        tempRef.current.hotUntil = Math.max(tempRef.current.hotUntil, now + 500);
+        if (u >= 1) tweening = false;
+      }
+      // temperature envelope
+      const env = tempRef.current;
+      let T = now < env.hotUntil ? 1 : Math.exp(-(now - env.hotUntil) / FADE_TAU);
+      if (T < 0.01) T = 0;
+      env.T = T;
+      if (restMoved || Math.abs(T - lastT) > 1e-3) {
+        lastT = T;
+        applyForces(T);
+        if (T > 0) fgRef.current?.d3ReheatSimulation?.();
+      }
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -168,7 +200,7 @@ export function LiveDeltaGraph() {
   const focus = useLive((s) => s.focus);
   React.useEffect(() => { useLive.setState((s) => ({ relevanceSeq: s.relevanceSeq + 1 })); }, [focus]);
   const contraction = useLive((s) => s.contraction);
-  React.useEffect(() => { applyForces(); fgRef.current?.d3ReheatSimulation?.(); }, [contraction, applyForces]);
+  React.useEffect(() => { wake(1500); }, [contraction, wake]);
 
   const height = Math.max(560, Math.min(860, Math.round((w || 1000) * 0.5)));
   const { lo: eLo, range: eRange } = edgeNorm.current;
@@ -196,11 +228,13 @@ export function LiveDeltaGraph() {
             backgroundColor="rgba(0,0,0,0)"
             cooldownTicks={Infinity}
             cooldownTime={Infinity}
-            d3AlphaDecay={0.028}
-            d3AlphaMin={0.002}
+            d3AlphaDecay={0}
+            d3AlphaMin={0}
             d3VelocityDecay={damping}
             warmupTicks={0}
             enableNodeDrag={true}
+            onNodeDrag={() => wake(400)}
+            onNodeDragEnd={() => wake(1500)}
             linkColor={(l: GLink) => {
               const a = queryActive ? 0.12 + 0.85 * l.overlap : 1;
               return l.sign === "up" ? `rgba(38,161,149,${(0.78 * a).toFixed(3)})` : `rgba(191,97,106,${(0.72 * a).toFixed(3)})`;
@@ -251,23 +285,57 @@ export function LiveDeltaGraph() {
 
 /** Radial spring: relevant nodes are pulled toward the centre, irrelevant
  *  ones toward a wide ring — the query literally pulls its subgraph in.
- *  One instance lives for the component's lifetime; `configure` updates it. */
+ *  One instance lives for the component's lifetime; `configure` updates it.
+ *  `strength` already carries the temperature. */
 function makeRelevanceRadial() {
   let nodes: GNode[] = [];
   let active = false;
   let strength = 1;
-  const force: any = (alpha: number) => {
+  const force: any = () => {
+    if (strength <= 0) return;
     for (const n of nodes) {
       const x = n.x ?? 0, y = n.y ?? 0;
       const r = Math.hypot(x, y) || 1e-6;
       const target = active ? 40 + (1 - n.rel) * 240 : 0;
-      const k = active ? 0.03 * strength : 0.02;
-      const pull = (target - r) * k * alpha;
+      const k = (active ? 0.03 : 0.02) * strength;
+      const pull = (target - r) * k;
       n.vx = (n.vx ?? 0) + (x / r) * pull;
       n.vy = (n.vy ?? 0) + (y / r) * pull;
     }
   };
   force.initialize = (n: GNode[]) => { nodes = n; };
   force.configure = (a: boolean, s: number) => { active = a; strength = s; };
+  return force;
+}
+
+/** Rigid-mode damper.  Subtracts the mean velocity (net translation) and
+ *  the rigid rotation about the centroid (net angular momentum) from every
+ *  node's velocity, each tick.  The remaining motion is purely internal —
+ *  expansion / contraction of the springs — which is the only motion that
+ *  carries information.  Fixed (dragged) nodes are left alone. */
+function makeRigidDamper() {
+  let nodes: GNode[] = [];
+  const force: any = () => {
+    const n = nodes.length;
+    if (n < 2) return;
+    let cx = 0, cy = 0, mvx = 0, mvy = 0;
+    for (const p of nodes) { cx += p.x ?? 0; cy += p.y ?? 0; mvx += p.vx ?? 0; mvy += p.vy ?? 0; }
+    cx /= n; cy /= n; mvx /= n; mvy /= n;
+    let L = 0, I = 0;
+    for (const p of nodes) {
+      const rx = (p.x ?? 0) - cx, ry = (p.y ?? 0) - cy;
+      const vx = (p.vx ?? 0) - mvx, vy = (p.vy ?? 0) - mvy;
+      L += rx * vy - ry * vx;
+      I += rx * rx + ry * ry;
+    }
+    const w = I > 1e-9 ? L / I : 0;
+    for (const p of nodes) {
+      if ((p as any).fx !== undefined && (p as any).fx !== null) continue;
+      const rx = (p.x ?? 0) - cx, ry = (p.y ?? 0) - cy;
+      p.vx = (p.vx ?? 0) - mvx - (-ry * w);
+      p.vy = (p.vy ?? 0) - mvy - (rx * w);
+    }
+  };
+  force.initialize = (n: GNode[]) => { nodes = n; };
   return force;
 }
