@@ -59,26 +59,16 @@ The cloud rewriting is configurable. From the sidebar:
 
 Each strategy produces a different `D′` and every Δ panel updates accordingly. Rankings / Attention / Subgraph use the original `D` + `v_ctx` (they're a spotlight on a fixed landscape, not a landscape rewrite).
 
-## Live mode — generative symbols by Δ-graph traversal
+## Live mode — context × query, animated Δ-graph
 
-A real-time tab. Instead of showing the Δ-graph for one context, a **walker** traverses the Δ-field as the context moves, and the trail of descriptors it passes through becomes a *new symbol*. The traversal engine is a standalone module (`delyrism/traversal.py`, `DeltaWalker`) with no web dependencies; the web layer streams it over a WebSocket (`/realtime/ws/{space_id}`).
+A real-time tab built on the same Δ-graph as the Explorer. Two sentences, both continuously editable:
 
-Three interfaces shape the context:
+- **Context** rewrites the descriptor cloud. Every edit (debounced ~180 ms) recomputes the Δ-graph server-side and the new edges flow into the running layout — nodes keep their positions, so the graph morphs instead of re-seeding.
+- **Query** selects the overlap. Every node of the current graph is scored by cosine to the query; the score becomes geometry. Edges whose two ends are both relevant contract onto short springs, the rest stretch, a radial force pulls the overlap to the centre, and irrelevant nodes dim. The force layout never cools (zero alpha decay) and the velocity damping is exposed as a slider, so the whole thing is a damped spring system reacting to what you type.
 
-- **Field** — the mouse over the 2D descriptor layout *is* the context (Gaussian kernel over nearby descriptor embeddings). Move continuously; the walker follows.
-- **Ring** — archetypes sit on a ring; moving between them blends their centroids.
-- **Choose** — a typed sentence sets the field; you pick each step from the ranked candidates.
+Transport is a WebSocket (`/realtime/graph/{space_id}`): the client sends `context`, `query` and `params` messages, the server answers with `graph` (nodes, edges, relevance) or `relevance` payloads. Shaping knobs: query focus (relevance exponent), contraction, damping, overlap cut, plus the Explorer's Δ parameters (top |Δ| edges, β, sign, shift strategy). The overlap subgraph is also listed as text, grouped by archetype.
 
-All three can be mixed with a sentence, played at a tempo or stepped by hand, and tuned progressively with sliders (temperature, path memory, cross-archetype diversity, coherence, autopoietic self-weight, Δ sign). Three live views: the **Δ-field traversal** canvas (hot edges, heat, trail, candidates), the **emerging-symbol sigil** (radial glyph whose chords are the symbol's internal cosine structure), and the **recipe** (ordered descriptors with their Δ gains, archetype composition, sealed-symbol gallery). *Add to structure* writes a sealed symbol into the Symbolic Structure JSON so the next build embeds it as a real archetype.
-
-```python
-from delyrism import SymbolSpace, TextEmbedder, DeltaWalker
-walker = DeltaWalker(space)
-walker.set_context(walker.context_from_text("a slow fire under ice"))
-walker.compute_field()
-for _ in range(8): walker.step()
-print(walker.symbol()["descriptors"])
-```
+The companion module `delyrism/traversal.py` (`DeltaWalker`) is a transport-agnostic walker over the same Δ-field — it steps from descriptor to descriptor following the context pull and assembles the trail into a new symbol. It is exposed on `/realtime/ws/{space_id}` and usable from plain Python, but has no UI in this tab yet.
 
 ## Story generator
 

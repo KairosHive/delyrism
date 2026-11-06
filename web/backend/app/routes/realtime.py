@@ -232,3 +232,153 @@ async def walker_socket(ws: WebSocket, space_id: str, layout: str = "umap"):
     finally:
         for t in tasks:
             t.cancel()
+
+
+# ============================================================================
+#  Live Δ-graph socket — context + query, continuously recomputed
+# ============================================================================
+#
+#   WS /realtime/graph/{space_id}
+#
+#   client → server
+#     context {text}                     recompute the Δ-graph for this sentence
+#     query   {text}                     re-score node relevance to this sentence
+#     params  {...DeltaGraphRequest-ish} top_abs_edges, sign_filter, beta, …
+#   server → client
+#     graph     {nodes, edges, relevance, context, query}   on context/params change
+#     relevance {relevance, query}                           on query change only
+#
+# Relevance is cosine(D1_i, v_query) over the nodes of the current graph,
+# min-max normalised to [0,1].  The client turns that into edge lengths: an
+# edge whose two ends are both relevant contracts, the rest stretch — so the
+# query *sculpts* the context graph instead of filtering it.
+
+from delyrism import context_delta_graph  # noqa: E402
+
+_GRAPH_DEFAULTS: Dict[str, Any] = dict(
+    strategy="gate", beta=1.2, gate="relu", tau=0.3, within_symbol_softmax=True,
+    gamma=0.5, prompt_template="{sent}, {desc}", pool_type="avg", pool_w=0.7,
+    membership_alpha=0.0, top_abs_edges=30, min_abs_delta=0.01, within_symbol=False,
+    connected_only=True, sign_filter="up", sym_filter=None,
+)
+_SHIFT_KEYS = ("strategy", "beta", "gate", "tau", "within_symbol_softmax", "gamma",
+               "prompt_template", "pool_type", "pool_w", "membership_alpha")
+
+
+def _live_graph(space_id: str, space, context: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    cmap = {k: to_hex(v) for k, v in
+            space.get_symbol_color_dict(palette=engine_cache.get_palette(space)).items()}
+    if not context.strip():
+        return {"nodes": [], "edges": [], "idx": {}}
+    G = context_delta_graph(
+        space, sentence=context, weights=None,
+        **{k: params[k] for k in _SHIFT_KEYS},
+        top_abs_edges=int(params["top_abs_edges"]),
+        min_abs_delta=float(params["min_abs_delta"]),
+        within_symbol=bool(params["within_symbol"]),
+        connected_only=bool(params["connected_only"]),
+        sign_filter=params.get("sign_filter"),
+        sym_filter=params.get("sym_filter"),
+        only_symbol=None,
+    )
+    D1 = engine_cache.get_or_compute_shifted_matrix(space_id, space, dict(
+        weights=None, sentence=context, **{k: params[k] for k in _SHIFT_KEYS}))
+    vctx = space.ctx_vec(sentence=context, ignore_override=True)
+    pull = D1 @ vctx
+    nodes, idx = [], {}
+    for n in G.nodes():
+        i = space.desc_idx[n]
+        idx[n] = i
+        nodes.append({"id": n, "symbol": space.owner.get(n, ""),
+                      "color": cmap.get(space.owner.get(n, ""), "#888"),
+                      "pull": round(float(pull[i]), 4)})
+    edges = [{"source": u, "target": v, "delta": round(float(a["delta"]), 5),
+              "sign": a["sign"], "abs_delta": round(float(a["abs_delta"]), 5)}
+             for u, v, a in G.edges(data=True)]
+    return {"nodes": nodes, "edges": edges, "idx": idx, "D1": D1}
+
+
+def _relevance(space, graph: Dict[str, Any], query: str) -> Dict[str, float]:
+    if not query.strip() or not graph["nodes"]:
+        return {}
+    vq = space._sent_vec(query, ignore_override=True)
+    D1 = graph.get("D1")
+    if D1 is None:
+        D1 = space.D
+    ids = [n["id"] for n in graph["nodes"]]
+    rows = np.asarray([graph["idx"][i] for i in ids])
+    r = D1[rows] @ vq
+    lo, hi = float(r.min()), float(r.max())
+    r = (r - lo) / (hi - lo) if hi - lo > 1e-9 else np.ones_like(r)
+    return {i: round(float(x), 4) for i, x in zip(ids, r)}
+
+
+@router.websocket("/graph/{space_id}")
+async def live_graph_socket(ws: WebSocket, space_id: str):
+    space = engine_cache.get_space(space_id)
+    await ws.accept()
+    if space is None:
+        await ws.send_json({"type": "error", "detail": "unknown space_id — build a space first"})
+        await ws.close(code=4404)
+        return
+
+    state = {"context": "", "query": "", "params": dict(_GRAPH_DEFAULTS),
+             "graph_dirty": False, "query_dirty": False}
+    graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
+    wake = asyncio.Event()
+    await ws.send_json({"type": "ready", "params": state["params"]})
+
+    async def reader() -> None:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            t = msg.get("type")
+            if t == "context":
+                state["context"] = str(msg.get("text") or "")
+                state["graph_dirty"] = True
+            elif t == "query":
+                state["query"] = str(msg.get("text") or "")
+                state["query_dirty"] = True
+            elif t == "params":
+                patch = {k: v for k, v in (msg.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
+                state["params"].update(patch)
+                state["graph_dirty"] = True
+            wake.set()
+
+    async def worker() -> None:
+        nonlocal graph
+        while True:
+            await wake.wait()
+            wake.clear()
+            try:
+                if state["graph_dirty"]:
+                    state["graph_dirty"] = False
+                    ctx, params = state["context"], dict(state["params"])
+                    graph = await asyncio.to_thread(_live_graph, space_id, space, ctx, params)
+                    rel = await asyncio.to_thread(_relevance, space, graph, state["query"])
+                    state["query_dirty"] = False
+                    await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
+                                        "relevance": rel, "context": ctx, "query": state["query"]})
+                elif state["query_dirty"]:
+                    state["query_dirty"] = False
+                    q = state["query"]
+                    rel = await asyncio.to_thread(_relevance, space, graph, q)
+                    await ws.send_json({"type": "relevance", "relevance": rel, "query": q})
+            except Exception as e:
+                await ws.send_json({"type": "error", "detail": str(e)})
+            if state["graph_dirty"] or state["query_dirty"]:
+                wake.set()  # something arrived while we were computing
+
+    tasks = [asyncio.create_task(reader()), asyncio.create_task(worker())]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for d in done:
+            exc = d.exception()
+            if exc and not isinstance(exc, (WebSocketDisconnect, RuntimeError)):
+                print(f"[realtime] graph socket failed: {exc!r}")
+    finally:
+        for t in tasks:
+            t.cancel()

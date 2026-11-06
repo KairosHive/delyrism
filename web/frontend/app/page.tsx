@@ -5,7 +5,7 @@ import { Explorer } from "@/components/explorer/Explorer";
 import { StoryGenerator } from "@/components/story/StoryGenerator";
 import { ArchetypeBuilder } from "@/components/builder/ArchetypeBuilder";
 import { TopologyTab } from "@/components/topology/TopologyTab";
-import { RealtimeTab } from "@/components/realtime/RealtimeTab";
+import { LiveTab } from "@/components/realtime/LiveTab";
 import { Title } from "@/components/header/Title";
 import { Console } from "@/components/header/Console";
 import { BuildButton } from "@/components/header/BuildButton";
@@ -17,7 +17,7 @@ type TabId = "explorer" | "topology" | "live" | "story" | "builder";
 const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "explorer", label: "Explorer", hint: "context-conditioned embeddings" },
   { id: "topology", label: "Topology", hint: "shape & cycles" },
-  { id: "live",     label: "Live",     hint: "walk the Δ-field, grow new symbols" },
+  { id: "live",     label: "Live",     hint: "context × query, animated Δ-graph" },
   { id: "story",    label: "Story",    hint: "weave motifs into micro-fiction" },
   { id: "builder",  label: "Builder",  hint: "compose archetype sets" },
 ];
@@ -90,7 +90,7 @@ export default function Home() {
         <section className="flex-1 px-3 pb-10 pt-4 md:px-8 md:pt-6">
           {tab === "explorer" && <Explorer />}
           {tab === "topology" && <TopologyTab />}
-          {tab === "live" && <RealtimeTab />}
+          {tab === "live" && <LiveTab />}
           {tab === "story" && <StoryGenerator />}
           {tab === "builder" && <ArchetypeBuilder />}
         </section>
