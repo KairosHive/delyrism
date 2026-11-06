@@ -32,7 +32,14 @@ movement in space, and its timing.  That text is what queries the space
 through its text tower.  The single levels (abstract, qualities, body)
 remain available for comparison.
 
+A fixed calibration leaves a real dancer at one end of several qualities
+for most windows, so the same words keep returning.  `SessionNorm` keeps
+each quality's recent history and re-centres it on the session's own
+median and spread, so the words follow what changes within a performance
+(the live query uses it by default).  Stillness stays absolute.
+
     reading = describe(traj, seconds=3.0)
+    reading = describe(traj, seconds=3.0, session=norm)     # norm = SessionNorm(), one per dancer
     reading.text            # "Vigorous, sudden and strong movement. ..."
     reading.qualities       # {"energy": Quality(value=0.81, raw=1.9, ...), ...}
 
@@ -67,6 +74,7 @@ class Quality:
     unit: str
     low: str                # the low pole, in words
     high: str               # the high pole
+    absolute: float = float("nan")   # the fixed-calibration value when `value` is session-relative
 
 
 @dataclass
@@ -463,9 +471,74 @@ def _hands(P: np.ndarray, off: int) -> Dict[str, Quality]:
     return q
 
 
-def describe(traj: PoseTrajectory, seconds: float = 3.0, level: str = "full") -> MotionReading:
+def _is_still(energy: Optional[Quality]) -> bool:
+    """Near stillness, judged on the fixed calibration even when the value
+    is session-relative (a quiet stretch of a lively session still moves)."""
+    if energy is None:
+        return False
+    v = energy.absolute if np.isfinite(energy.absolute) else energy.value
+    return bool(np.isfinite(v) and v < 1 / 6)
+
+
+class SessionNorm:
+    """Each quality measured against this session's own range.
+
+    The fixed calibration leaves most windows of a real dancer at one end
+    of several qualities (always fluid, always low, never rhythmic), so the
+    same words come back however the movement changes.  `apply` re-centres
+    every quality on its recent history: the session median maps to the
+    middle (left unsaid), and distance from it is scaled by the session's
+    spread.  The spread has a floor, so a dancer holding one movement does
+    not have tracker noise read as contrast.  Stillness is judged on the
+    absolute energy, and a still window adds only its energy to the history.
+
+        norm = SessionNorm()                    # one per dancer / tracker
+        describe(traj, 3.0, session=norm)       # every refresh
+    """
+
+    def __init__(self, memory: float = 120.0, floor: float = 0.08, warmup: int = 5):
+        self.memory = float(memory)     # seconds of history
+        self.floor = float(floor)       # smallest spread (0-1 units) counted as contrast
+        self.warmup = int(warmup)       # readings before a quality is re-centred
+        self._hist: Dict[str, List[Tuple[float, float]]] = {}
+
+    def reset(self) -> None:
+        self._hist.clear()
+
+    @property
+    def samples(self) -> int:
+        return max((len(h) for h in self._hist.values()), default=0)
+
+    def apply(self, reading: MotionReading, t: float, relative: float = 1.0) -> MotionReading:
+        """Re-centre `reading`'s qualities in place (`relative` 0 keeps the
+        fixed calibration, 1 is fully session-relative) and record them."""
+        still = _is_still(_effort_q(reading).get("energy"))
+        for d in (reading.qualities, reading.hands):
+            for k, q in list(d.items()):
+                if not np.isfinite(q.value) or (still and k not in ("energy", "hand_speed")):
+                    continue
+                h = self._hist.setdefault(k, [])
+                if h and t < h[-1][0] - 1.0:             # the clock restarted: a new session
+                    h.clear()
+                h.append((t, q.value))
+                while h[0][0] < t - self.memory:
+                    h.pop(0)
+                if still or len(h) < self.warmup or relative <= 0:
+                    continue
+                H = np.array([v for _, v in h])
+                spread = max((np.percentile(H, 84) - np.percentile(H, 16)) / 2.0, self.floor)
+                rel = 0.5 + 0.5 * math.tanh((q.value - float(np.median(H))) / (1.5 * spread))
+                d[k] = Quality(q.key, float((1.0 - relative) * q.value + relative * rel), q.raw, q.unit,
+                               q.low, q.high, absolute=q.value)
+        return reading
+
+
+def describe(traj: PoseTrajectory, seconds: float = 3.0, level: str = "full",
+             session: Optional[SessionNorm] = None, relative: float = 1.0) -> MotionReading:
     """Measure the movement qualities of the last `seconds` of a trajectory
-    and describe them at `level` (full | abstract | qualities | body, see to_text)."""
+    and describe them at `level` (full | abstract | qualities | body, see to_text).
+    With a `session`, the qualities are re-expressed against the session's
+    own range first (`relative` 0 = fixed calibration … 1 = fully relative)."""
     sk = traj.skeleton
     reading = MotionReading(tracker=sk.name, seconds=seconds, coverage=0.0)
     if len(traj) < 3:
@@ -480,6 +553,8 @@ def describe(traj: PoseTrajectory, seconds: float = 3.0, level: str = "full") ->
         reading.qualities, reading.trends = _body(P, L, seconds)
     if sk.name in ("hands", "both"):
         reading.hands = _hands(P, 0 if sk.name == "hands" else N_LANDMARKS)
+    if session is not None:
+        session.apply(reading, float(traj.span[1]), relative)
     reading.text = to_text(reading, level)
     return reading
 
@@ -542,7 +617,7 @@ def _sentence(s: str) -> str:
 def _body_text(q: Dict[str, Quality], tr: Dict[str, float]) -> List[str]:
     out: List[str] = []
     energy = q.get("energy")
-    if energy is not None and np.isfinite(energy.value) and energy.value < 1 / 6:
+    if _is_still(energy):
         lines = ["Near stillness, the body barely moving"]
         if tr.get("stillness", 0) > 0.8:
             lines[0] += ", held and quiet"
@@ -723,8 +798,7 @@ def _qword(q: Optional[Quality]) -> Optional[str]:
 
 def _qualities_text(reading: MotionReading) -> str:
     eff = _effort_q(reading)
-    energy = eff.get("energy")
-    if energy is not None and np.isfinite(energy.value) and energy.value < 1 / 6:
+    if _is_still(eff.get("energy")):
         return "Still, motionless, at rest."            # the other measures are tracker noise here
     first = [w for w in (_qword(eff.get(k)) for k in ("energy", "time", "weight", "space", "flow")) if w]
     second = [w for w in (_qword(reading.qualities.get(k)) for k in ("shape", "level", "symmetry")) if w]
@@ -811,8 +885,7 @@ def _effort_words(reading: MotionReading) -> List[str]:
 
 
 def _still(reading: MotionReading) -> bool:
-    energy = _effort_q(reading).get("energy")
-    return energy is not None and np.isfinite(energy.value) and energy.value < 1 / 6
+    return _is_still(_effort_q(reading).get("energy"))
 
 
 def _abstract_text(reading: MotionReading) -> str:
@@ -967,6 +1040,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     ap.add_argument("--end", type=float)
     ap.add_argument("--level", default="full", choices=LEVELS,
                     help="full (default, layered, no body parts) | abstract | qualities | body (concrete)")
+    ap.add_argument("--relative", type=float, default=1.0,
+                    help="0 = fixed calibration, 1 (default) = each quality against the video's own range so far")
     ap.add_argument("--values", action="store_true", help="also print each quality's value")
     a = ap.parse_args(argv)
     traj = (_T.load(a.input) if a.input.endswith(".npz")
@@ -975,9 +1050,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if not len(t):
         print("no landmarks"); return
     end = float(t[0]) + a.window
+    norm = SessionNorm()
     while end <= float(t[-1]) + 1e-6:
         win = traj.window(a.window + 0.5, end=end)
-        r = describe(win, a.window, a.level)
+        r = describe(win, a.window, a.level, session=norm, relative=a.relative)
         print(f"[{end - a.window:7.2f} - {end:7.2f} s] {r.text or '(nothing tracked)'}")
         if a.values:
             vals = {k: round(q.value, 2) for k, q in {**r.qualities, **r.hands}.items() if np.isfinite(q.value)}

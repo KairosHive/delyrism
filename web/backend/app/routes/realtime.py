@@ -307,7 +307,7 @@ def osc_configure(cfg: Dict[str, Any]) -> Dict[str, Any]:
 _GRAPH_DEFAULTS: Dict[str, Any] = dict(
     strategy="gate", beta=1.2, gate="relu", tau=0.3, within_symbol_softmax=True,
     gamma=0.5, prompt_template="{sent}, {desc}", pool_type="avg", pool_w=0.7,
-    membership_alpha=0.0, top_abs_edges=15, min_abs_delta=0.01, within_symbol=False,
+    membership_alpha=0.0, top_abs_edges=30, min_abs_delta=0.01, within_symbol=False,
     connected_only=True, sign_filter="up", sym_filter=None,
 )
 _SHIFT_KEYS = ("strategy", "beta", "gate", "tau", "within_symbol_softmax", "gamma",
@@ -536,9 +536,21 @@ def _pose_ingest(stream: PoseStream, frames: list, opts: Dict[str, Any], draw: b
     return found, preview
 
 
-def _motion_reading(stream: PoseStream, seconds: float, level: str) -> dict:
+def _motion_reading(stream: PoseStream, seconds: float, level: str, session, relative: float) -> dict:
     from delyrism.motion import describe
-    return describe(stream.trajectory, seconds, level).to_dict()
+    d = describe(stream.trajectory, seconds, level, session=session, relative=relative).to_dict()
+    d["session_samples"] = session.samples
+    return d
+
+
+def _motion_session(state: Dict[str, Any]):
+    """The SessionNorm of the current pose stream (a new tracker or stream
+    starts a new session)."""
+    from delyrism.motion import SessionNorm
+    cur = state.get("motion_session")
+    if cur is None or cur[0] is not state["pose"]:
+        cur = state["motion_session"] = (state["pose"], SessionNorm())
+    return cur[1]
 
 
 def _motion_baseline(space, level: str) -> Optional[np.ndarray]:
@@ -835,9 +847,16 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             elif t == "motion_tick":
                 if state["pose"] is not None:
                     level = m.get("level") if m.get("level") in ("full", "abstract", "qualities", "body") else "full"
+                    rel = m.get("relative")
                     state["pending"] = ("motion", (float(np.clip(float(m.get("window") or 3.0), 1.0, 10.0)), level,
-                                                   float(np.clip(float(m.get("contrast") or 0.0), 0.0, 1.0))))
+                                                   float(np.clip(float(m.get("contrast") or 0.0), 0.0, 1.0)),
+                                                   1.0 if rel is None else float(np.clip(float(rel), 0.0, 1.0))))
                     state["query_dirty"] = True
+            elif t == "motion_reset":
+                # forget the session's range (a new dancer, a new piece)
+                if state.get("motion_session") is not None:
+                    state["motion_session"][1].reset()
+                continue
             elif t == "pose_params":
                 opts = state["pose_opts"]
                 for k in _POSE_DEFAULTS:
@@ -892,8 +911,9 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             # movement → words → the text tower: works with every backend
             if state["pose"] is None:
                 return
-            window, level, contrast = payload
-            reading = await asyncio.to_thread(_motion_reading, state["pose"], window, level)
+            window, level, contrast, relative = payload
+            reading = await asyncio.to_thread(_motion_reading, state["pose"], window, level,
+                                              _motion_session(state), relative)
             await ws.send_json({"type": "motion", "level": level, **reading})
             if not reading["text"]:
                 return          # nothing tracked or nothing moving enough to say: hold the last query

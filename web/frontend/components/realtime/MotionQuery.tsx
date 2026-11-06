@@ -17,9 +17,10 @@ function QualityBar({ q, stale }: { q: MotionQuality; stale?: boolean }) {
   const v = q.value;
   const salient = v !== null && (v < 0.4 || v > 0.6);
   const raw = q.raw === null ? "–" : Math.abs(q.raw) >= 100 ? q.raw.toFixed(0) : q.raw.toFixed(2);
+  const abs = q.absolute === null || q.absolute === undefined ? "" : ` · fixed scale ${q.absolute.toFixed(2)}`;
   return (
     <div className={`grid grid-cols-[minmax(0,1fr)_minmax(80px,1.4fr)_minmax(0,1fr)] items-center gap-2 text-[10px] transition-opacity ${stale ? "opacity-40" : ""}`}
-         title={`${NAMES[q.key] ?? q.key}: ${v === null ? "not measurable here" : v.toFixed(2)} · raw ${raw} ${q.unit}${stale ? " · last measured value (not in this window)" : ""}`}>
+         title={`${NAMES[q.key] ?? q.key}: ${v === null ? "not measurable here" : v.toFixed(2)}${abs} · raw ${raw} ${q.unit}${stale ? " · last measured value (not in this window)" : ""}`}>
       <span className={`truncate text-right ${v !== null && v < 0.4 ? "text-ink-100" : "text-ink-500"}`}>{q.low}</span>
       <div className="relative h-1.5 rounded-full bg-ink-800">
         <div className="absolute inset-y-0 left-[40%] right-[40%] bg-ink-700/70" />
@@ -99,9 +100,9 @@ function Applied() {
  * the space's text tower, so this works with every backend.
  */
 export function MotionPanel() {
-  const { motion, motionWindow, motionContrast, motionRefresh, setMotionRefresh, poseFps, poseOpts,
+  const { motion, motionWindow, motionContrast, motionRelative, motionRefresh, setMotionRefresh, poseFps, poseOpts,
           setPoseOpts, set, live, setQuery } = useLive(useShallow((s) => ({
-    motion: s.motion, motionWindow: s.motionWindow, motionContrast: s.motionContrast,
+    motion: s.motion, motionWindow: s.motionWindow, motionContrast: s.motionContrast, motionRelative: s.motionRelative,
     motionRefresh: s.motionRefresh, setMotionRefresh: s.setMotionRefresh, poseFps: s.poseFps, poseOpts: s.poseOpts,
     setPoseOpts: s.setPoseOpts, set: s.set, live: s.live, setQuery: s.setQuery,
   })));
@@ -141,7 +142,12 @@ export function MotionPanel() {
           </p>
           <div className="flex flex-wrap items-center gap-1.5">
             {trends.map((t) => <span key={t} className="pill text-[10px]">{t}</span>)}
-            <button className="btn ml-auto text-[11px]" disabled={!motion?.text}
+            <button className="btn ml-auto text-[11px]" disabled={!send || motionRelative <= 0}
+                    onClick={() => send?.({ type: "motion_reset" })}
+                    title={`forget this session's range of movement and start learning it again (a new dancer, a new piece)${motion?.session_samples ? ` · ${motion.session_samples} readings so far` : ""}`}>
+              ↺ new session
+            </button>
+            <button className="btn text-[11px]" disabled={!motion?.text}
                     onClick={() => motion?.text && setQuery(motion.text)}
                     title="copy this description into the typed query (switch to text to freeze it there)">
               ⤓ copy to text query
@@ -156,6 +162,10 @@ export function MotionPanel() {
                 onChange={(v) => set("motionWindow", v)} help="Seconds of movement each description covers. Longer is steadier and catches rhythm; shorter reacts faster." />
         <Slider label="contrast" value={motionContrast} min={0} max={1} step={0.05}
                 onChange={(v) => set("motionContrast", v)} help="Removes the direction every movement description shares, so what is distinctive in this one moves the graph. 0 = the raw description; 0.7 lets contrasting movements reorder the graph about twice as much." />
+        <Slider label="session-relative" value={motionRelative} min={0} max={1} step={0.05}
+                format={(v) => (v <= 0 ? "fixed scale" : v >= 1 ? "this session" : v.toFixed(2))}
+                onChange={(v) => set("motionRelative", v)}
+                help="1 = each quality is measured against this session's own range (the last 2 minutes), so the words follow what changes in this performance and the subgraph moves with it. 0 = a fixed scale: the same movement always gets the same words, but a dancer who is always fluid always reads as fluid. Stillness is always judged on the fixed scale." />
         <Slider label="tracking" value={poseFps} min={10} max={60} step={1} format={(v) => `${v} fps`}
                 onChange={(v) => set("poseFps", v)} help="Frames tracked per second (on the GPU). The qualities need at least 20 for speed and smoothness." />
         <TrackRate />

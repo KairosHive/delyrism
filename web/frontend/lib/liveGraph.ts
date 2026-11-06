@@ -81,10 +81,11 @@ export const POSE_TRAILS: Record<PoseTracker, { value: string; label: string }[]
   ],
 };
 
-/** One movement quality as measured by delyrism/motion.py (value 0 = low pole, 1 = high pole). */
-export interface MotionQuality { key: string; value: number | null; raw: number | null; unit: string; low: string; high: string; }
+/** One movement quality as measured by delyrism/motion.py (value 0 = low pole, 1 = high pole).
+ *  `absolute` is the fixed-calibration value when `value` is relative to the session. */
+export interface MotionQuality { key: string; value: number | null; raw: number | null; unit: string; low: string; high: string; absolute?: number | null; }
 export interface MotionReading {
-  tracker: string; seconds: number; coverage: number;
+  tracker: string; seconds: number; coverage: number; session_samples?: number;
   qualities: MotionQuality[]; hands: MotionQuality[];
   trends: Record<string, number | null>; text: string;
 }
@@ -126,6 +127,7 @@ interface LiveState {
   trackStats: TrackStats | null;  // measured rates while tracking (2 Hz)
   motionWindow: number;          // seconds of movement per description
   motionContrast: number;        // 0..1, how much of the shared "movement description" direction is removed
+  motionRelative: number;        // 0 = fixed calibration … 1 = each quality against this session's own range
   motionRefresh: number;         // seconds between descriptions (each one replaces the query)
   motion: MotionReading | null;  // the latest description from the server
   motionApplied: { text: string; at: number } | null;   // the description the query last took, and when
@@ -339,7 +341,7 @@ function sendWindow(get: () => LiveState) {
     s._send?.({ type: "pose_tick", window: s.videoWindow, frames: videoFrameCount(s) });
   } else if (s.queryMode === "motion") {
     // … or for a description of its movement qualities, embedded as text
-    s._send?.({ type: "motion_tick", window: s.motionWindow, contrast: s.motionContrast });
+    s._send?.({ type: "motion_tick", window: s.motionWindow, contrast: s.motionContrast, relative: s.motionRelative });
   }
 }
 
@@ -393,6 +395,7 @@ export const useLive = create<LiveState>((set, get) => ({
   trackerState: "off",
   motionWindow: 3.0,
   motionContrast: 0.7,
+  motionRelative: 1.0,
   motionRefresh: 3.0,
   motion: null,
   motionApplied: null,
@@ -491,7 +494,7 @@ export const useLive = create<LiveState>((set, get) => ({
 
 /** The Live tab's own default for the number of strongest Δ edges (the
  *  Explorer keeps its own sidebar value). */
-export const LIVE_TOP_ABS_EDGES = 15;
+export const LIVE_TOP_ABS_EDGES = 30;
 
 /** Δ-graph params mirrored from the Explorer sidebar, so the live graph
  *  starts out like the one in the Explorer tab — except the edge count, which
