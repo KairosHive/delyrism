@@ -18,6 +18,14 @@ const BASE =
   process.env.NEXT_PUBLIC_API_BASE
   || (process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : "");
 
+/** WebSocket URL for a backend path — same origin rules as `BASE`. */
+export function wsUrl(path: string): string {
+  if (BASE) return BASE.replace(/^http/, "ws") + path;
+  if (typeof window === "undefined") return path;
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}${path}`;
+}
+
 // Per-route timing log so the UI can surface "what was slow on the last call".
 // Keyed by path; updated on every successful request.
 export interface Timing {

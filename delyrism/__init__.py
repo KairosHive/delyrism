@@ -6,3 +6,4 @@ from .delyrism import (
     plot_contextual_subgraph_colored,
     plot_ambiguity_metrics
 )
+from .traversal import DeltaWalker, WalkerParams

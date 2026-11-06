@@ -59,6 +59,27 @@ The cloud rewriting is configurable. From the sidebar:
 
 Each strategy produces a different `D′` and every Δ panel updates accordingly. Rankings / Attention / Subgraph use the original `D` + `v_ctx` (they're a spotlight on a fixed landscape, not a landscape rewrite).
 
+## Live mode — generative symbols by Δ-graph traversal
+
+A real-time tab. Instead of showing the Δ-graph for one context, a **walker** traverses the Δ-field as the context moves, and the trail of descriptors it passes through becomes a *new symbol*. The traversal engine is a standalone module (`delyrism/traversal.py`, `DeltaWalker`) with no web dependencies; the web layer streams it over a WebSocket (`/realtime/ws/{space_id}`).
+
+Three interfaces shape the context:
+
+- **Field** — the mouse over the 2D descriptor layout *is* the context (Gaussian kernel over nearby descriptor embeddings). Move continuously; the walker follows.
+- **Ring** — archetypes sit on a ring; moving between them blends their centroids.
+- **Choose** — a typed sentence sets the field; you pick each step from the ranked candidates.
+
+All three can be mixed with a sentence, played at a tempo or stepped by hand, and tuned progressively with sliders (temperature, path memory, cross-archetype diversity, coherence, autopoietic self-weight, Δ sign). Three live views: the **Δ-field traversal** canvas (hot edges, heat, trail, candidates), the **emerging-symbol sigil** (radial glyph whose chords are the symbol's internal cosine structure), and the **recipe** (ordered descriptors with their Δ gains, archetype composition, sealed-symbol gallery). *Add to structure* writes a sealed symbol into the Symbolic Structure JSON so the next build embeds it as a real archetype.
+
+```python
+from delyrism import SymbolSpace, TextEmbedder, DeltaWalker
+walker = DeltaWalker(space)
+walker.set_context(walker.context_from_text("a slow fire under ice"))
+walker.compute_field()
+for _ in range(8): walker.step()
+print(walker.symbol()["descriptors"])
+```
+
 ## Story generator
 
 A separate tab. Weaves Δ-graph motifs into micro-fiction with:

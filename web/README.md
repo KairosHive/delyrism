@@ -87,6 +87,8 @@ POST /context/encode-audio    embed an uploaded audio file (CLAP/AudioCLIP)
 POST /context/set-override    push an external context vector into the space
 POST /story/generate          Cloudflare Workers AI story generation
 GET  /story/models            list supported provider models
+GET  /realtime/layout/{id}    2D layout + colors for the Live tab
+WS   /realtime/ws/{id}        Δ-walker session: pointer/anchors/text in, frames out
 GET  /builder                 Egregore service URL for the frontend iframe
 GET  /miner                   (legacy alias for /builder)
 GET  /backends                embedder catalog for the sidebar dropdown
