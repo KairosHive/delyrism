@@ -241,8 +241,8 @@ function Overlap() {
 }
 
 function Knobs() {
-  const { params, setParams, focus, contraction, damping, threshold, set } = useLive(useShallow((s) => ({
-    params: s.params, setParams: s.setParams, focus: s.focus, contraction: s.contraction, damping: s.damping, threshold: s.threshold, set: s.set,
+  const { params, setParams, focus, contraction, damping, transition, threshold, set } = useLive(useShallow((s) => ({
+    params: s.params, setParams: s.setParams, focus: s.focus, contraction: s.contraction, damping: s.damping, transition: s.transition, threshold: s.threshold, set: s.set,
   })));
   return (
     <div className="panel-tight space-y-3">
@@ -250,7 +250,8 @@ function Knobs() {
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
         <Slider label="query focus" value={focus} min={0.5} max={4} step={0.1} onChange={(v) => set("focus", v)} help="Sharpens relevance (exponent). High = only the closest nodes count as overlap." />
         <Slider label="contraction" value={contraction} min={0} max={1} step={0.01} onChange={(v) => set("contraction", v)} help="How much the query reshapes the springs: overlap edges shorten, the rest lengthen and drift outward." />
-        <Slider label="damping" value={damping} min={0.1} max={0.8} step={0.01} onChange={(v) => set("damping", v)} help="Velocity damping of the spring simulation. Low = bouncy, high = viscous." />
+        <Slider label="transition" value={transition} min={0.3} max={4} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("transition", v)} help="How long a query change takes to reach its new spring rest lengths — the visible expansion / contraction." />
+        <Slider label="damping" value={damping} min={0.2} max={0.85} step={0.01} onChange={(v) => set("damping", v)} help="Velocity damping of the spring simulation. Low = bouncy, high = viscous. The simulation cools and stops once the springs settle." />
         <Slider label="overlap cut" value={threshold} min={0.1} max={0.95} step={0.01} onChange={(v) => set("threshold", v)} help="Relevance threshold for the overlap-subgraph readout below the graph." />
         {params && (
           <>

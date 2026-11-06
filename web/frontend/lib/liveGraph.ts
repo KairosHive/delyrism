@@ -75,6 +75,7 @@ interface LiveState {
   focus: number;        // sharpening exponent on relevance
   contraction: number;  // how far overlap edges contract / others stretch
   damping: number;      // d3 velocityDecay
+  transition: number;   // seconds for a relevance change to reach its new rest lengths
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
@@ -128,7 +129,8 @@ export const useLive = create<LiveState>((set, get) => ({
 
   focus: 1.6,
   contraction: 0.7,
-  damping: 0.35,
+  damping: 0.5,
+  transition: 1.6,
   threshold: 0.55,
 
   _send: null,
