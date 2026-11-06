@@ -385,7 +385,7 @@ export const useLive = create<LiveState>((set, get) => ({
   audioSmoothing: 0.5,
   relSmoothing: 0.6,
   camVideo: null,
-  poseFps: 15,
+  poseFps: 20,
   poseOpts: { tracker: "body", trace: 1.0, fit: "camera", joints: "extremities", smooth: 0.5 },
   posePreview: null,
   posePresent: false,
@@ -393,7 +393,7 @@ export const useLive = create<LiveState>((set, get) => ({
   trackerState: "off",
   motionWindow: 3.0,
   motionContrast: 0.7,
-  motionRefresh: 1.0,
+  motionRefresh: 3.0,
   motion: null,
   motionApplied: null,
 

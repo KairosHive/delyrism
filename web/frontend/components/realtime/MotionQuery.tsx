@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useLive, type MotionQuality } from "@/lib/liveGraph";
+import { useLive, type MotionQuality, type MotionReading } from "@/lib/liveGraph";
 import { Slider } from "@/components/ui/Slider";
 import { TrackerPicker, PosePreview, TrackRate } from "./PoseQuery";
 
@@ -13,13 +13,13 @@ const NAMES: Record<string, string> = {
 };
 
 
-function QualityBar({ q }: { q: MotionQuality }) {
+function QualityBar({ q, stale }: { q: MotionQuality; stale?: boolean }) {
   const v = q.value;
   const salient = v !== null && (v < 0.4 || v > 0.6);
   const raw = q.raw === null ? "–" : Math.abs(q.raw) >= 100 ? q.raw.toFixed(0) : q.raw.toFixed(2);
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_minmax(80px,1.4fr)_minmax(0,1fr)] items-center gap-2 text-[10px]"
-         title={`${NAMES[q.key] ?? q.key}: ${v === null ? "not measurable here" : v.toFixed(2)} · raw ${raw} ${q.unit}`}>
+    <div className={`grid grid-cols-[minmax(0,1fr)_minmax(80px,1.4fr)_minmax(0,1fr)] items-center gap-2 text-[10px] transition-opacity ${stale ? "opacity-40" : ""}`}
+         title={`${NAMES[q.key] ?? q.key}: ${v === null ? "not measurable here" : v.toFixed(2)} · raw ${raw} ${q.unit}${stale ? " · last measured value (not in this window)" : ""}`}>
       <span className={`truncate text-right ${v !== null && v < 0.4 ? "text-ink-100" : "text-ink-500"}`}>{q.low}</span>
       <div className="relative h-1.5 rounded-full bg-ink-800">
         <div className="absolute inset-y-0 left-[40%] right-[40%] bg-ink-700/70" />
@@ -42,6 +42,25 @@ const TRENDS: [string, (v: number) => string | null][] = [
   ["turning", (v) => (v > 45 ? "turning" : null)],
   ["tempo_bpm", (v) => `≈ ${Math.round(v / 5) * 5} bpm`],
 ];
+
+/** The qualities to show, held steady: a reading without some measure (the
+ *  dancer out of frame for most of the window, a hand missing) keeps that
+ *  quality's last value, dimmed, instead of dropping the bar.  Cleared when
+ *  the tracker changes. */
+function useSteadyQualities(motion: MotionReading | null): { q: MotionQuality; stale: boolean }[] {
+  const held = React.useRef<{ tracker: string; byKey: Map<string, MotionQuality> }>({ tracker: "", byKey: new Map() });
+  return React.useMemo(() => {
+    if (!motion) return [];
+    if (held.current.tracker !== motion.tracker) held.current = { tracker: motion.tracker, byKey: new Map() };
+    const fresh = new Set<string>();
+    for (const q of [...motion.qualities, ...motion.hands]) {
+      if (q.value === null) continue;
+      held.current.byKey.set(q.key, q);
+      fresh.add(q.key);
+    }
+    return Array.from(held.current.byKey.values()).map((q) => ({ q, stale: !fresh.has(q.key) }));
+  }, [motion]);
+}
 
 /** "applied 0.4 s ago", refreshed four times a second. */
 function Applied() {
@@ -89,7 +108,20 @@ export function MotionPanel() {
   const trends = motion
     ? TRENDS.map(([k, f]) => { const v = motion.trends[k]; return v === null || v === undefined ? null : f(v); }).filter(Boolean)
     : [];
-  const quals = [...(motion?.qualities ?? []), ...(motion?.hands ?? []).filter((q) => q.value !== null)];
+  const quals = useSteadyQualities(motion);
+  const [showQualities, setShowQualities] = React.useState(false);     // collapsed by default
+
+  // the preview's trails span the description window, so the drawing shows
+  // the stretch of movement being described; pose mode's own trail length
+  // comes back when this panel closes
+  const send = useLive((s) => s._send);
+  React.useEffect(() => {
+    send?.({ type: "pose_params", trace: motionWindow });
+  }, [send, motionWindow]);
+  React.useEffect(() => () => {
+    const s = useLive.getState();
+    s._send?.({ type: "pose_params", trace: s.poseOpts.trace });
+  }, []);
 
   return (
     <div className="space-y-2">
@@ -130,16 +162,26 @@ export function MotionPanel() {
         <Slider label="landmark smoothing" value={poseOpts.smooth} min={0} max={1} step={0.05}
                 onChange={(v) => setPoseOpts({ smooth: v })} help="One Euro filter on the landmarks. Some smoothing keeps tracker jitter from reading as jerky movement." />
       </div>
-      {quals.length > 0 && (
-        <div className="grid grid-cols-1 gap-x-6 gap-y-1 rounded-md border border-ink-800 bg-ink-950/30 px-3 py-2 md:grid-cols-2">
-          {quals.map((q) => (
-            <div key={q.key} className="space-y-0.5">
-              <div className="text-[9px] uppercase tracking-wider text-ink-500">{NAMES[q.key] ?? q.key}</div>
-              <QualityBar q={q} />
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="rounded-md border border-ink-800 bg-ink-950/30">
+        <button className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[10px] uppercase tracking-wider text-ink-400 hover:text-ink-100"
+                onClick={() => setShowQualities((v) => !v)} aria-expanded={showQualities}>
+          <span className={`inline-block transition-transform ${showQualities ? "rotate-90" : ""}`}>▸</span>
+          movement qualities
+          <span className="normal-case tracking-normal text-ink-600">
+            {quals.length ? `${quals.length} measured` : "measured once you move"}
+          </span>
+        </button>
+        {showQualities && quals.length > 0 && (
+          <div className="grid grid-cols-1 gap-x-6 gap-y-1 px-3 pb-2 md:grid-cols-2">
+            {quals.map(({ q, stale }) => (
+              <div key={q.key} className="space-y-0.5">
+                <div className="text-[9px] uppercase tracking-wider text-ink-500">{NAMES[q.key] ?? q.key}</div>
+                <QualityBar q={q} stale={stale} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

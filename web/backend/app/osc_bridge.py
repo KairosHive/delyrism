@@ -259,9 +259,26 @@ bridge = OscBridge()
 
 # Windows: asyncio sleeps round up to the 15.6 ms system tick, which caps the
 # OSC pump at ~32 Hz.  Ask for 1 ms timer resolution for this process.
+# Windows 11 ignores that request from a process with no visible window (a
+# backend started in the background, or a minimised console) unless the
+# process opts out of timer-resolution power throttling first; measured here,
+# a windowless backend otherwise streams at 31 ms intervals instead of 16.7.
 if os.name == "nt":
     try:
         import ctypes
+        from ctypes import wintypes
+
+        class _PowerThrottlingState(ctypes.Structure):
+            _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG), ("StateMask", wintypes.ULONG)]
+
+        _k32 = ctypes.windll.kernel32
+        _k32.GetCurrentProcess.restype = wintypes.HANDLE
+        _k32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        _k32.SetProcessInformation.restype = wintypes.BOOL
+        # ProcessPowerThrottling (4); IGNORE_TIMER_RESOLUTION (0x4) in ControlMask
+        # and cleared in StateMask = always honour this process's timer resolution
+        _state = _PowerThrottlingState(1, 0x4, 0)
+        _k32.SetProcessInformation(_k32.GetCurrentProcess(), 4, ctypes.byref(_state), ctypes.sizeof(_state))
         ctypes.windll.winmm.timeBeginPeriod(1)
     except Exception:  # pragma: no cover — best effort
         pass
