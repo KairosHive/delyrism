@@ -193,7 +193,7 @@ export const useLive = create<LiveState>((set, get) => ({
   contraction: 0.7,
   damping: 8,
   stiffness: 40,
-  repulsion: 9000,
+  repulsion: 40000,
   unlinked: 6000,
   threshold: 0.55,
 
