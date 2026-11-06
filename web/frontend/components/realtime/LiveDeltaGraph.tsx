@@ -125,11 +125,12 @@ export function LiveDeltaGraph() {
   // physics params from the knobs
   const damping = useLive((s) => s.damping);
   const stiffness = useLive((s) => s.stiffness);
+  const unlinked = useLive((s) => s.unlinked);
   React.useEffect(() => {
     const p = simRef.current.params;
-    p.damping = damping; p.stiffness = stiffness;
+    p.damping = damping; p.stiffness = stiffness; p.unlinked = unlinked;
     simRef.current.wake();
-  }, [damping, stiffness]);
+  }, [damping, stiffness, unlinked]);
 
   // ---- step + draw loop ------------------------------------------------------
   React.useEffect(() => {

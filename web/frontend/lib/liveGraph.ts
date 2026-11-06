@@ -80,6 +80,7 @@ interface LiveState {
   contraction: number;  // how far overlap edges contract / others stretch
   damping: number;      // viscous drag on node velocity c (1/s) — the single damping term
   stiffness: number;    // spring stiffness k (1/s²)
+  unlinked: number;     // extra repulsion between nodes that share no edge (px³/s²)
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
@@ -191,6 +192,7 @@ export const useLive = create<LiveState>((set, get) => ({
   contraction: 0.7,
   damping: 8,
   stiffness: 40,
+  unlinked: 6000,
   threshold: 0.55,
 
   _send: null,
