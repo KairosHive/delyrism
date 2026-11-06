@@ -32,6 +32,7 @@ export async function startCameraCapture(opts: {
   fpsMs: () => number;
   size?: number;
   quality?: number;
+  onFrame?: (jpeg: ArrayBuffer) => void;   // every encoded frame, as it lands (pose tracking)
 }): Promise<CameraCapture> {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
@@ -70,6 +71,7 @@ export async function startCameraCapture(opts: {
           const now = performance.now();
           ring.push({ t: now, buf });
           while (ring.length && now - ring[0].t > KEEP_MS) ring.shift();
+          opts.onFrame?.(buf);
         }).catch(() => {});
       },
       "image/jpeg",

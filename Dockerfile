@@ -25,10 +25,11 @@ RUN npm run build
 FROM python:3.10-slim
 
 # system libs the engine needs (audio, video, build tools for any source
-# distributions pip pulls in)
+# distributions pip pulls in; libgl1 + libglib2.0-0 for the OpenCV that
+# mediapipe brings)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        libsndfile1 ffmpeg git curl build-essential \
+        libsndfile1 ffmpeg git curl build-essential libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

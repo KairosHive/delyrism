@@ -244,9 +244,15 @@ async def walker_socket(ws: WebSocket, space_id: str, layout: str = "umap"):
 #     context {text}                     recompute the Δ-graph for this sentence
 #     query   {text}                     re-score node relevance to this sentence
 #     params  {...DeltaGraphRequest-ish} top_abs_edges, sign_filter, beta, …
+#     pose_tick {window, frames}         embed the dancer's recent trajectory now
+#     pose_params {trace, fit, joints, smooth}   how the dance is tracked and drawn
+#     pose_reset                         forget the pose trajectory
+#     pose_export {seconds, format}      mp4 of the moving landmarks, or the npz trajectory
 #   server → client
 #     graph     {nodes, edges, relevance, context, query}   on context/params change
 #     relevance {relevance, query}                           on query change only
+#     pose      {jpeg, present}          the pose drawing (base64), once per tracked frame
+#     pose_export {format, data, seconds}                    base64 file
 #
 # Relevance is cosine(D1_i, v_query) over the nodes of the current graph,
 # min-max normalised to [0,1].  The client turns that into edge lengths: an
@@ -254,6 +260,9 @@ async def walker_socket(ws: WebSocket, space_id: str, layout: str = "umap"):
 # query *sculpts* the context graph instead of filtering it.
 
 from delyrism import context_delta_graph  # noqa: E402
+from delyrism.pose import (  # noqa: E402
+    PoseStream, PoseStyle, encode_mp4, iter_frames, render_clip, render_frame,
+)
 
 _GRAPH_DEFAULTS: Dict[str, Any] = dict(
     strategy="gate", beta=1.2, gate="relu", tau=0.3, within_symbol_softmax=True,
@@ -324,7 +333,7 @@ def _head_for_kind(space, kind: str) -> Optional[str]:
     heads = getattr(space, "D_heads", None) or {}
     if not heads:
         return None
-    return {"audio": "audio", "video": "video", "av": "av"}.get(kind, "av")
+    return {"audio": "audio", "video": "video", "pose": "video", "av": "av"}.get(kind, "av")
 
 
 def _shifted_for_head(space_id: str, space, graph: Dict[str, Any], context: str,
@@ -425,6 +434,70 @@ def _av_vec(space, payload: bytes) -> np.ndarray:
     return _unit(space.embedder.embed_audio_video(wave, sr, frames))
 
 
+# ---- pose (delyrism/pose.py) -----------------------------------------------
+# Camera frames (kind 5) are tracked into a per-socket PoseStream as they
+# arrive, and each tracked frame sends back the drawing the embedder would
+# see.  Embedding happens on `pose_tick`, at the client's send rate: the
+# recent trajectory is drawn as moving landmarks with traces and goes through
+# the video tower as a clip (PE-AV, scored in its video head) or through the
+# image tower as a still (CLIP).
+
+_POSE_DEFAULTS: Dict[str, Any] = dict(trace=1.0, fit="camera", joints="extremities", smooth=0.5)
+_POSE_SIZE = 224        # the embedders' input side
+
+
+def _pose_capable() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("mediapipe") is not None
+
+
+def _pose_style(opts: Dict[str, Any], size: int) -> PoseStyle:
+    return PoseStyle(size=size, square=True, fit=opts["fit"],
+                     trace_seconds=float(opts["trace"]), trace_joints=opts["joints"])
+
+
+def _jpeg_b64(rgb: np.ndarray) -> Optional[str]:
+    import base64
+    import cv2
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
+
+
+def _pose_track(stream: PoseStream, jpeg: bytes, opts: Dict[str, Any]):
+    """Track one camera frame; return (person found, base64 drawing)."""
+    stream.filter.smooth = float(opts["smooth"])
+    found = stream.push_jpeg(jpeg)
+    return found, _jpeg_b64(render_frame(stream.trajectory, style=_pose_style(opts, _POSE_SIZE)))
+
+
+def _pose_vec(space, stream: PoseStream, opts: Dict[str, Any], window: float, frames: int) -> Optional[np.ndarray]:
+    """Embed the drawn trajectory, or None when nobody is in frame."""
+    emb = space.embedder
+    traj = stream.trajectory
+    if not traj.present():
+        return None
+    style = _pose_style(opts, _POSE_SIZE)
+    if getattr(emb, "video_capable", False):
+        clip = render_clip(traj, seconds=window, fps=frames / window, style=style)
+        return _unit(emb.embed_video_frames(list(clip)))
+    if not hasattr(emb, "embed_image") or not hasattr(emb, "oc_model"):
+        raise RuntimeError("the space's embedder has no video or image tower — rebuild it with PE-AV or CLIP")
+    from PIL import Image
+    return _unit(emb.embed_image(Image.fromarray(render_frame(traj, style=style))))
+
+
+def _pose_export(stream: PoseStream, opts: Dict[str, Any], seconds: float, fmt: str) -> bytes:
+    traj = stream.trajectory
+    if fmt == "npz":
+        import io
+        buf = io.BytesIO()
+        traj.window(seconds).save(buf)
+        return buf.getvalue()
+    t0, end = traj.span
+    return encode_mp4(iter_frames(traj, 25.0, start=max(t0, end - seconds), end=end,
+                                  style=_pose_style(opts, 512)), 25.0)
+
+
 # binary frame kinds (first byte) → (query kind, embed fn, min payload bytes)
 _BIN_KINDS = {
     1: ("audio", _audio_vec, 4 + 2 * 1000),
@@ -432,7 +505,8 @@ _BIN_KINDS = {
     3: ("video", _video_vec, 100),
     4: ("av", _av_vec, 4 + 4 + 2 * 1000 + 100),
 }
-_LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(audio + video)"}
+_POSE_KIND = 5          # JPEG for the pose tracker; embedded on pose_tick, not on arrival
+_LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(audio + video)", "pose": "(pose)"}
 
 
 @router.websocket("/graph/{space_id}")
@@ -453,15 +527,20 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "rel_smoothing": 0.0,                       # EMA on the relevance activations (after scoring)
         "rel_prev": None,                           # previous smoothed relevance (per node id)
         "graph_dirty": False, "query_dirty": False,
+        "pose": None,                               # PoseStream, made on the first pose frame
+        "pose_frame": None,                         # latest camera jpeg not yet tracked
+        "pose_opts": dict(_POSE_DEFAULTS),
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
     wake = asyncio.Event()
+    pose_wake = asyncio.Event()
     emb = space.embedder
     await ws.send_json({"type": "ready", "params": state["params"],
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
                         "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
                         "video_capable": bool(getattr(emb, "video_capable", False)),
-                        "av_capable": bool(getattr(emb, "av_capable", False))})
+                        "av_capable": bool(getattr(emb, "av_capable", False)),
+                        "pose_capable": _pose_capable()})
 
     def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
         return {"relevance": rel, "active": state["vq"] is not None,
@@ -491,7 +570,12 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 #   0x02 image  → JPEG bytes
                 #   0x03 video  → uint8 n + n × (uint32 LE len + JPEG)
                 #   0x04 av     → uint32 LE audio-len + audio payload + video payload
+                #   0x05 pose   → JPEG, tracked into the pose trajectory
                 buf = msg["bytes"]
+                if buf and buf[0] == _POSE_KIND and len(buf) > 100:
+                    state["pose_frame"] = bytes(buf[1:])   # latest wins; pose_loop tracks it
+                    pose_wake.set()
+                    continue
                 spec = _BIN_KINDS.get(buf[0] if buf else 0)
                 if spec and len(buf) - 1 >= spec[2]:
                     state["pending"] = (spec[0], bytes(buf[1:]))   # latest wins
@@ -526,6 +610,31 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
             elif t == "rel_smoothing":
                 state["rel_smoothing"] = float(np.clip(float(m.get("value", 0.0)), 0.0, 0.97))
+            elif t == "pose_tick":
+                if state["pose"] is not None:
+                    window = float(np.clip(float(m.get("window") or 2.0), 0.5, 10.0))
+                    frames = int(np.clip(int(m.get("frames") or 16), 1, 48))
+                    state["pending"] = ("pose", (window, frames))   # latest wins
+                    state["query_dirty"] = True
+            elif t == "pose_params":
+                opts = state["pose_opts"]
+                for k in _POSE_DEFAULTS:
+                    if m.get(k) is not None:
+                        opts[k] = m[k]
+            elif t == "pose_reset":
+                if state["pose"] is not None:
+                    state["pose"].trajectory.clear()
+            elif t == "pose_export":
+                if state["pose"] is None or len(state["pose"].trajectory) == 0:
+                    await ws.send_json({"type": "error", "detail": "no pose trajectory yet — start the pose camera first"})
+                    continue
+                import base64
+                fmt = "npz" if m.get("format") == "npz" else "mp4"
+                seconds = float(np.clip(float(m.get("seconds") or 10.0), 1.0, 30.0))
+                data = await asyncio.to_thread(_pose_export, state["pose"], dict(state["pose_opts"]), seconds, fmt)
+                await ws.send_json({"type": "pose_export", "format": fmt, "seconds": seconds,
+                                    "data": base64.b64encode(data).decode("ascii")})
+                continue
             elif t == "params":
                 patch = {k: v for k, v in (m.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
                 state["params"].update(patch)
@@ -540,8 +649,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             return
         state["pending"] = None
         kind, payload = pend
-        fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
-        v = await asyncio.to_thread(fn, space, payload)
+        if kind == "pose":
+            v = await asyncio.to_thread(_pose_vec, space, state["pose"], dict(state["pose_opts"]), *payload)
+            if v is None:
+                return          # nobody in frame: hold the last query
+        else:
+            fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
+            v = await asyncio.to_thread(fn, space, payload)
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
         if prev is not None and a > 0:
@@ -577,7 +691,26 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if state["graph_dirty"] or state["query_dirty"]:
                 wake.set()  # something arrived while we were computing
 
-    tasks = [asyncio.create_task(reader()), asyncio.create_task(worker())]
+    async def pose_loop() -> None:
+        """Track pose frames at camera rate, apart from the worker, so the
+        trajectory stays dense and the drawing stays fluid while an
+        embedding runs."""
+        while True:
+            await pose_wake.wait()
+            pose_wake.clear()
+            jpeg, state["pose_frame"] = state["pose_frame"], None
+            if jpeg is None:
+                continue
+            if state["pose"] is None:
+                state["pose"] = PoseStream(smooth=float(state["pose_opts"]["smooth"]))
+            try:
+                found, preview = await asyncio.to_thread(_pose_track, state["pose"], jpeg, dict(state["pose_opts"]))
+            except Exception as e:
+                await ws.send_json({"type": "error", "detail": f"pose tracking failed: {e}"})
+                continue
+            await ws.send_json({"type": "pose", "jpeg": preview, "present": found})
+
+    tasks = [asyncio.create_task(reader()), asyncio.create_task(worker()), asyncio.create_task(pose_loop())]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for d in done:
@@ -587,3 +720,5 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     finally:
         for t in tasks:
             t.cancel()
+        if state["pose"] is not None:
+            await asyncio.to_thread(state["pose"].close)

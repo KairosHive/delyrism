@@ -39,8 +39,16 @@ export interface LiveParams {
 }
 
 type Status = "idle" | "connecting" | "ready" | "closed" | "error";
-export type QueryKind = "text" | "audio" | "image" | "video" | "av";
+export type QueryKind = "text" | "audio" | "image" | "video" | "av" | "pose";
 export type QueryMode = QueryKind;
+
+/** How the dance is tracked and drawn for the embedder (server-side, see delyrism/pose.py). */
+export interface PoseOpts {
+  trace: number;                          // seconds of temporal trace behind each tracked joint
+  fit: "camera" | "window" | "body";      // framing: source camera · follow the movement · body-centred
+  joints: "extremities" | "hands" | "feet" | "limbs" | "all";
+  smooth: number;                         // landmark smoothing 0 (raw) .. 1 (heavy), One Euro filter
+}
 
 interface LiveState {
   status: Status;
@@ -56,6 +64,7 @@ interface LiveState {
   imageCapable: boolean;         // … an image tower (CLIP)
   videoCapable: boolean;         // … a video tower (PE-AV, sliding window of frames)
   avCapable: boolean;            // … a joint audio-visual tower (PE-AV)
+  poseCapable: boolean;          // the server has MediaPipe for pose tracking
   pending: number;               // in-flight recomputes (for the status pulse)
 
   // ----- live media query (mic / camera sliding windows) -----
@@ -70,6 +79,10 @@ interface LiveState {
   audioSmoothing: number;        // server-side EMA on successive media vectors (before scoring)
   relSmoothing: number;          // server-side EMA on the relevance activations (after scoring)
   camVideo: HTMLVideoElement | null;
+  poseFps: number;               // camera frames tracked per second in pose mode (dense traces)
+  poseOpts: PoseOpts;
+  posePreview: string | null;    // data URL of the latest pose drawing
+  posePresent: boolean;          // a dancer was found in the latest tracked frame
 
   // the two live inputs (local echo; the socket gets debounced copies)
   context: string;
@@ -85,7 +98,7 @@ interface LiveState {
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
-  _sendBinary: ((kind: 1 | 2 | 3 | 4, buf: ArrayBuffer) => void) | null;
+  _sendBinary: ((kind: 1 | 2 | 3 | 4 | 5, buf: ArrayBuffer) => void) | null;
   _mic: MicCapture | null;
   _cam: CameraCapture | null;
   _ticker: ReturnType<typeof setInterval> | null;
@@ -98,6 +111,9 @@ interface LiveState {
   setAudioSmoothing: (v: number) => void;
   setRelSmoothing: (v: number) => void;
   setSendInterval: (v: number) => void;
+  setPoseOpts: (patch: Partial<PoseOpts>) => void;
+  resetPose: () => void;
+  exportPose: (format: "mp4" | "npz", seconds: number) => void;
   set: <K extends keyof LiveState>(k: K, v: LiveState[K]) => void;
 }
 
@@ -106,7 +122,7 @@ let ctxTimer: ReturnType<typeof setTimeout> | null = null;
 let qTimer: ReturnType<typeof setTimeout> | null = null;
 
 const needsMic = (m: QueryMode) => m === "audio" || m === "av";
-const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av";
+const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av" || m === "pose";
 
 /** Start / stop mic + camera so exactly what the current mode needs is running. */
 async function ensureCapture(get: () => LiveState, set: (p: Partial<LiveState>) => void) {
@@ -119,8 +135,12 @@ async function ensureCapture(get: () => LiveState, set: (p: Partial<LiveState>) 
     if (!needsMic(mode) && get()._mic) { get()._mic!.stop(); set({ _mic: null, audioLevel: 0 }); }
     if (needsCam(mode) && !get()._cam) {
       // the camera is sampled at the model's frame rate, so a window of
-      // `videoWindow` seconds holds exactly videoWindow × videoFps frames
-      const cam = await startCameraCapture({ fpsMs: () => 1000 / get().videoFps });
+      // `videoWindow` seconds holds exactly videoWindow × videoFps frames;
+      // pose mode samples faster and streams every frame to the tracker
+      const cam = await startCameraCapture({
+        fpsMs: () => 1000 / (get().queryMode === "pose" ? get().poseFps : get().videoFps),
+        onFrame: (buf) => { if (get().queryMode === "pose") get()._sendBinary?.(5, buf); },
+      });
       set({ _cam: cam, camVideo: cam.video });
     }
     if (!needsCam(mode) && get()._cam) { get()._cam!.stop(); set({ _cam: null, camVideo: null }); }
@@ -151,6 +171,10 @@ function sendWindow(get: () => LiveState) {
     out.set(new Uint8Array(a), 4);
     out.set(new Uint8Array(v), 4 + a.byteLength);
     s._sendBinary(4, out.buffer);
+  } else if (s.queryMode === "pose") {
+    // frames already stream to the tracker; this asks for an embedding of the
+    // recent trajectory (a clip of videoWindow s for a video tower, else a still)
+    s._send?.({ type: "pose_tick", window: s.videoWindow, frames: videoFrameCount(s) });
   }
 }
 
@@ -172,6 +196,7 @@ export const useLive = create<LiveState>((set, get) => ({
   imageCapable: false,
   videoCapable: false,
   avCapable: false,
+  poseCapable: false,
   pending: 0,
 
   queryMode: "text",
@@ -185,6 +210,10 @@ export const useLive = create<LiveState>((set, get) => ({
   audioSmoothing: 0.5,
   relSmoothing: 0.6,
   camVideo: null,
+  poseFps: 15,
+  poseOpts: { trace: 1.0, fit: "camera", joints: "extremities", smooth: 0.5 },
+  posePreview: null,
+  posePresent: false,
 
   context: "",
   query: "",
@@ -244,9 +273,15 @@ export const useLive = create<LiveState>((set, get) => ({
     if (s._ticker) clearInterval(s._ticker);
     s._mic?.stop();
     s._cam?.stop();
-    set({ _ticker: null, _mic: null, _cam: null, live: false, audioLevel: 0, camVideo: null });
+    set({ _ticker: null, _mic: null, _cam: null, live: false, audioLevel: 0, camVideo: null, posePresent: false });
     if (s.queryMode !== "text") s._send?.({ type: "query_clear" });
   },
+  setPoseOpts: (patch) => {
+    set((s) => ({ poseOpts: { ...s.poseOpts, ...patch } }));
+    get()._send?.({ type: "pose_params", ...patch });
+  },
+  resetPose: () => get()._send?.({ type: "pose_reset" }),
+  exportPose: (format, seconds) => get()._send?.({ type: "pose_export", format, seconds }),
   setSendInterval: (v) => {
     set({ sendInterval: v });
     const s = get();
@@ -289,7 +324,7 @@ export function explorerDeltaParams(): Partial<LiveParams> {
 }
 
 const asKind = (k: unknown): QueryKind =>
-  k === "audio" || k === "image" || k === "video" || k === "av" ? k : "text";
+  k === "audio" || k === "image" || k === "video" || k === "av" || k === "pose" ? k : "text";
 
 /** Open / maintain the live graph socket for the current space. */
 export function useLiveSocket() {
@@ -313,7 +348,7 @@ export function useLiveSocket() {
       sock.onopen = () => {
         attempt = 0;
         const send = (msg: object) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg)); };
-        const sendBinary = (kind: 1 | 2 | 3 | 4, buf: ArrayBuffer) => {
+        const sendBinary = (kind: 1 | 2 | 3 | 4 | 5, buf: ArrayBuffer) => {
           if (sock.readyState !== WebSocket.OPEN || sock.bufferedAmount > 2_000_000) return;
           const out = new Uint8Array(1 + buf.byteLength);
           out[0] = kind;
@@ -329,6 +364,7 @@ export function useLiveSocket() {
         if (st.queryMode === "text" && st.query.trim()) send({ type: "query", text: st.query });
         if (st.audioSmoothing !== 0.5) send({ type: "audio_smoothing", value: st.audioSmoothing });
         if (st.relSmoothing > 0) send({ type: "rel_smoothing", value: st.relSmoothing });
+        send({ type: "pose_params", ...st.poseOpts });
         useLive.setState((s) => ({ params: { ...(s.params ?? ({} as LiveParams)), ...seeded } as LiveParams }));
       };
       sock.onmessage = (ev) => {
@@ -337,7 +373,7 @@ export function useLiveSocket() {
         if (msg.type === "ready") {
           useLive.setState((s) => ({ status: "ready", params: { ...msg.params, ...(s.params ?? {}) },
             audioCapable: !!msg.audio_capable, imageCapable: !!msg.image_capable,
-            videoCapable: !!msg.video_capable, avCapable: !!msg.av_capable }));
+            videoCapable: !!msg.video_capable, avCapable: !!msg.av_capable, poseCapable: !!msg.pose_capable }));
         } else if (msg.type === "graph") {
           useLive.setState((s) => ({
             graph: { nodes: msg.nodes, edges: msg.edges, context: msg.context },
@@ -355,6 +391,12 @@ export function useLiveSocket() {
             queryActive: !!msg.active,
             queryKind: asKind(msg.kind),
           }));
+        } else if (msg.type === "pose") {
+          if (useLive.getState().queryMode !== "pose") return;   // a late frame after switching away
+          useLive.setState({ posePreview: msg.jpeg ? `data:image/jpeg;base64,${msg.jpeg}` : null, posePresent: !!msg.present });
+        } else if (msg.type === "pose_export") {
+          downloadBase64(msg.data, msg.format === "npz" ? "application/octet-stream" : "video/mp4",
+                         `delyrism-pose-${new Date().toISOString().replace(/[:.]/g, "-")}.${msg.format}`);
         } else if (msg.type === "error") {
           useLive.setState((s) => ({ error: String(msg.detail ?? "error"), pending: Math.max(0, s.pending - 1) }));
         }
@@ -377,4 +419,16 @@ export function useLiveSocket() {
       useLive.setState({ status: "closed", _send: null, _sendBinary: null });
     };
   }, [spaceId]);
+}
+
+function downloadBase64(b64: string, mime: string, filename: string) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }

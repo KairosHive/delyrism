@@ -60,3 +60,6 @@ protobuf>=4.25.3
 
 # ---- Real-time OSC Server ----
 python-osc
+
+# ---- Pose query (delyrism/pose.py, Live tab) ----
+mediapipe>=0.10.14       # PoseLandmarker; pulls opencv-contrib-python
