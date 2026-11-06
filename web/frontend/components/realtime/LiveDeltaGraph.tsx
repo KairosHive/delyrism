@@ -122,6 +122,9 @@ export function LiveDeltaGraph() {
       const { nodes, links } = dataRef.current;
       if (st.relevanceSeq !== lastSeq) {
         lastSeq = st.relevanceSeq;
+        // the engine freezes after force-graph's cooldownTime; a relevance
+        // change must wake it so the springs (and the canvas) move again
+        fgRef.current?.d3ReheatSimulation?.();
         const g = st.focus;
         for (const n of nodes) {
           const r = st.relevance[n.id];
@@ -178,6 +181,7 @@ export function LiveDeltaGraph() {
             height={height}
             backgroundColor="rgba(0,0,0,0)"
             cooldownTicks={Infinity}
+            cooldownTime={Infinity}
             d3AlphaDecay={0}
             d3AlphaMin={0}
             d3VelocityDecay={damping}

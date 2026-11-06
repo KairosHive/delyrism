@@ -298,19 +298,45 @@ def _live_graph(space_id: str, space, context: str, params: Dict[str, Any]) -> D
     return {"nodes": nodes, "edges": edges, "idx": idx, "D1": D1}
 
 
-def _relevance(space, graph: Dict[str, Any], query: str) -> Dict[str, float]:
-    if not query.strip() or not graph["nodes"]:
+def _relevance_vec(graph: Dict[str, Any], vq: Optional[np.ndarray]) -> Dict[str, float]:
+    """cosine(D1_i, v_query) over the graph's nodes, min-max normalised."""
+    if vq is None or not graph["nodes"]:
         return {}
-    vq = space._sent_vec(query, ignore_override=True)
     D1 = graph.get("D1")
     if D1 is None:
-        D1 = space.D
+        return {}
     ids = [n["id"] for n in graph["nodes"]]
     rows = np.asarray([graph["idx"][i] for i in ids])
     r = D1[rows] @ vq
     lo, hi = float(r.min()), float(r.max())
     r = (r - lo) / (hi - lo) if hi - lo > 1e-9 else np.ones_like(r)
     return {i: round(float(x), 4) for i, x in zip(ids, r)}
+
+
+def _text_vec(space, text: str) -> Optional[np.ndarray]:
+    if not text.strip():
+        return None
+    v = np.asarray(space._sent_vec(text, ignore_override=True), dtype=np.float32)
+    return v if float(np.linalg.norm(v)) > 1e-9 else None
+
+
+_CLAP_SR = 48000
+
+
+def _audio_vec(space, pcm16: np.ndarray, sr: int) -> np.ndarray:
+    """Embed a mic window through the space's audio tower (CLAP / AudioCLIP).
+    Resamples to 48 kHz with linear interpolation — plenty for a query."""
+    if not getattr(space.embedder, "audio_capable", False) and not hasattr(space.embedder, "_clap"):
+        raise RuntimeError("the space's embedder has no audio tower — rebuild it with the CLAP backend")
+    wave = pcm16.astype(np.float32) / 32768.0
+    if sr != _CLAP_SR and len(wave) > 1:
+        n_new = int(round(len(wave) * _CLAP_SR / sr))
+        t_old = np.linspace(0.0, 1.0, len(wave), endpoint=False)
+        t_new = np.linspace(0.0, 1.0, n_new, endpoint=False)
+        wave = np.interp(t_new, t_old, wave).astype(np.float32)
+        sr = _CLAP_SR
+    v = np.asarray(space.embedder.embed_audio_array(wave, sr), dtype=np.float32)
+    return v / (float(np.linalg.norm(v)) + 1e-9)
 
 
 @router.websocket("/graph/{space_id}")
@@ -322,31 +348,83 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         await ws.close(code=4404)
         return
 
-    state = {"context": "", "query": "", "params": dict(_GRAPH_DEFAULTS),
-             "graph_dirty": False, "query_dirty": False}
+    state: Dict[str, Any] = {
+        "context": "", "params": dict(_GRAPH_DEFAULTS),
+        "query_text": "", "query_kind": "text",     # text | audio
+        "vq": None,                                 # active query vector
+        "audio_pending": None,                      # latest (pcm16, sr) not yet embedded
+        "audio_smoothing": 0.5,                     # EMA on successive audio vectors
+        "graph_dirty": False, "query_dirty": False,
+    }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
     wake = asyncio.Event()
-    await ws.send_json({"type": "ready", "params": state["params"]})
+    await ws.send_json({"type": "ready", "params": state["params"],
+                        "audio_capable": bool(getattr(space.embedder, "audio_capable", False) or hasattr(space.embedder, "_clap"))})
+
+    def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
+        return {"relevance": rel, "active": state["vq"] is not None,
+                "query": state["query_text"], "kind": state["query_kind"]}
 
     async def reader() -> None:
         while True:
-            raw = await ws.receive_text()
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(msg.get("code", 1000))
+            if msg.get("bytes"):
+                # binary frame: uint32 LE sample-rate + int16 PCM mono
+                buf = msg["bytes"]
+                if len(buf) > 4 + 2 * 1000:
+                    sr = int(np.frombuffer(buf[:4], dtype="<u4")[0])
+                    pcm = np.frombuffer(buf[4:], dtype="<i2")
+                    state["audio_pending"] = (pcm, sr)   # latest wins
+                    state["query_kind"] = "audio"
+                    state["query_dirty"] = True
+                    wake.set()
+                continue
+            raw = msg.get("text")
+            if not raw:
+                continue
             try:
-                msg = json.loads(raw)
+                m = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            t = msg.get("type")
+            t = m.get("type")
             if t == "context":
-                state["context"] = str(msg.get("text") or "")
+                state["context"] = str(m.get("text") or "")
                 state["graph_dirty"] = True
             elif t == "query":
-                state["query"] = str(msg.get("text") or "")
+                state["query_text"] = str(m.get("text") or "")
+                state["query_kind"] = "text"
+                state["audio_pending"] = None
+                state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
                 state["query_dirty"] = True
+            elif t == "query_clear":
+                state["vq"] = None
+                state["audio_pending"] = None
+                state["query_text"] = ""
+                state["query_dirty"] = True
+            elif t == "audio_smoothing":
+                state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
             elif t == "params":
-                patch = {k: v for k, v in (msg.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
+                patch = {k: v for k, v in (m.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
                 state["params"].update(patch)
                 state["graph_dirty"] = True
             wake.set()
+
+    async def _embed_pending_audio() -> None:
+        pend = state["audio_pending"]
+        if pend is None:
+            return
+        state["audio_pending"] = None
+        pcm, sr = pend
+        v = await asyncio.to_thread(_audio_vec, space, pcm, sr)
+        a = state["audio_smoothing"]
+        prev = state["vq"] if state["query_kind"] == "audio" else None
+        if prev is not None and a > 0:
+            v = a * prev + (1.0 - a) * v
+            v = v / (float(np.linalg.norm(v)) + 1e-9)
+        state["vq"] = v
+        state["query_text"] = "(audio)"
 
     async def worker() -> None:
         nonlocal graph
@@ -358,15 +436,16 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     state["graph_dirty"] = False
                     ctx, params = state["context"], dict(state["params"])
                     graph = await asyncio.to_thread(_live_graph, space_id, space, ctx, params)
-                    rel = await asyncio.to_thread(_relevance, space, graph, state["query"])
+                    await _embed_pending_audio()
+                    rel = _relevance_vec(graph, state["vq"])
                     state["query_dirty"] = False
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
-                                        "relevance": rel, "context": ctx, "query": state["query"]})
+                                        "context": ctx, **_rel_msg(rel)})
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
-                    q = state["query"]
-                    rel = await asyncio.to_thread(_relevance, space, graph, q)
-                    await ws.send_json({"type": "relevance", "relevance": rel, "query": q})
+                    await _embed_pending_audio()
+                    rel = _relevance_vec(graph, state["vq"])
+                    await ws.send_json({"type": "relevance", **_rel_msg(rel)})
             except Exception as e:
                 await ws.send_json({"type": "error", "detail": str(e)})
             if state["graph_dirty"] or state["query_dirty"]:
