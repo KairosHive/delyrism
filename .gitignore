@@ -28,3 +28,7 @@ Thumbs.db
 *.tmp
 *.log
 offload/
+
+# TouchDesigner: incremental saves + backups (td/delyrism_particles.toe is the patch)
+td/*.[0-9]*.toe
+td/Backup/

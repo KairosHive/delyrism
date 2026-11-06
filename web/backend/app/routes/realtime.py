@@ -263,6 +263,21 @@ from delyrism import context_delta_graph  # noqa: E402
 from delyrism.pose import (  # noqa: E402
     PoseStream, PoseStyle, encode_mp4, iter_frames, render_clip, render_frame,
 )
+from ..live_sim import LiveSim  # noqa: E402
+from ..osc_bridge import bridge as osc, frame_messages  # noqa: E402
+
+
+# ---- OSC output (TouchDesigner) — format documented in app/osc_bridge.py ----
+
+@router.get("/osc")
+def osc_status() -> Dict[str, Any]:
+    return osc.status()
+
+
+@router.post("/osc")
+def osc_configure(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Patch the OSC target / rate: {host, port, hz, scale, enabled, bundle}."""
+    return osc.configure(**cfg)
 
 _GRAPH_DEFAULTS: Dict[str, Any] = dict(
     strategy="gate", beta=1.2, gate="relu", tau=0.3, within_symbol_softmax=True,
@@ -535,6 +550,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     wake = asyncio.Event()
     pose_wake = asyncio.Event()
     emb = space.embedder
+    # server-side twin of the browser's spring layout → OSC (see live_sim.py)
+    sim = LiveSim()
+    osc_token = object()
+    osc.register(osc_token, lambda: {
+        "layout_source": "browser" if sim.client_fresh(time.perf_counter()) else "server-sim",
+        "browser_fps": round(sim.client_fps, 1), "awake": sim.awake, "nodes": len(sim.ids),
+        "context": state["context"][:60]})
     await ws.send_json({"type": "ready", "params": state["params"],
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
                         "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
@@ -565,6 +587,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if msg.get("type") == "websocket.disconnect":
                 raise WebSocketDisconnect(msg.get("code", 1000))
             if msg.get("bytes"):
+                osc.claim(osc_token)   # the socket being played streams the OSC
                 # binary frame, first byte = kind:
                 #   0x01 audio  → uint32 LE sample-rate + int16 PCM mono
                 #   0x02 image  → JPEG bytes
@@ -590,6 +613,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             except json.JSONDecodeError:
                 continue
             t = m.get("type")
+            if t == "layout":
+                # the browser's own node positions — what the user actually sees.
+                # Not an input, so it does not claim the OSC output.
+                sim.sync_from_client(m.get("ids") or [], m.get("xy") or [], m.get("v") or [],
+                                     bool(m.get("awake", True)), float(m.get("fps") or 0.0))
+                continue
+            osc.claim(osc_token)   # the socket being played streams the OSC
             if t == "context":
                 state["context"] = str(m.get("text") or "")
                 state["graph_dirty"] = True
@@ -634,6 +664,9 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 data = await asyncio.to_thread(_pose_export, state["pose"], dict(state["pose_opts"]), seconds, fmt)
                 await ws.send_json({"type": "pose_export", "format": fmt, "seconds": seconds,
                                     "data": base64.b64encode(data).decode("ascii")})
+            elif t == "shape":
+                # the browser's layout knobs, mirrored into the OSC sim
+                sim.set_shape(m.get("shape") or {})
                 continue
             elif t == "params":
                 patch = {k: v for k, v in (m.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
@@ -679,12 +712,15 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     await _embed_pending()
                     rel = await asyncio.to_thread(_score)
                     state["query_dirty"] = False
+                    sim.set_graph(graph["nodes"], graph["edges"], list(space.symbols))
+                    sim.set_relevance(rel, state["vq"] is not None)
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
                     await _embed_pending()
                     rel = await asyncio.to_thread(_score)
+                    sim.set_relevance(rel, state["vq"] is not None)
                     await ws.send_json({"type": "relevance", **_rel_msg(rel)})
             except Exception as e:
                 await ws.send_json({"type": "error", "detail": str(e)})
@@ -710,7 +746,36 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 continue
             await ws.send_json({"type": "pose", "jpeg": preview, "present": found})
 
-    tasks = [asyncio.create_task(reader()), asyncio.create_task(worker()), asyncio.create_task(pose_loop())]
+    async def osc_pump() -> None:
+        """Step the layout at the OSC rate and stream it while this socket owns
+        the output.  Full rate while anything moves or fades, a 4 Hz heartbeat
+        once settled (so a TouchDesigner started late still gets the state)."""
+        seq = 0
+        t_start = last = time.perf_counter()
+        last_send = last_labels = 0.0
+        seen = (-1, -1)                       # (order_version, owner_epoch) at last label send
+        while True:
+            now = time.perf_counter()
+            # while the browser streams its layout, mirror it (physics paused,
+            # fades still run); once it goes quiet, continue from its last state
+            sim.step(now - last, physics=not sim.client_fresh(now))
+            last = now
+            if osc.is_owner(osc_token):
+                moving = sim.awake or sim.fading
+                if moving or now - last_send >= 0.25:
+                    key = (sim.order_version, osc.owner_epoch)
+                    labels = key != seen or now - last_labels >= 1.0
+                    meta = {"context": state["context"], "query": state["query_text"],
+                            "kind": state["query_kind"] if state["vq"] is not None else ""}
+                    osc.send(frame_messages(sim, seq, now - t_start, osc.scale, meta, labels))
+                    seq += 1
+                    last_send = now
+                    if labels:
+                        seen, last_labels = key, now
+            await asyncio.sleep(max(0.0, 1.0 / osc.hz - (time.perf_counter() - now)))
+
+    tasks = [asyncio.create_task(reader()), asyncio.create_task(worker()),
+             asyncio.create_task(pose_loop()), asyncio.create_task(osc_pump())]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for d in done:
@@ -720,5 +785,6 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     finally:
         for t in tasks:
             t.cancel()
+        osc.unregister(osc_token)
         if state["pose"] is not None:
             await asyncio.to_thread(state["pose"].close)

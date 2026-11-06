@@ -695,7 +695,8 @@ class TextEmbedder:
                     toks = self._tokenizer(batch_inputs, padding=True, truncation=True, return_tensors="pt").to(self.device)
                     out = self._backend(**toks)
                     pooled = self._pool(out.last_hidden_state, toks["attention_mask"])
-                    all_embeddings.append(pooled.cpu().numpy().astype(np.float32))
+                    # .float(): transformers 5 loads Qwen3 in bf16, which numpy can't take
+                    all_embeddings.append(pooled.float().cpu().numpy())
             
             if not all_embeddings:
                 return np.array([], dtype=np.float32)

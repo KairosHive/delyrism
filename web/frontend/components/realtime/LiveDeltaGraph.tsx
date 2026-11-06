@@ -143,14 +143,34 @@ export function LiveDeltaGraph() {
     if (!ctx) return;
     let raf = 0;
     let last = performance.now();
+    let lastSync = 0, fps = 60;
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const now = performance.now();
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const frameMs = now - last;
+      const dt = Math.min(0.05, frameMs / 1000);
       last = now;
+      if (frameMs > 0) fps += (1000 / frameMs - fps) * 0.05;
       const sim = simRef.current;
       sim.step(dt);
       const nodes = nodesRef.current, links = linksRef.current;
+
+      // Stream what this canvas shows to the server, which forwards it over OSC
+      // (TouchDesigner) — so TD gets exactly this motion, slow settling and drags
+      // included.  ≤60 Hz while moving, a 0.4 s heartbeat while asleep.
+      const send = useLive.getState()._send;
+      if (send && nodes.length && now - lastSync >= (sim.awake ? 16 : 400)) {
+        const ids = new Array<string>(nodes.length);
+        const xy = new Array<number>(nodes.length * 2), v = new Array<number>(nodes.length * 2);
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          ids[i] = n.id;
+          xy[2 * i] = Math.round(n.x * 10) / 10; xy[2 * i + 1] = Math.round(n.y * 10) / 10;
+          v[2 * i] = Math.round(n.vx * 10) / 10; v[2 * i + 1] = Math.round(n.vy * 10) / 10;
+        }
+        send({ type: "layout", ids, xy, v, awake: sim.awake, fps: Math.round(fps) });
+        lastSync = now;
+      }
       const active = useLive.getState().queryActive;
 
       // camera: fit bounds with margin, eased

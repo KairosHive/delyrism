@@ -88,7 +88,8 @@ interface LiveState {
   context: string;
   query: string;
 
-  // client-side shaping knobs (never leave the browser)
+  // layout shaping knobs — drive the browser's SpringSim and are mirrored to
+  // the server (`shape` messages) for its twin sim, which feeds the OSC output
   focus: number;        // sharpening exponent on relevance
   contraction: number;  // how far overlap edges contract / others stretch
   damping: number;      // viscous drag on node velocity c (1/s) — the single damping term
@@ -323,6 +324,10 @@ export function explorerDeltaParams(): Partial<LiveParams> {
   };
 }
 
+/** The layout knobs the server's OSC sim mirrors (web/backend/app/live_sim.py). */
+const SHAPE_KEYS = ["focus", "contraction", "damping", "stiffness", "repulsion", "unlinked"] as const;
+const shapeOf = (s: LiveState) => Object.fromEntries(SHAPE_KEYS.map((k) => [k, s[k]]));
+
 const asKind = (k: unknown): QueryKind =>
   k === "audio" || k === "image" || k === "video" || k === "av" || k === "pose" ? k : "text";
 
@@ -365,6 +370,7 @@ export function useLiveSocket() {
         if (st.audioSmoothing !== 0.5) send({ type: "audio_smoothing", value: st.audioSmoothing });
         if (st.relSmoothing > 0) send({ type: "rel_smoothing", value: st.relSmoothing });
         send({ type: "pose_params", ...st.poseOpts });
+        send({ type: "shape", shape: shapeOf(st) });
         useLive.setState((s) => ({ params: { ...(s.params ?? ({} as LiveParams)), ...seeded } as LiveParams }));
       };
       sock.onmessage = (ev) => {
@@ -411,8 +417,13 @@ export function useLiveSocket() {
       };
     };
     connect();
+    // mirror layout-knob changes to the server's OSC sim
+    const unsubShape = useLive.subscribe((s, prev) => {
+      if (SHAPE_KEYS.some((k) => s[k] !== prev[k])) s._send?.({ type: "shape", shape: shapeOf(s) });
+    });
     return () => {
       closed = true;
+      unsubShape();
       if (retry) clearTimeout(retry);
       ws?.close();
       useLive.getState().stopLive();
