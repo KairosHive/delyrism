@@ -81,7 +81,7 @@ export default function Home() {
         <Title />
 
         <div className="px-3 pb-2 md:px-8">
-          <Console />
+          <Console hideContext={tab === "live"} />
           <BuildButton />
         </div>
 

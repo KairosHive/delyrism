@@ -15,7 +15,7 @@ interface PresetResp { name: string; symbols: Record<string, string[]>; }
  *   • CONTEXT PROMPT      — sentence textarea; expands into the morphing
  *                            blend panel (A | slider | B) when enabled
  */
-export function Console() {
+export function Console({ hideContext = false }: { hideContext?: boolean } = {}) {
   const presetName = useSidebar((s) => s.presetName);
   const set = useSidebar((s) => s.set);
   const sentence = useSidebar((s) => s.contextSentence);
@@ -106,7 +106,7 @@ export function Console() {
   }, [spaceId, morphMode, sentence, sentenceB, morphBlend]);
 
   return (
-    <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 md:grid-cols-2">
+    <div className={`mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 ${hideContext ? "" : "md:grid-cols-2"}`}>
       <div
         className="console-card"
         data-accent
@@ -136,6 +136,7 @@ export function Console() {
         </div>
       </div>
 
+      {!hideContext && (
       <div
         className="console-card"
         data-accent
@@ -193,6 +194,7 @@ export function Console() {
           />
         )}
       </div>
+      )}
     </div>
   );
 }

@@ -74,8 +74,8 @@ interface LiveState {
   // client-side shaping knobs (never leave the browser)
   focus: number;        // sharpening exponent on relevance
   contraction: number;  // how far overlap edges contract / others stretch
-  damping: number;      // d3 velocityDecay
-  transition: number;   // seconds for a relevance change to reach its new rest lengths
+  damping: number;      // viscous drag on node velocity c (1/s) — the single damping term
+  stiffness: number;    // spring stiffness k (1/s²)
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
@@ -129,8 +129,8 @@ export const useLive = create<LiveState>((set, get) => ({
 
   focus: 1.6,
   contraction: 0.7,
-  damping: 0.5,
-  transition: 1.6,
+  damping: 8,
+  stiffness: 40,
   threshold: 0.55,
 
   _send: null,
