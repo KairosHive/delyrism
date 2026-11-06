@@ -126,11 +126,12 @@ export function LiveDeltaGraph() {
   const damping = useLive((s) => s.damping);
   const stiffness = useLive((s) => s.stiffness);
   const unlinked = useLive((s) => s.unlinked);
+  const repulsion = useLive((s) => s.repulsion);
   React.useEffect(() => {
     const p = simRef.current.params;
-    p.damping = damping; p.stiffness = stiffness; p.unlinked = unlinked;
+    p.damping = damping; p.stiffness = stiffness; p.unlinked = unlinked; p.repulsion = repulsion;
     simRef.current.wake();
-  }, [damping, stiffness, unlinked]);
+  }, [damping, stiffness, unlinked, repulsion]);
 
   // ---- step + draw loop ------------------------------------------------------
   React.useEffect(() => {

@@ -253,8 +253,8 @@ function Overlap() {
 }
 
 function Knobs() {
-  const { params, setParams, focus, contraction, damping, stiffness, unlinked, threshold, set } = useLive(useShallow((s) => ({
-    params: s.params, setParams: s.setParams, focus: s.focus, contraction: s.contraction, damping: s.damping, stiffness: s.stiffness, unlinked: s.unlinked, threshold: s.threshold, set: s.set,
+  const { params, setParams, focus, contraction, damping, stiffness, repulsion, unlinked, threshold, set } = useLive(useShallow((s) => ({
+    params: s.params, setParams: s.setParams, focus: s.focus, contraction: s.contraction, damping: s.damping, stiffness: s.stiffness, repulsion: s.repulsion, unlinked: s.unlinked, threshold: s.threshold, set: s.set,
   })));
   const critical = 2 * Math.sqrt(stiffness);
   return (
@@ -265,6 +265,7 @@ function Knobs() {
         <Slider label="contraction" value={contraction} min={0} max={1} step={0.01} onChange={(v) => set("contraction", v)} help="How much the query reshapes the springs: overlap edges shorten, the rest lengthen and drift outward." />
         <Slider label="stiffness k" value={stiffness} min={5} max={200} step={1} format={(v) => `${v.toFixed(0)} · T≈${(2 * Math.PI / Math.sqrt(v)).toFixed(1)}s`} onChange={(v) => set("stiffness", v)} help="Spring stiffness. Natural period T = 2π/√k — how fast a rest-length change is followed." />
         <Slider label="damping c" value={damping} min={0.5} max={40} step={0.1} format={(v) => `${v.toFixed(1)} /s${v < critical * 0.9 ? " · under" : v > critical * 1.1 ? " · over" : " · critical"}`} onChange={(v) => set("damping", v)} help="The single viscous drag on every node's velocity (a = F − c·v). Rotation, translation and spring motion all decay as e^(−c·t). Critical damping is 2√k." />
+        <Slider label="repulsion" value={repulsion} min={0} max={40000} step={500} format={(v) => `${(v / 1000).toFixed(1)}k`} onChange={(v) => set("repulsion", v)} help="Base repulsion between every pair of nodes (softened 1/r², symmetric). Keeps neighbours from overlapping; higher spreads the whole graph." />
         <Slider label="disentangle" value={unlinked} min={0} max={30000} step={500} format={(v) => `${(v / 1000).toFixed(1)}k`} onChange={(v) => set("unlinked", v)} help="Extra repulsion between nodes that share no edge (softened 1/r, symmetric). Unrelated clusters slide apart; connected pairs feel only their spring and the base repulsion." />
         <Slider label="overlap cut" value={threshold} min={0.1} max={0.95} step={0.01} onChange={(v) => set("threshold", v)} help="Relevance threshold for the overlap-subgraph readout below the graph." />
         {params && (
