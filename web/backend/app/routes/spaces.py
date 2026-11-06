@@ -30,13 +30,21 @@ def create_space(cfg: SpaceConfig) -> SpaceCreateResponse:
     if not cfg.symbols:
         raise HTTPException(status_code=400, detail="symbols may not be empty")
 
-    space_id, space = engine_cache.get_or_build_space(
-        symbols=cfg.symbols,
-        embedder_cfg=cfg.embedder.model_dump(),
-        descriptor_threshold=cfg.descriptor_threshold,
-        contextual_embeddings=cfg.contextual_embeddings,
-        palette=cfg.palette,
-    )
+    try:
+        space_id, space = engine_cache.get_or_build_space(
+            symbols=cfg.symbols,
+            embedder_cfg=cfg.embedder.model_dump(),
+            descriptor_threshold=cfg.descriptor_threshold,
+            contextual_embeddings=cfg.contextual_embeddings,
+            palette=cfg.palette,
+        )
+    except Exception as e:  # embedder / model failures → readable 502, not a bare 500
+        # A raw 500 escapes the CORS middleware, so the browser reports it as a
+        # CORS error and the real cause (e.g. a 401 from Cloudflare) is hidden.
+        raise HTTPException(
+            status_code=502,
+            detail=f"could not build space with embedder '{cfg.embedder.backend}': {e}",
+        )
     return SpaceCreateResponse(
         space_id=space_id,
         symbols=space.symbols,
