@@ -1,10 +1,24 @@
 """
-pose.py — full-body pose trajectories rendered as moving landmarks
-==================================================================
+pose.py — body and hand trajectories rendered as moving landmarks
+=================================================================
 
-A dancer's movement becomes a query.  `PoseTracker` runs MediaPipe's
-PoseLandmarker on each frame of a video (file or camera) and a
-`PoseTrajectory` keeps the running time series of the 33 body landmarks.
+A dancer's movement becomes a query.  A tracker runs MediaPipe on each frame
+of a video (file or camera) and a `PoseTrajectory` keeps the running time
+series of the landmarks.  Three trackers share one pipeline:
+
+    body    PoseTracker       PoseLandmarker, 33 points from head to feet
+    hands   HandTracker       HandLandmarker, 21 points per hand with fingers,
+                              no body needed in frame
+    face    FaceTracker       FaceLandmarker, 478 points, drawn as contours
+    both    BodyHandsTracker  body and hands together, 75 points, each hand
+                              pinned to the nearest body wrist
+
+MediaPipe's Python build has no GPU path on Windows, so the live query
+tracks in the browser (tasks-vision on the GPU) and hands `PoseStream`
+the landmarks; these Python trackers serve video files and the CLI.
+
+Each has a `Skeleton` (points, bones, sides, trace joint sets).
+
 The renderer draws that trajectory back as an image: the current skeleton
 plus *temporal traces*, fading trails left by selected joints over the last
 second or two.  `render_frame` gives one instant (for an image embedder),
@@ -52,19 +66,38 @@ import time
 import urllib.request
 import warnings
 from dataclasses import dataclass
-from typing import Iterable, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 
 # ----------------------------------------------------------------------------
-#  landmark topology
+#  landmark layouts
 # ----------------------------------------------------------------------------
 
-N_LANDMARKS = 33
+@dataclass(frozen=True)
+class Skeleton:
+    """Landmark layout of one tracker: how many points, which connect, which
+    side of the subject each belongs to, and the joint sets traces follow."""
+    name: str
+    n: int
+    connections: Tuple[Tuple[int, int], ...]
+    left: frozenset                         # the subject's left
+    right: frozenset
+    face: frozenset                         # drawn only with PoseStyle.face
+    skip: frozenset                         # never drawn (superseded by a finer tracker)
+    small: frozenset                        # joints drawn at reduced radius
+    joint_sets: Dict[str, Tuple[int, ...]]
+    default_joints: str
+    centre: Tuple[int, ...]                 # the `body` fit centres each sample on these
+    span: Tuple[Tuple[int, int], ...]       # … and scales by the median length of these pairs
+    reach: float                            # half the `body` canvas, in those lengths
+    dots: Optional[frozenset] = None        # joints drawn as dots (None: every drawn joint)
 
-# MediaPipe's PoseLandmarksConnections.POSE_LANDMARKS, copied so a saved
-# trajectory renders without mediapipe installed.
+
+# MediaPipe's PoseLandmarksConnections.POSE_LANDMARKS and
+# HandLandmarksConnections.HAND_CONNECTIONS, copied so a saved trajectory
+# renders without mediapipe installed.
 CONNECTIONS: Tuple[Tuple[int, int], ...] = (
     (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10),
     (11, 12), (11, 13), (13, 15), (15, 17), (15, 19), (15, 21), (17, 19),
@@ -72,30 +105,136 @@ CONNECTIONS: Tuple[Tuple[int, int], ...] = (
     (11, 23), (12, 24), (23, 24), (23, 25), (24, 26), (25, 27), (26, 28),
     (27, 29), (28, 30), (29, 31), (30, 32), (27, 31), (28, 32),
 )
+HAND_CONNECTIONS: Tuple[Tuple[int, int], ...] = (
+    (0, 1), (1, 2), (2, 3), (3, 4),                 # thumb
+    (0, 5), (5, 6), (6, 7), (7, 8),                 # index
+    (5, 9), (9, 10), (10, 11), (11, 12),            # middle
+    (9, 13), (13, 14), (14, 15), (15, 16),          # ring
+    (13, 17), (0, 17), (17, 18), (18, 19), (19, 20),  # pinky and palm
+)
+FINGERTIPS = (4, 8, 12, 16, 20)
 
+# MediaPipe's FaceLandmarksConnections: FACE_LANDMARKS_CONTOURS (face oval, lips,
+# eyes, eyebrows) plus both iris rings, and the points on the subject's left
+# and right eye, brow and iris (MediaPipe's "left" is the subject's left).
+FACE_CONNECTIONS: Tuple[Tuple[int, int], ...] = (
+    (61, 146), (146, 91), (91, 181), (181, 84), (84, 17), (17, 314), (314, 405), (405, 321), (321,
+    375), (375, 291), (61, 185), (185, 40), (40, 39), (39, 37), (37, 0), (0, 267), (267, 269), (269,
+    270), (270, 409), (409, 291), (78, 95), (95, 88), (88, 178), (178, 87), (87, 14), (14, 317),
+    (317, 402), (402, 318), (318, 324), (324, 308), (78, 191), (191, 80), (80, 81), (81, 82), (82,
+    13), (13, 312), (312, 311), (311, 310), (310, 415), (415, 308), (263, 249), (249, 390), (390,
+    373), (373, 374), (374, 380), (380, 381), (381, 382), (382, 362), (263, 466), (466, 388), (388,
+    387), (387, 386), (386, 385), (385, 384), (384, 398), (398, 362), (276, 283), (283, 282), (282,
+    295), (295, 285), (300, 293), (293, 334), (334, 296), (296, 336), (33, 7), (7, 163), (163, 144),
+    (144, 145), (145, 153), (153, 154), (154, 155), (155, 133), (33, 246), (246, 161), (161, 160),
+    (160, 159), (159, 158), (158, 157), (157, 173), (173, 133), (46, 53), (53, 52), (52, 65), (65,
+    55), (70, 63), (63, 105), (105, 66), (66, 107), (10, 338), (338, 297), (297, 332), (332, 284),
+    (284, 251), (251, 389), (389, 356), (356, 454), (454, 323), (323, 361), (361, 288), (288, 397),
+    (397, 365), (365, 379), (379, 378), (378, 400), (400, 377), (377, 152), (152, 148), (148, 176),
+    (176, 149), (149, 150), (150, 136), (136, 172), (172, 58), (58, 132), (132, 93), (93, 234),
+    (234, 127), (127, 162), (162, 21), (21, 54), (54, 103), (103, 67), (67, 109), (109, 10), (474,
+    475), (475, 476), (476, 477), (477, 474), (469, 470), (470, 471), (471, 472), (472, 469),
+)
+_FACE_LEFT: Tuple[int, ...] = (
+    249, 263, 276, 282, 283, 285, 293, 295, 296, 300, 334, 336, 362, 373, 374, 380, 381, 382, 384,
+    385, 386, 387, 388, 390, 398, 466, 474, 475, 476, 477, 473,
+)
+_FACE_RIGHT: Tuple[int, ...] = (
+    7, 33, 46, 52, 53, 55, 63, 65, 66, 70, 105, 107, 133, 144, 145, 153, 154, 155, 157, 158, 159,
+    160, 161, 163, 173, 246, 469, 470, 471, 472, 468,
+)
+HAND_N = 21
+
+N_LANDMARKS = 33
 FACE = frozenset(range(1, 11))          # eyes, ears, mouth; the nose (0) stands for the head
-LEFT = frozenset({1, 2, 3, 7, 9} | set(range(11, 33, 2)))     # the subject's left
+LEFT = frozenset({1, 2, 3, 7, 9} | set(range(11, 33, 2)))
 RIGHT = frozenset({4, 5, 6, 8, 10} | set(range(12, 33, 2)))
+_COARSE_HANDS = frozenset(range(17, 23))     # the body model's pinky / index / thumb knuckles
 
-JOINT_SETS = {
-    "extremities": (0, 15, 16, 27, 28),             # head, wrists, ankles
-    "hands": (15, 16),
-    "feet": (27, 28),
-    "limbs": (13, 14, 15, 16, 25, 26, 27, 28),      # elbows, wrists, knees, ankles
-    "all": tuple(i for i in range(N_LANDMARKS) if i not in FACE),
-}
+
+def _hand(offset: int) -> Tuple[Tuple[int, int], ...]:
+    return tuple((a + offset, b + offset) for a, b in HAND_CONNECTIONS)
+
+
+BODY = Skeleton(
+    name="body", n=N_LANDMARKS, connections=CONNECTIONS, left=LEFT, right=RIGHT,
+    face=FACE, skip=frozenset(), small=frozenset(),
+    joint_sets={
+        "extremities": (0, 15, 16, 27, 28),             # head, wrists, ankles
+        "wrists": (15, 16),
+        "feet": (27, 28),
+        "limbs": (13, 14, 15, 16, 25, 26, 27, 28),      # elbows, wrists, knees, ankles
+        "all": tuple(i for i in range(N_LANDMARKS) if i not in FACE),
+    },
+    default_joints="extremities",
+    centre=(11, 12, 23, 24), span=((11, 23), (12, 24)), reach=2.3,   # torso centre to feet ≈ 2.3 torsos
+)
+
+# the subject's left hand at 0–20, their right at 21–41
+HANDS = Skeleton(
+    name="hands", n=2 * HAND_N, connections=_hand(0) + _hand(HAND_N),
+    left=frozenset(range(HAND_N)), right=frozenset(range(HAND_N, 2 * HAND_N)),
+    face=frozenset(), skip=frozenset(), small=frozenset(),
+    joint_sets={
+        "fingertips": FINGERTIPS + tuple(f + HAND_N for f in FINGERTIPS),
+        "index": (8, 8 + HAND_N),
+        "wrists": (0, HAND_N),
+        "all": tuple(range(2 * HAND_N)),
+    },
+    default_joints="fingertips",
+    centre=(0, 9, HAND_N, 9 + HAND_N), span=((0, 9), (HAND_N, 9 + HAND_N)), reach=4.0,   # wrist → middle knuckle
+)
+
+# body at 0–32, the subject's left hand at 33–53, their right at 54–74
+_LH, _RH = N_LANDMARKS, N_LANDMARKS + HAND_N
+BOTH = Skeleton(
+    name="both", n=N_LANDMARKS + 2 * HAND_N,
+    connections=tuple(c for c in CONNECTIONS if not set(c) & _COARSE_HANDS) + _hand(_LH) + _hand(_RH),
+    left=LEFT | frozenset(range(_LH, _RH)), right=RIGHT | frozenset(range(_RH, _RH + HAND_N)),
+    face=FACE, skip=_COARSE_HANDS, small=frozenset(range(_LH, _RH + HAND_N)),
+    joint_sets={
+        "extremities": (0, 15, 16, 27, 28),
+        "fingertips": tuple(f + _LH for f in FINGERTIPS) + tuple(f + _RH for f in FINGERTIPS),
+        "limbs": (13, 14, 15, 16, 25, 26, 27, 28),
+        "all": tuple(i for i in range(N_LANDMARKS + 2 * HAND_N) if i not in FACE | _COARSE_HANDS),
+    },
+    default_joints="extremities",
+    centre=(11, 12, 23, 24), span=((11, 23), (12, 24)), reach=2.3,
+)
+
+FACE_N = 478
+_FACE_POINTS = tuple(sorted({i for c in FACE_CONNECTIONS for i in c} | {468, 473}))
+FACEMESH = Skeleton(
+    name="face", n=FACE_N, connections=FACE_CONNECTIONS,
+    left=frozenset(_FACE_LEFT), right=frozenset(_FACE_RIGHT),
+    face=frozenset(), skip=frozenset(), small=frozenset(),
+    joint_sets={
+        "features": (1, 152, 61, 291, 105, 334),        # nose tip, chin, mouth corners, brow peaks
+        "mouth": (61, 291, 13, 14),                     # corners, upper and lower lip
+        "eyes": (468, 473),                             # iris centres (gaze)
+        "nose": (1,),
+        "all": _FACE_POINTS,
+    },
+    default_joints="features",
+    centre=(1, 33, 263), span=((33, 263),), reach=1.7,  # outer eye corners; the face spans ≈ 2 of them
+    dots=frozenset({468, 473}),                         # contours only, plus the irises
+)
+
+SKELETONS: Dict[str, Skeleton] = {"body": BODY, "hands": HANDS, "face": FACEMESH, "both": BOTH}
+JOINT_SETS = BODY.joint_sets
 
 # column layout of one stored row: x y z visibility wx wy wz
 _X, _Y, _Z, _V = 0, 1, 2, 3
 _COLS = 7
 
 
-def resolve_joints(joints: Union[str, Sequence[int]]) -> Tuple[int, ...]:
+def resolve_joints(joints: Union[str, Sequence[int]], skeleton: Skeleton = BODY) -> Tuple[int, ...]:
+    """Joint indices for a set name or an explicit list.  A name the
+    skeleton lacks (say "fingertips" on a body-only trajectory) falls back
+    to the skeleton's default set."""
     if isinstance(joints, str):
-        if joints not in JOINT_SETS:
-            raise ValueError(f"unknown joint set '{joints}'; choose from {sorted(JOINT_SETS)}")
-        return JOINT_SETS[joints]
-    return tuple(int(j) for j in joints)
+        return skeleton.joint_sets.get(joints, skeleton.joint_sets[skeleton.default_joints])
+    return tuple(int(j) for j in joints if 0 <= int(j) < skeleton.n)
 
 
 # ----------------------------------------------------------------------------
@@ -104,30 +243,51 @@ def resolve_joints(joints: Union[str, Sequence[int]]) -> Tuple[int, ...]:
 
 @dataclass
 class PoseSample:
-    xy: np.ndarray            # (33, 2) image coords, 0..1 of width / height
-    z: np.ndarray             # (33,)   depth relative to the hips, same scale as x
-    visibility: np.ndarray    # (33,)   0..1, likelihood the landmark is in view and unoccluded
-    world: np.ndarray         # (33, 3) metres, origin between the hips
+    xy: np.ndarray            # (N, 2) image coords, 0..1 of width / height
+    z: np.ndarray             # (N,)   depth (body: relative to the hips; hands: to the wrist)
+    visibility: np.ndarray    # (N,)   0..1, likelihood the landmark is in view and unoccluded
+    world: np.ndarray         # (N, 3) metres (body: origin between the hips; hands: hand centre)
 
 
-_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
-              "pose_landmarker_{v}/float16/latest/pose_landmarker_{v}.task")
+_MODEL_URLS = {
+    "pose": ("https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+             "pose_landmarker_{v}/float16/latest/pose_landmarker_{v}.task"),
+    "hand": ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+             "hand_landmarker/float16/latest/hand_landmarker.task"),
+    "face": ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+             "face_landmarker/float16/latest/face_landmarker.task"),
+}
 
 
-def model_path(variant: str = "full") -> str:
-    """Path to the PoseLandmarker .task file, downloaded on first use into
-    $DELYRISM_CACHE/mediapipe (default ~/.cache/delyrism/mediapipe)."""
-    if variant not in ("lite", "full", "heavy"):
+def model_path(variant: str = "full", task: str = "pose") -> str:
+    """Path to a MediaPipe .task file, downloaded on first use into
+    $DELYRISM_CACHE/mediapipe (default ~/.cache/delyrism/mediapipe).
+    task: pose (variant lite | full | heavy) | hand | face."""
+    if task == "pose" and variant not in ("lite", "full", "heavy"):
         raise ValueError("variant must be lite | full | heavy")
+    name = f"pose_landmarker_{variant}.task" if task == "pose" else f"{task}_landmarker.task"
     root = os.environ.get("DELYRISM_CACHE") or os.path.join(os.path.expanduser("~"), ".cache", "delyrism")
-    path = os.path.join(root, "mediapipe", f"pose_landmarker_{variant}.task")
+    path = os.path.join(root, "mediapipe", name)
     if not os.path.isfile(path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".part"
-        print(f"[pose] downloading pose_landmarker_{variant}.task ...")
-        urllib.request.urlretrieve(_MODEL_URL.format(v=variant), tmp)
+        print(f"[pose] downloading {name} ...")
+        urllib.request.urlretrieve(_MODEL_URLS[task].format(v=variant), tmp)
         os.replace(tmp, path)
     return path
+
+
+def _mediapipe():
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks.python import BaseOptions, vision
+    except ImportError as e:
+        raise ImportError("pose tracking needs mediapipe: pip install mediapipe") from e
+    return mp, BaseOptions, vision
+
+
+def _mp_image(mp, frame_rgb: np.ndarray):
+    return mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(frame_rgb, dtype=np.uint8))
 
 
 class PoseTracker:
@@ -137,13 +297,11 @@ class PoseTracker:
 
     variant: lite (fastest) | full | heavy (most accurate)."""
 
+    skeleton = BODY
+
     def __init__(self, variant: str = "full", model_asset_path: Optional[str] = None,
                  min_detection: float = 0.5, min_presence: float = 0.5, min_tracking: float = 0.5):
-        try:
-            import mediapipe as mp
-            from mediapipe.tasks.python import BaseOptions, vision
-        except ImportError as e:
-            raise ImportError("pose tracking needs mediapipe: pip install mediapipe") from e
+        mp, BaseOptions, vision = _mediapipe()
         self._mp = mp
         opts = vision.PoseLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=model_asset_path or model_path(variant)),
@@ -162,9 +320,7 @@ class PoseTracker:
         # VIDEO mode requires strictly increasing timestamps
         ms = max(int(round(t * 1000.0)), self._last_ms + 1)
         self._last_ms = ms
-        img = self._mp.Image(image_format=self._mp.ImageFormat.SRGB,
-                             data=np.ascontiguousarray(frame_rgb, dtype=np.uint8))
-        res = self._landmarker.detect_for_video(img, ms)
+        res = self._landmarker.detect_for_video(_mp_image(self._mp, frame_rgb), ms)
         if not res.pose_landmarks:
             return None
         a = np.array([[p.x, p.y, p.z, 1.0 if p.visibility is None else p.visibility]
@@ -185,6 +341,174 @@ class PoseTracker:
         self.close()
 
 
+class HandTracker:
+    """MediaPipe HandLandmarker in VIDEO mode: up to two hands, 21 landmarks
+    each (the wrist, then four joints per finger from thumb to pinky).  It
+    needs no body in frame, so hands alone in front of the camera track.
+
+    The sample has 42 rows, the subject's left hand then their right, and a
+    hand not found is NaN.  On unmirrored frames (camera, video files) the
+    model's "Left" label is the subject's left hand: checked against the
+    body model's wrists, it agrees in 92 % of clear cases (195 of 211), so
+    the swap MediaPipe's docs describe for selfie input is not applied."""
+
+    skeleton = HANDS
+
+    def __init__(self, model_asset_path: Optional[str] = None,
+                 min_detection: float = 0.5, min_presence: float = 0.5, min_tracking: float = 0.5):
+        mp, BaseOptions, vision = _mediapipe()
+        self._mp = mp
+        opts = vision.HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=model_asset_path or model_path(task="hand")),
+            running_mode=vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=min_detection,
+            min_hand_presence_confidence=min_presence,
+            min_tracking_confidence=min_tracking,
+        )
+        self._landmarker = vision.HandLandmarker.create_from_options(opts)
+        self._last_ms = -1
+
+    def detect_hands(self, frame_rgb: np.ndarray, t: float) -> List[Tuple[str, np.ndarray, np.ndarray]]:
+        """[(side, (21, 4) x y z score, (21, 3) world)] for each hand found;
+        side is the subject's ("left" | "right")."""
+        ms = max(int(round(t * 1000.0)), self._last_ms + 1)
+        self._last_ms = ms
+        res = self._landmarker.detect_for_video(_mp_image(self._mp, frame_rgb), ms)
+        hands = []
+        for i, lms in enumerate(res.hand_landmarks or []):
+            cat = res.handedness[i][0] if res.handedness and res.handedness[i] else None
+            side = "left" if cat is not None and cat.category_name == "Left" else "right"
+            score = float(cat.score) if cat is not None else 1.0
+            a = np.array([[p.x, p.y, p.z, 1.0] for p in lms], dtype=np.float32)
+            w = res.hand_world_landmarks[i] if res.hand_world_landmarks else None
+            world = (np.array([[p.x, p.y, p.z] for p in w], dtype=np.float32) if w
+                     else np.full((HAND_N, 3), np.nan, dtype=np.float32))
+            hands.append((side, a, world, score))
+        # two hands called the same side: keep the surer call, give the other the free slot
+        if len(hands) == 2 and hands[0][0] == hands[1][0]:
+            keep = 0 if hands[0][3] >= hands[1][3] else 1
+            hands[1 - keep] = ("left" if hands[keep][0] == "right" else "right",) + hands[1 - keep][1:]
+        return [(s, a, w) for s, a, w, _ in hands]
+
+    def detect(self, frame_rgb: np.ndarray, t: float) -> Optional[PoseSample]:
+        hands = self.detect_hands(frame_rgb, t)
+        if not hands:
+            return None
+        return _assemble(HANDS, None, {s: (a, w) for s, a, w in hands}, offset=0)
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+
+class BodyHandsTracker:
+    """Body and hands together: PoseLandmarker for the 33 body points and
+    HandLandmarker for the fingers, 75 rows in all.  Each hand found goes
+    to the body wrist it lies closest to, which holds steadier than the hand
+    model's own left / right call, and a hand farther than 0.6 torso lengths
+    from both visible wrists (someone else's) is dropped.  With no body or
+    no visible wrist in frame, the hand model's call is used."""
+
+    skeleton = BOTH
+    REACH = 0.6         # torso lengths between a hand's wrist and the body's
+
+    def __init__(self, variant: str = "full"):
+        self._body = PoseTracker(variant=variant)
+        self._hands = HandTracker()
+
+    def detect(self, frame_rgb: np.ndarray, t: float) -> Optional[PoseSample]:
+        body = self._body.detect(frame_rgb, t)
+        hands = self._hands.detect_hands(frame_rgb, t)
+        if body is None and not hands:
+            return None
+        wrists = {} if body is None else {
+            s: body.xy[i] for s, i in (("left", 15), ("right", 16)) if body.visibility[i] >= 0.3}
+        if wrists and hands:
+            torso = np.nanmean([np.linalg.norm(body.xy[11] - body.xy[23]), np.linalg.norm(body.xy[12] - body.xy[24])])
+            gate = max(0.05, self.REACH * float(torso))
+            d = lambda a, s: float(np.linalg.norm(a[0, :2] - wrists[s])) if s in wrists else np.inf
+            if len(hands) == 2:
+                (_, a0, w0), (_, a1, w1) = hands
+                straight = d(a0, "left") + d(a1, "right")
+                crossed = d(a0, "right") + d(a1, "left")
+                pairs = [("left", a0, w0), ("right", a1, w1)] if straight <= crossed else \
+                        [("right", a0, w0), ("left", a1, w1)]
+                if not np.isfinite(min(straight, crossed)):        # one wrist hidden: pair each hand on its own
+                    pairs = [(min(wrists, key=lambda s: d(a, s)), a, w) for _, a, w in hands]
+            else:
+                pairs = [(min(wrists, key=lambda s: d(a, s)), a, w) for _, a, w in hands]
+            hands = [(s, a, w) for s, a, w in pairs if d(a, s) <= gate]
+        return _assemble(BOTH, body, {s: (a, w) for s, a, w in hands}, offset=N_LANDMARKS)
+
+    def close(self) -> None:
+        self._body.close()
+        self._hands.close()
+
+
+def _assemble(skeleton: Skeleton, body: Optional[PoseSample],
+              hands: Dict[str, Tuple[np.ndarray, np.ndarray]], offset: int) -> PoseSample:
+    """Pack a body sample and per-side hands into one sample of `skeleton`."""
+    a = np.full((skeleton.n, 4), np.nan, dtype=np.float32)
+    world = np.full((skeleton.n, 3), np.nan, dtype=np.float32)
+    if body is not None:
+        a[:N_LANDMARKS] = np.concatenate([body.xy, body.z[:, None], body.visibility[:, None]], axis=1)
+        world[:N_LANDMARKS] = body.world
+    for side, (ha, hw) in hands.items():
+        s = offset + (0 if side == "left" else HAND_N)
+        a[s:s + HAND_N], world[s:s + HAND_N] = ha, hw
+    return PoseSample(xy=a[:, :2], z=a[:, 2], visibility=a[:, 3], world=world)
+
+
+class FaceTracker:
+    """MediaPipe FaceLandmarker in VIDEO mode: one face, 478 points (the
+    face mesh with both irises).  Drawn as contours: face oval, lips, eyes,
+    eyebrows and irises."""
+
+    skeleton = FACEMESH
+
+    def __init__(self, model_asset_path: Optional[str] = None,
+                 min_detection: float = 0.5, min_presence: float = 0.5, min_tracking: float = 0.5):
+        mp, BaseOptions, vision = _mediapipe()
+        self._mp = mp
+        opts = vision.FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=model_asset_path or model_path(task="face")),
+            running_mode=vision.RunningMode.VIDEO,
+            num_faces=1,
+            min_face_detection_confidence=min_detection,
+            min_face_presence_confidence=min_presence,
+            min_tracking_confidence=min_tracking,
+        )
+        self._landmarker = vision.FaceLandmarker.create_from_options(opts)
+        self._last_ms = -1
+
+    def detect(self, frame_rgb: np.ndarray, t: float) -> Optional[PoseSample]:
+        ms = max(int(round(t * 1000.0)), self._last_ms + 1)
+        self._last_ms = ms
+        res = self._landmarker.detect_for_video(_mp_image(self._mp, frame_rgb), ms)
+        if not res.face_landmarks:
+            return None
+        a = np.array([[p.x, p.y, p.z] for p in res.face_landmarks[0]], dtype=np.float32)[:FACE_N]
+        return PoseSample(xy=a[:, :2], z=a[:, 2], visibility=np.ones(len(a), dtype=np.float32),
+                          world=np.full((len(a), 3), np.nan, dtype=np.float32))
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+
+def make_tracker(tracker: str = "body", variant: str = "full"):
+    """body (PoseLandmarker, 33 points) | hands (HandLandmarker, 2 × 21) |
+    face (FaceLandmarker, 478) | both (body + hands, 75)."""
+    if tracker == "hands":
+        return HandTracker()
+    if tracker == "face":
+        return FaceTracker()
+    if tracker == "both":
+        return BodyHandsTracker(variant=variant)
+    if tracker == "body":
+        return PoseTracker(variant=variant)
+    raise ValueError("tracker must be body | hands | face | both")
+
+
 class LandmarkFilter:
     """One Euro filter over a pose sample (Casiez et al., CHI 2012): a
     low-pass whose cutoff rises with speed, so a still body stops jittering
@@ -193,8 +517,11 @@ class LandmarkFilter:
     `smooth` in [0, 1] sets the resting cutoff on a log scale, from 10 Hz
     (0, almost raw) through 1 Hz (0.5) to 0.1 Hz (1, heavy).  `beta` is how
     fast the cutoff opens with speed, in Hz per (frame-heights per second).
-    A missed detection resets the filter, so a dancer re-entering the frame
-    starts where they are instead of sliding in from where they left."""
+    A missed detection resets the filter, and so does each landmark that
+    goes missing on its own (one hand leaving the frame), so whatever
+    re-enters starts where it is instead of sliding in from where it left."""
+
+    JUMP = 0.25         # frame-heights in one step: an identity switch, never a movement
 
     def __init__(self, smooth: float = 0.5, beta: float = 8.0, d_cutoff: float = 1.0):
         self.smooth = smooth
@@ -216,17 +543,25 @@ class LandmarkFilter:
         if sample is None or self.smooth <= 0:
             self.reset()
             return sample
-        x = np.concatenate([sample.xy, sample.z[:, None], sample.world], axis=1)      # (33, 6)
-        if self._x is None or self._t is None or t <= self._t:
+        x = np.concatenate([sample.xy, sample.z[:, None], sample.world], axis=1)      # (N, 6)
+        if self._x is None or self._t is None or t <= self._t or self._x.shape != x.shape:
             self._t, self._x, self._dx = t, x, np.zeros_like(x)
             return sample
         dt = t - self._t
-        dx = (x - self._x) / dt
-        dx_hat = self._dx + self._alpha(dt, self.d_cutoff) * (dx - self._dx)
+        prev = self._x
+        fresh = np.isnan(prev) & ~np.isnan(x)            # (re)appeared: start where it is
+        # a jump no limb makes in one frame is the tracker switching hands or
+        # people: restart that landmark instead of gliding across the frame
+        jumped = np.linalg.norm(x[:, :2] - prev[:, :2], axis=1, keepdims=True) > self.JUMP
+        fresh |= jumped & ~np.isnan(x)
+        dx = (x - prev) / dt
+        dx_hat = np.nan_to_num(self._dx + self._alpha(dt, self.d_cutoff) * (dx - self._dx))
         min_cutoff = 10.0 ** (1.0 - 2.0 * float(np.clip(self.smooth, 0.0, 1.0)))
         # one cutoff per landmark, from its image-plane speed
         speed = np.linalg.norm(dx_hat[:, :2], axis=1, keepdims=True)
-        x_hat = self._x + self._alpha(dt, min_cutoff + self.beta * speed) * (x - self._x)
+        x_hat = prev + self._alpha(dt, min_cutoff + self.beta * speed) * (x - prev)
+        x_hat = np.where(fresh, x, x_hat)                # NaN where the landmark is gone
+        dx_hat = np.where(fresh, 0.0, dx_hat)
         self._t, self._x, self._dx = t, x_hat, dx_hat
         return PoseSample(xy=x_hat[:, :2].astype(np.float32), z=x_hat[:, 2].astype(np.float32),
                           visibility=sample.visibility, world=x_hat[:, 3:].astype(np.float32))
@@ -241,23 +576,26 @@ class PoseTrajectory:
 
     With `max_seconds` set, samples further than that behind the newest one
     are dropped (live use); None keeps everything (files).  `aspect` is the
-    source frame's width / height, so renders stay undistorted.  Appends and
-    reads share a lock: live, the pose thread appends while the embedder
-    thread renders."""
+    source frame's width / height, so renders stay undistorted.  `skeleton`
+    is the landmark layout of the tracker that fills it (BODY, HANDS or
+    BOTH).  Appends and reads share a lock: live, the pose thread appends
+    while the embedder thread renders."""
 
-    def __init__(self, max_seconds: Optional[float] = 30.0, aspect: float = 4 / 3):
+    def __init__(self, max_seconds: Optional[float] = 30.0, aspect: float = 4 / 3,
+                 skeleton: Skeleton = BODY):
         self.max_seconds = max_seconds
         self.aspect = float(aspect)
+        self.skeleton = skeleton
         self._lock = threading.Lock()
         self._t: List[float] = []
-        self._rows: List[np.ndarray] = []           # each (33, 7)
+        self._rows: List[np.ndarray] = []           # each (skeleton.n, 7)
         self._stacked: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
     # -------- writing --------
     def append(self, t: float, sample: Optional[PoseSample]) -> None:
         """Add a sample at time `t` (seconds).  None records a missed detection."""
         if sample is None:
-            row = np.full((N_LANDMARKS, _COLS), np.nan, dtype=np.float32)
+            row = np.full((self.skeleton.n, _COLS), np.nan, dtype=np.float32)
         else:
             row = np.concatenate([sample.xy, sample.z[:, None], sample.visibility[:, None],
                                   sample.world], axis=1).astype(np.float32)
@@ -284,12 +622,12 @@ class PoseTrajectory:
         return len(self._t)
 
     def arrays(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Snapshot (t, L): t (T,) seconds, L (T, 33, 7) as x y z visibility wx wy wz.
+        """Snapshot (t, L): t (T,) seconds, L (T, N, 7) as x y z visibility wx wy wz.
         Cached until the next append; treat the arrays as read-only."""
         with self._lock:
             if self._stacked is None:
                 if not self._t:
-                    return np.zeros(0), np.zeros((0, N_LANDMARKS, _COLS), dtype=np.float32)
+                    return np.zeros(0), np.zeros((0, self.skeleton.n, _COLS), dtype=np.float32)
                 self._stacked = (np.asarray(self._t), np.stack(self._rows))
             return self._stacked
 
@@ -315,14 +653,16 @@ class PoseTrajectory:
             return (self._t[0], self._t[-1]) if self._t else (0.0, 0.0)
 
     def present(self) -> bool:
-        """True when the newest sample holds a detected person."""
+        """True when the newest sample holds anything tracked (a body or a hand)."""
         with self._lock:
-            return bool(self._rows) and not np.isnan(self._rows[-1][0, 0])
+            return bool(self._rows) and bool(np.isfinite(self._rows[-1][:, _X]).any())
 
     @classmethod
     def from_arrays(cls, t: np.ndarray, L: np.ndarray, aspect: float,
-                    max_seconds: Optional[float] = None) -> "PoseTrajectory":
-        traj = cls(max_seconds=max_seconds, aspect=aspect)
+                    max_seconds: Optional[float] = None, skeleton: Optional[Skeleton] = None) -> "PoseTrajectory":
+        if skeleton is None:
+            skeleton = next((s for s in SKELETONS.values() if L.ndim == 3 and s.n == L.shape[1]), BODY)
+        traj = cls(max_seconds=max_seconds, aspect=aspect, skeleton=skeleton)
         traj._t = [float(x) for x in t]
         traj._rows = [np.asarray(r, dtype=np.float32) for r in L]
         traj._stacked = None
@@ -334,7 +674,7 @@ class PoseTrajectory:
         if end is None:
             end = float(t[-1]) if len(t) else 0.0
         keep = (t >= end - seconds) & (t <= end)
-        return PoseTrajectory.from_arrays(t[keep], L[keep], self.aspect)
+        return PoseTrajectory.from_arrays(t[keep], L[keep], self.aspect, skeleton=self.skeleton)
 
     def resample(self, fps: float, start: Optional[float] = None, end: Optional[float] = None,
                  max_gap: float = 0.5) -> "PoseTrajectory":
@@ -344,7 +684,7 @@ class PoseTrajectory:
         all, stays NaN, so interpolation never bridges a lost person."""
         t, L = self.arrays()
         if len(t) == 0:
-            return PoseTrajectory(max_seconds=None, aspect=self.aspect)
+            return PoseTrajectory(max_seconds=None, aspect=self.aspect, skeleton=self.skeleton)
         start = float(t[0]) if start is None else float(start)
         end = float(t[-1]) if end is None else float(end)
         n = max(1, int(np.floor((end - start) * fps + 1e-6)) + 1)
@@ -352,7 +692,7 @@ class PoseTrajectory:
         if len(t) == 1:
             out = np.repeat(L[:1], n, axis=0)
             out[np.abs(ts - t[0]) > max_gap] = np.nan
-            return PoseTrajectory.from_arrays(ts, out, self.aspect)
+            return PoseTrajectory.from_arrays(ts, out, self.aspect, skeleton=self.skeleton)
 
         i = np.clip(np.searchsorted(t, ts, side="right") - 1, 0, len(t) - 2)
         dt = t[i + 1] - t[i]
@@ -363,18 +703,21 @@ class PoseTrajectory:
         out[exact_hi] = L[i + 1][exact_hi]
         out[(dt > max_gap) & ~exact_lo & ~exact_hi] = np.nan
         out[(ts < t[0] - max_gap) | (ts > t[-1] + max_gap)] = np.nan
-        return PoseTrajectory.from_arrays(ts, out.astype(np.float32), self.aspect)
+        return PoseTrajectory.from_arrays(ts, out.astype(np.float32), self.aspect, skeleton=self.skeleton)
 
     # -------- persistence --------
     def save(self, path) -> None:
-        """Write t, landmarks and aspect as compressed npz (a path or a binary file object)."""
+        """Write t, landmarks, aspect and the skeleton name as compressed npz
+        (a path or a binary file object)."""
         t, L = self.arrays()
-        np.savez_compressed(path, t=t, landmarks=L, aspect=np.float32(self.aspect))
+        np.savez_compressed(path, t=t, landmarks=L, aspect=np.float32(self.aspect),
+                            skeleton=np.array(self.skeleton.name))
 
     @classmethod
     def load(cls, path: str) -> "PoseTrajectory":
         z = np.load(path)
-        return cls.from_arrays(z["t"], z["landmarks"], float(z["aspect"]))
+        sk = SKELETONS.get(str(z["skeleton"])) if "skeleton" in z.files else None
+        return cls.from_arrays(z["t"], z["landmarks"], float(z["aspect"]), skeleton=sk)
 
 
 # ----------------------------------------------------------------------------
@@ -409,24 +752,24 @@ class PoseStyle:
 _WARM, _COOL, _WHITE = (255, 168, 64), (72, 188, 255), (236, 236, 236)
 
 
-def _joint_color(j: int, style: PoseStyle) -> Tuple[int, int, int]:
+def _joint_color(j: int, sk: Skeleton, style: PoseStyle) -> Tuple[int, int, int]:
     if style.color == "mono":
         return _WHITE
-    return _WARM if j in LEFT else _COOL if j in RIGHT else _WHITE
+    return _WARM if j in sk.left else _COOL if j in sk.right else _WHITE
 
 
-def _bone_color(a: int, b: int, style: PoseStyle) -> Tuple[int, int, int]:
+def _bone_color(a: int, b: int, sk: Skeleton, style: PoseStyle) -> Tuple[int, int, int]:
     if style.color == "mono":
         return _WHITE
-    if a in LEFT and b in LEFT:
+    if a in sk.left and b in sk.left:
         return _WARM
-    if a in RIGHT and b in RIGHT:
+    if a in sk.right and b in sk.right:
         return _COOL
     return _WHITE
 
 
-def _project(L: np.ndarray, aspect: float, W: int, H: int, style: PoseStyle) -> np.ndarray:
-    """(T, 33, ≥4) landmarks → (T, 33, 2) pixel coordinates under `style.fit`.
+def _project(L: np.ndarray, aspect: float, W: int, H: int, style: PoseStyle, sk: Skeleton = BODY) -> np.ndarray:
+    """(T, N, ≥4) landmarks → (T, N, 2) pixel coordinates under `style.fit`.
     Landmarks below `min_visibility` come back NaN.  The window and body fits
     are computed over all T rows at once, so frames rendered from one
     projection share a stable framing."""
@@ -436,15 +779,15 @@ def _project(L: np.ndarray, aspect: float, W: int, H: int, style: PoseStyle) -> 
     if style.fit == "camera":
         lo, ext = np.array([0.0, 0.0]), np.array([aspect, 1.0])
     elif style.fit == "body":
-        with warnings.catch_warnings():                             # rows with no torso in view → NaN
+        # each sample re-centred on its own torso (hands: on the hands) and
+        # scaled by the median torso (hand) length over the sequence
+        with warnings.catch_warnings():                             # rows with nothing in view → NaN
             warnings.simplefilter("ignore", RuntimeWarning)
-            centre = np.nanmean(uv[:, [11, 12, 23, 24]], axis=1, keepdims=True)   # survives hips out of frame
-            hips = np.nanmean(uv[:, [23, 24]], axis=1)
-            shoulders = np.nanmean(uv[:, [11, 12]], axis=1)
+            centre = np.nanmean(uv[:, list(sk.centre)], axis=1, keepdims=True)
         uv = uv - centre
-        torso = np.linalg.norm(shoulders - hips, axis=-1)
-        scale = float(np.nanmedian(torso)) if np.isfinite(torso).any() else 0.25
-        half = 2.3 * max(scale, 1e-3) * (1.0 + style.margin)      # torso centre to feet ≈ 2.3 torsos
+        lengths = np.stack([np.linalg.norm(uv[:, a] - uv[:, b], axis=-1) for a, b in sk.span])
+        scale = float(np.nanmedian(lengths)) if np.isfinite(lengths).any() else 0.25
+        half = sk.reach * max(scale, 1e-3) * (1.0 + style.margin)
         lo, ext = np.array([-half, -half]), np.array([2 * half, 2 * half])
     elif style.fit == "window":
         if np.isfinite(uv).any():
@@ -473,7 +816,7 @@ def _fixed(P: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _draw(img: np.ndarray, Q: np.ndarray, ok: np.ndarray, ts: np.ndarray, k: int, style: PoseStyle,
-          joints: Tuple[int, ...], bg: Tuple[int, int, int]) -> None:
+          joints: Tuple[int, ...], bg: Tuple[int, int, int], sk: Skeleton = BODY) -> None:
     """Draw frame k of a projected sequence (Q, ok from `_fixed`) onto img:
     traces over the samples within trace_seconds before ts[k], then the
     skeleton and joints of sample k."""
@@ -486,28 +829,34 @@ def _draw(img: np.ndarray, Q: np.ndarray, ok: np.ndarray, ts: np.ndarray, k: int
         idx = np.arange(i0, k + 1)
         fade = np.clip(1.0 - (ts[k] - ts[idx]) / style.trace_seconds, 0.0, 1.0) ** style.fade
         widths = np.maximum(1, np.round(style.trace_width * (0.35 + 0.65 * fade))).astype(int)
+        # a step longer than a quarter of the canvas is the tracker switching
+        # hands or people; the trail breaks there instead of streaking across
+        max_step = 0.25 * max(img.shape[:2]) * (1 << _SHIFT)
         for j in joints:
-            base = np.asarray(_joint_color(j, style), dtype=np.float32)
+            base = np.asarray(_joint_color(j, sk, style), dtype=np.float32)
             cols = (bg_arr + (base - bg_arr) * fade[:, None]).astype(int)
-            seg = ok[idx - 1, j] & ok[idx, j] & (fade > 0.01)
+            step = np.linalg.norm((Q[idx, j] - Q[idx - 1, j]).astype(np.float64), axis=-1)
+            seg = ok[idx - 1, j] & ok[idx, j] & (fade > 0.01) & (step <= max_step)
             for n in np.flatnonzero(seg):
                 i = idx[n]
                 cv2.line(img, (int(Q[i - 1, j, 0]), int(Q[i - 1, j, 1])), (int(Q[i, j, 0]), int(Q[i, j, 1])),
                          tuple(int(c) for c in cols[n]), int(widths[n]), aa, _SHIFT)
 
     cur, cur_ok = Q[k], ok[k]
-    hide = FACE if not style.face else frozenset()
+    hide = sk.skip | (sk.face if not style.face else frozenset())
     sw = max(1, int(round(style.skeleton_width)))
-    for a, b in CONNECTIONS:
+    for a, b in sk.connections:
         if a in hide or b in hide or not (cur_ok[a] and cur_ok[b]):
             continue
         cv2.line(img, (int(cur[a, 0]), int(cur[a, 1])), (int(cur[b, 0]), int(cur[b, 1])),
-                 _bone_color(a, b, style), sw, aa, _SHIFT)
+                 _bone_color(a, b, sk, style), sw, aa, _SHIFT)
     r = int(round(style.joint_radius * (1 << _SHIFT)))
     if r > 0:
+        r_small = max(1 << _SHIFT, int(round(r * 0.55)))
         for j in np.flatnonzero(cur_ok):
-            if j not in hide:
-                cv2.circle(img, (int(cur[j, 0]), int(cur[j, 1])), r, _joint_color(int(j), style), -1, aa, _SHIFT)
+            if j not in hide and (sk.dots is None or j in sk.dots):
+                cv2.circle(img, (int(cur[j, 0]), int(cur[j, 1])), r_small if j in sk.small else r,
+                           _joint_color(int(j), sk, style), -1, aa, _SHIFT)
 
 
 def _composite(layer: np.ndarray, under: np.ndarray, dim: float = 0.45) -> np.ndarray:
@@ -537,8 +886,9 @@ def render_frame(traj: PoseTrajectory, t: Optional[float] = None, style: Optiona
         k0 = int(np.searchsorted(t_all, t - style.trace_seconds, side="left"))
         ts, L = t_all[k0:k_end], L_all[k0:k_end]
         if len(ts):
-            Q, ok = _fixed(_project(L, traj.aspect, W, H, style))
-            _draw(img, Q, ok, ts, len(ts) - 1, style, resolve_joints(style.trace_joints), bg)
+            sk = traj.skeleton
+            Q, ok = _fixed(_project(L, traj.aspect, W, H, style, sk))
+            _draw(img, Q, ok, ts, len(ts) - 1, style, resolve_joints(style.trace_joints, sk), bg, sk)
     return _composite(img, under) if under is not None else img
 
 
@@ -557,13 +907,14 @@ def iter_frames(traj: PoseTrajectory, fps: float, start: Optional[float] = None,
     res = traj.resample(fps, start=lead, end=end)
     ts, L = res.arrays()
     W, H = style.canvas_size(traj.aspect)
-    Q, ok = _fixed(_project(L, traj.aspect, W, H, style))
-    joints = resolve_joints(style.trace_joints)
+    sk = traj.skeleton
+    Q, ok = _fixed(_project(L, traj.aspect, W, H, style, sk))
+    joints = resolve_joints(style.trace_joints, sk)
     first = int(np.searchsorted(ts, start - 1e-9, side="left"))
     for k in range(first, len(ts)):
         img = np.empty((H, W, 3), dtype=np.uint8)
         img[:] = style.background
-        _draw(img, Q, ok, ts, k, style, joints, style.background)
+        _draw(img, Q, ok, ts, k, style, joints, style.background, sk)
         yield img
 
 
@@ -649,43 +1000,49 @@ def iter_video(path: str, max_side: Optional[int] = None, stride: int = 1,
         cap.release()
 
 
-def track_video(path: str, tracker: Optional[PoseTracker] = None, max_side: Optional[int] = 960,
+def track_video(path: str, tracker=None, max_side: Optional[int] = 960,
                 stride: int = 1, start: float = 0.0, end: Optional[float] = None,
                 variant: str = "full", smooth: float = 0.0, progress: bool = False) -> PoseTrajectory:
     """Track a video file (or its [start, end] seconds) into an unbounded
-    PoseTrajectory.  `smooth` > 0 runs the landmarks through a LandmarkFilter."""
-    own = tracker is None
-    tracker = tracker or PoseTracker(variant=variant)
+    PoseTrajectory.  `tracker` is body | hands | both, or a tracker object
+    to reuse.  `smooth` > 0 runs the landmarks through a LandmarkFilter."""
+    own = tracker is None or isinstance(tracker, str)
+    if own:
+        tracker = make_tracker(tracker or "body", variant=variant)
     filt = LandmarkFilter(smooth=smooth)
     traj: Optional[PoseTrajectory] = None
     try:
         for n, (t, rgb) in enumerate(iter_video(path, max_side=max_side, stride=stride, start=start, end=end)):
             if traj is None:
-                traj = PoseTrajectory(max_seconds=None, aspect=rgb.shape[1] / rgb.shape[0])
+                traj = PoseTrajectory(max_seconds=None, aspect=rgb.shape[1] / rgb.shape[0],
+                                      skeleton=tracker.skeleton)
             traj.append(t, filt(t, tracker.detect(rgb, t)))
             if progress and n % 100 == 0:
                 print(f"[pose] {t:7.2f} s")
     finally:
         if own:
             tracker.close()
-    return traj or PoseTrajectory(max_seconds=None)
+    return traj or PoseTrajectory(max_seconds=None, skeleton=tracker.skeleton)
 
 
 class PoseStream:
     """Tracker + running trajectory for one live camera fed JPEG frames.
-    Timestamps come from the arrival clock.  The tracker loads on the
-    first frame, so building a stream costs nothing until it is used."""
+    `tracker` is body | hands | both.  Timestamps come from the arrival
+    clock.  The tracker loads on the first frame, so building a stream
+    costs nothing until it is used."""
 
-    def __init__(self, max_seconds: float = 30.0, variant: str = "full", smooth: float = 0.5):
+    def __init__(self, max_seconds: float = 30.0, variant: str = "full", smooth: float = 0.5,
+                 tracker: str = "body"):
         self.variant = variant
-        self.trajectory = PoseTrajectory(max_seconds=max_seconds)
+        self.kind = tracker
+        self.trajectory = PoseTrajectory(max_seconds=max_seconds, skeleton=SKELETONS[tracker])
         self.filter = LandmarkFilter(smooth=smooth)  # set .filter.smooth to retune live
-        self._tracker: Optional[PoseTracker] = None
+        self._tracker = None
         self._lock = threading.Lock()               # close() waits for a detect in flight
         self._t0 = time.perf_counter()
 
     def push_jpeg(self, jpeg: bytes) -> bool:
-        """Decode, track and append one frame; True when a person was found."""
+        """Decode, track and append one frame; True when anything was found."""
         import cv2
         bgr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
         if bgr is None:
@@ -695,10 +1052,24 @@ class PoseStream:
     def push_rgb(self, rgb: np.ndarray) -> bool:
         with self._lock:
             if self._tracker is None:
-                self._tracker = PoseTracker(variant=self.variant)
+                self._tracker = make_tracker(self.kind, variant=self.variant)
             t = time.perf_counter() - self._t0
             self.trajectory.aspect = rgb.shape[1] / rgb.shape[0]
             sample = self.filter(t, self._tracker.detect(rgb, t))
+            self.trajectory.append(t, sample)
+            return sample is not None
+
+    def push_landmarks(self, rows: np.ndarray, t: float, aspect: float) -> bool:
+        """Append landmarks tracked elsewhere (the browser, on the GPU).
+        `rows` is (N, 7) in this stream's layout, empty when nothing was
+        found; `t` is the tracker's clock in seconds."""
+        with self._lock:
+            self.trajectory.aspect = float(aspect)
+            sample = None
+            if len(rows) == self.trajectory.skeleton.n:
+                r = np.asarray(rows, dtype=np.float32)
+                sample = PoseSample(xy=r[:, :2], z=r[:, 2], visibility=r[:, 3], world=r[:, 4:7])
+            sample = self.filter(t, sample)
             self.trajectory.append(t, sample)
             return sample is not None
 
@@ -724,7 +1095,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     ap.add_argument("--square", action="store_true")
     ap.add_argument("--fit", default="camera", choices=["camera", "window", "body"])
     ap.add_argument("--trace", type=float, default=1.0, help="trace length in seconds")
-    ap.add_argument("--joints", default="extremities", help=f"one of {sorted(JOINT_SETS)} or comma-separated indices")
+    ap.add_argument("--tracker", default="body", choices=sorted(SKELETONS),
+                    help="body (33 points) | hands (21 per hand, with fingers) | face (478) | both")
+    ap.add_argument("--joints", help="joints that leave traces: a set name "
+                    + "; ".join(f"{k}: {', '.join(s.joint_sets)}" for k, s in SKELETONS.items())
+                    + " (default: the tracker's own), or comma-separated indices")
     ap.add_argument("--mono", action="store_true", help="white skeleton instead of left/right colours")
     ap.add_argument("--overlay", action="store_true", help="draw over the dimmed source video")
     ap.add_argument("--model", default="full", choices=["lite", "full", "heavy"])
@@ -734,7 +1109,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     ap.add_argument("--end", type=float, help="stop at this many seconds into the input")
     a = ap.parse_args(argv)
 
-    joints: Union[str, Sequence[int]] = a.joints if a.joints in JOINT_SETS else [int(x) for x in a.joints.split(",")]
+    joints: Union[str, Sequence[int]] = (
+        a.joints if a.joints and not a.joints[0].isdigit()
+        else [int(x) for x in a.joints.split(",")] if a.joints
+        else SKELETONS[a.tracker].default_joints)
     style = PoseStyle(size=a.size, square=a.square, fit=a.fit, trace_seconds=a.trace,
                       trace_joints=joints, color="mono" if a.mono else "sides")
     out = a.out or os.path.splitext(a.input)[0] + "_pose.mp4"
@@ -749,11 +1127,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         src_fps = cap.get(cv2.CAP_PROP_FPS) or None
         cap.release()
         t0 = time.perf_counter()
-        traj = track_video(a.input, max_side=a.max_side, start=a.start, end=a.end, variant=a.model,
-                           smooth=a.smooth, progress=True)
-        found = int(np.isfinite(traj.arrays()[1][:, 0, 0]).sum())
+        traj = track_video(a.input, tracker=a.tracker, max_side=a.max_side, start=a.start, end=a.end,
+                           variant=a.model, smooth=a.smooth, progress=True)
+        found = int(np.isfinite(traj.arrays()[1][..., _X]).any(axis=1).sum())
         print(f"[pose] tracked {len(traj)} frames in {time.perf_counter() - t0:.1f} s, "
-              f"person found in {found} ({100.0 * found / max(len(traj), 1):.0f} %)")
+              f"{a.tracker} found in {found} ({100.0 * found / max(len(traj), 1):.0f} %)")
     if a.npz:
         traj.save(a.npz)
         print(f"[pose] trajectory -> {a.npz}")

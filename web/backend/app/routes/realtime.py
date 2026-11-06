@@ -245,7 +245,8 @@ async def walker_socket(ws: WebSocket, space_id: str, layout: str = "umap"):
 #     query   {text}                     re-score node relevance to this sentence
 #     params  {...DeltaGraphRequest-ish} top_abs_edges, sign_filter, beta, …
 #     pose_tick {window, frames}         embed the dancer's recent trajectory now
-#     pose_params {trace, fit, joints, smooth}   how the dance is tracked and drawn
+#     pose_params {tracker, trace, fit, joints, smooth}   how the dance is tracked and drawn
+#                                        (tracker: body | hands | both; switching starts a new trajectory)
 #     pose_reset                         forget the pose trajectory
 #     pose_export {seconds, format}      mp4 of the moving landmarks, or the npz trajectory
 #   server → client
@@ -471,7 +472,7 @@ def _av_vec(space, payload: bytes) -> np.ndarray:
 # the video tower as a clip (PE-AV, scored in its video head) or through the
 # image tower as a still (CLIP).
 
-_POSE_DEFAULTS: Dict[str, Any] = dict(trace=1.0, fit="camera", joints="extremities", smooth=0.5)
+_POSE_DEFAULTS: Dict[str, Any] = dict(tracker="body", trace=1.0, fit="camera", joints="extremities", smooth=0.5)
 _POSE_SIZE = 224        # the embedders' input side
 
 
@@ -497,6 +498,48 @@ def _pose_track(stream: PoseStream, jpeg: bytes, opts: Dict[str, Any]):
     stream.filter.smooth = float(opts["smooth"])
     found = stream.push_jpeg(jpeg)
     return found, _jpeg_b64(render_frame(stream.trajectory, style=_pose_style(opts, _POSE_SIZE)))
+
+
+_LANDMARK_KIND = 6      # landmarks tracked in the browser on the GPU (see web/frontend/lib/poseTracker.ts)
+_TRACKER_IDS = {0: "body", 1: "hands", 2: "face", 3: "both"}
+
+
+def _parse_landmarks(buf: bytes):
+    """uint8 tracker id · 3 pad · float32 aspect · float64 t (s) · uint32 rows ·
+    rows × 7 float32 (x y z visibility wx wy wz) → (tracker, aspect, t, (rows, 7))."""
+    tracker = _TRACKER_IDS.get(buf[0], "body")
+    aspect = float(np.frombuffer(buf[4:8], dtype="<f4")[0])
+    t = float(np.frombuffer(buf[8:16], dtype="<f8")[0])
+    rows = int(np.frombuffer(buf[16:20], dtype="<u4")[0])
+    data = np.frombuffer(buf[20:20 + rows * 28], dtype="<f4").reshape(rows, 7) if rows else np.zeros((0, 7), np.float32)
+    return tracker, aspect, t, data
+
+
+def _pose_ingest(stream: PoseStream, frames: list, opts: Dict[str, Any], draw: bool):
+    """Append browser-tracked landmark frames in order; return (found in the
+    newest, base64 drawing or None)."""
+    stream.filter.smooth = float(opts["smooth"])
+    found = False
+    for _, aspect, t, rows in frames:
+        found = stream.push_landmarks(rows, t, aspect)
+    preview = _jpeg_b64(render_frame(stream.trajectory, style=_pose_style(opts, _POSE_SIZE))) if draw else None
+    return found, preview
+
+
+def _motion_reading(stream: PoseStream, seconds: float, level: str) -> dict:
+    from delyrism.motion import describe
+    return describe(stream.trajectory, seconds, level).to_dict()
+
+
+def _motion_baseline(space, level: str) -> Optional[np.ndarray]:
+    """Mean embedding of reference descriptions spanning the effort space at
+    `level`: the direction every movement description shares.  Subtracting
+    it from a description's vector leaves what is distinctive about it; on
+    CLIP over the Four Elements this takes the rank correlation of node
+    relevance between contrasting movements from 0.73 to 0.31 (contrast 0.7)."""
+    from delyrism.motion import prototype_texts
+    vecs = [v for v in (_text_vec(space, t) for t in prototype_texts(level)) if v is not None]
+    return np.mean(vecs, axis=0) if vecs else None
 
 
 def _pose_vec(space, stream: PoseStream, opts: Dict[str, Any], window: float, frames: int) -> Optional[np.ndarray]:
@@ -535,7 +578,8 @@ _BIN_KINDS = {
     4: ("av", _av_vec, 4 + 4 + 2 * 1000 + 100),
 }
 _POSE_KIND = 5          # JPEG for the pose tracker; embedded on pose_tick, not on arrival
-_LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(audio + video)", "pose": "(pose)"}
+_LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(audio + video)", "pose": "(pose)",
+           "motion": "(movement)"}
 
 
 @router.websocket("/graph/{space_id}")
@@ -558,6 +602,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "graph_dirty": False, "query_dirty": False,
         "pose": None,                               # PoseStream, made on the first pose frame
         "pose_frame": None,                         # latest camera jpeg not yet tracked
+        "pose_lm": [],                              # browser landmark frames not yet appended (all kept)
+        "pose_drawn": 0.0,                          # last preview time (drawn at most 20 per second)
         "pose_opts": dict(_POSE_DEFAULTS),
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
@@ -641,10 +687,16 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 #   0x02 image  → JPEG bytes
                 #   0x03 video  → uint8 n + n × (uint32 LE len + JPEG)
                 #   0x04 av     → uint32 LE audio-len + audio payload + video payload
-                #   0x05 pose   → JPEG, tracked into the pose trajectory
+                #   0x05 pose   → JPEG, tracked into the pose trajectory on the server
+                #   0x06 marks  → landmarks tracked in the browser (see _parse_landmarks)
                 buf = msg["bytes"]
                 if buf and buf[0] == _POSE_KIND and len(buf) > 100:
                     state["pose_frame"] = bytes(buf[1:])   # latest wins; pose_loop tracks it
+                    pose_wake.set()
+                    continue
+                if buf and buf[0] == _LANDMARK_KIND and len(buf) >= 21:
+                    state["pose_lm"].append(_parse_landmarks(bytes(buf[1:])))
+                    del state["pose_lm"][:-120]            # never more than ~4 s behind
                     pose_wake.set()
                     continue
                 spec = _BIN_KINDS.get(buf[0] if buf else 0)
@@ -698,11 +750,24 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     frames = int(np.clip(int(m.get("frames") or 16), 1, 48))
                     state["pending"] = ("pose", (window, frames))   # latest wins
                     state["query_dirty"] = True
+            elif t == "motion_tick":
+                if state["pose"] is not None:
+                    level = m.get("level") if m.get("level") in ("full", "abstract", "qualities", "body") else "full"
+                    state["pending"] = ("motion", (float(np.clip(float(m.get("window") or 3.0), 1.0, 10.0)), level,
+                                                   float(np.clip(float(m.get("contrast") or 0.0), 0.0, 1.0))))
+                    state["query_dirty"] = True
             elif t == "pose_params":
                 opts = state["pose_opts"]
                 for k in _POSE_DEFAULTS:
                     if m.get(k) is not None:
                         opts[k] = m[k]
+                if opts["tracker"] not in ("body", "hands", "face", "both"):
+                    opts["tracker"] = "body"
+                old = state["pose"]
+                if old is not None and old.kind != opts["tracker"]:
+                    # a different landmark layout: drop the stream, the next frame builds the new one
+                    state["pose"] = None
+                    await asyncio.to_thread(old.close)
             elif t == "pose_reset":
                 if state["pose"] is not None:
                     state["pose"].trajectory.clear()
@@ -734,22 +799,46 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             return
         state["pending"] = None
         kind, payload = pend
+        label = None
         if kind == "pose":
+            if state["pose"] is None:
+                return          # tracker switched, the new stream has no frames yet
             v = await asyncio.to_thread(_pose_vec, space, state["pose"], dict(state["pose_opts"]), *payload)
             if v is None:
                 return          # nobody in frame: hold the last query
+        elif kind == "motion":
+            # movement → words → the text tower: works with every backend
+            if state["pose"] is None:
+                return
+            window, level, contrast = payload
+            reading = await asyncio.to_thread(_motion_reading, state["pose"], window, level)
+            await ws.send_json({"type": "motion", "level": level, **reading})
+            if not reading["text"]:
+                return          # nothing tracked or nothing moving enough to say: hold the last query
+            v = await asyncio.to_thread(_text_vec, space, reading["text"])
+            if v is None:
+                return
+            if contrast > 0:
+                bases = state.setdefault("motion_base", {})
+                if level not in bases:
+                    bases[level] = await asyncio.to_thread(_motion_baseline, space, level)
+                if bases[level] is not None:
+                    v = _unit(v - contrast * bases[level])
+            label = reading["text"]
         else:
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
-        if prev is not None and a > 0:
+        # each movement description already sums up a whole window, so it
+        # replaces the query outright instead of blending into the last one
+        if prev is not None and a > 0 and kind != "motion":
             v = _unit(a * prev + (1.0 - a) * v)
         if state["query_kind"] != kind:
             state["rel_prev"] = None
         state["vq"] = v
         state["query_kind"] = kind
-        state["query_text"] = _LABELS.get(kind, "")
+        state["query_text"] = label or _LABELS.get(kind, "")
 
     async def worker() -> None:
         nonlocal graph
@@ -786,11 +875,33 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         while True:
             await pose_wake.wait()
             pose_wake.clear()
+            marks, state["pose_lm"] = state["pose_lm"], []
+            if marks:
+                kind = marks[-1][0]
+                if state["pose"] is None or state["pose"].kind != kind:
+                    old = state["pose"]
+                    state["pose"] = PoseStream(smooth=float(state["pose_opts"]["smooth"]), tracker=kind)
+                    if old is not None:
+                        await asyncio.to_thread(old.close)
+                marks = [f for f in marks if f[0] == kind]
+                now = time.monotonic()
+                draw = now - state["pose_drawn"] >= 0.05
+                try:
+                    found, preview = await asyncio.to_thread(_pose_ingest, state["pose"], marks,
+                                                             dict(state["pose_opts"]), draw)
+                except Exception as e:
+                    await ws.send_json({"type": "error", "detail": f"pose landmarks failed: {e}"})
+                    continue
+                if draw:
+                    state["pose_drawn"] = now
+                    await ws.send_json({"type": "pose", "jpeg": preview, "present": found})
+                continue
             jpeg, state["pose_frame"] = state["pose_frame"], None
             if jpeg is None:
                 continue
             if state["pose"] is None:
-                state["pose"] = PoseStream(smooth=float(state["pose_opts"]["smooth"]))
+                state["pose"] = PoseStream(smooth=float(state["pose_opts"]["smooth"]),
+                                           tracker=state["pose_opts"]["tracker"])
             try:
                 found, preview = await asyncio.to_thread(_pose_track, state["pose"], jpeg, dict(state["pose_opts"]))
             except Exception as e:

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.1.1",
     "@tanstack/react-query": "^5.51.0",
     "jszip": "^3.10.1",
     "next": "14.2.5",

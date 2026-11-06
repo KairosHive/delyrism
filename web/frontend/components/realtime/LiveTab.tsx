@@ -7,6 +7,7 @@ import { Slider } from "@/components/ui/Slider";
 import { Select } from "@/components/ui/Select";
 import { LiveDeltaGraph } from "./LiveDeltaGraph";
 import { PosePanel } from "./PoseQuery";
+import { MotionPanel } from "./MotionQuery";
 
 /**
  * Live tab — the Explorer's Δ-graph driven by two continuously edited
@@ -65,26 +66,27 @@ function Inputs() {
   );
 }
 
-const MODE_LABEL: Record<QueryMode, string> = { text: "text", audio: "mic", image: "camera", video: "video", av: "audio + video", pose: "pose" };
+const MODE_LABEL: Record<QueryMode, string> = { text: "text", audio: "mic", image: "camera", video: "video", av: "audio + video", pose: "pose", motion: "movement → text" };
 const MODE_HINT: Record<QueryMode, string> = {
   text: "typed sentence",
   audio: "sliding window of microphone audio through the audio tower",
   image: "latest camera frame through the CLIP image tower",
   video: "sliding window of camera frames through the PE-AV video tower",
   av: "the same window of sound and frames through the joint PE-AV audio-visual tower",
-  pose: "dance: MediaPipe body landmarks drawn with temporal traces, embedded as a clip (video tower) or a still (image tower)",
+  pose: "dance: MediaPipe landmarks (GPU, in the browser) drawn with temporal traces, embedded as a clip (video tower) or a still (image tower)",
+  motion: "dance: movement qualities (effort, shape, rhythm …) measured from the landmarks and described in words; the words are the query",
 };
 
 function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; status: string; nEdges: number; queryActive: boolean; error: string | null }) {
   const { query, setQuery, queryMode, setQueryMode, live, startLive, stopLive, liveError, audioLevel, queryKind,
           audioCapable, imageCapable, videoCapable, avCapable, poseCapable,
-          audioWindow, videoWindow, videoFps, sendInterval, setSendInterval,
+          audioWindow, videoWindow, videoFps, sendInterval, setSendInterval, motionRefresh,
           audioSmoothing, setAudioSmoothing, relSmoothing, setRelSmoothing, set, camVideo } = useLive(useShallow((s) => ({
     query: s.query, setQuery: s.setQuery, queryMode: s.queryMode, setQueryMode: s.setQueryMode, live: s.live,
     startLive: s.startLive, stopLive: s.stopLive, liveError: s.liveError, audioLevel: s.audioLevel, queryKind: s.queryKind,
     audioCapable: s.audioCapable, imageCapable: s.imageCapable, videoCapable: s.videoCapable, avCapable: s.avCapable,
     poseCapable: s.poseCapable, audioWindow: s.audioWindow, videoWindow: s.videoWindow, videoFps: s.videoFps,
-    sendInterval: s.sendInterval, setSendInterval: s.setSendInterval,
+    sendInterval: s.sendInterval, setSendInterval: s.setSendInterval, motionRefresh: s.motionRefresh,
     audioSmoothing: s.audioSmoothing, setAudioSmoothing: s.setAudioSmoothing, relSmoothing: s.relSmoothing, setRelSmoothing: s.setRelSmoothing,
     set: s.set, camVideo: s.camVideo,
   })));
@@ -97,14 +99,16 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
     av: avCapable || backend === "peav",
     // the dance is drawn, then embedded by whichever visual tower the space has
     pose: poseCapable && (videoCapable || imageCapable || backend === "peav" || backend === "clip"),
+    // movement words go through the text tower, which every backend has
+    motion: true,
   };
   // show text + every live mode this space supports; if it supports none,
   // show the three generic ones greyed out so the hint explains what to build
-  const modes: QueryMode[] = (["text", "audio", "image", "video", "av", "pose"] as QueryMode[]).filter((m) => can[m]);
+  const modes: QueryMode[] = (["text", "audio", "image", "video", "av", "pose", "motion"] as QueryMode[]).filter((m) => can[m]);
   if (modes.length === 1) modes.push("audio", "video", "av");
   const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP" : "";
   const usesMic = queryMode === "audio" || queryMode === "av";
-  const usesCam = queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose";
+  const usesCam = queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose" || queryMode === "motion";
   const poseClip = queryMode === "pose" && videoCapable;
   const level = Math.min(1, audioLevel * 6);
   const nFrames = videoFrameCount({ videoWindow, videoFps });
@@ -133,7 +137,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
                 className={`px-2 py-0.5 transition ${queryMode === m ? "bg-[#c2a6fe]/25 text-ink-50" : can[m] ? "text-ink-400 hover:text-ink-100" : "text-ink-600"}`}
                 title={MODE_HINT[m]}
               >
-                {m === "text" || !prefix ? MODE_LABEL[m] : `${prefix} · ${MODE_LABEL[m]}`}
+                {m === "text" || m === "motion" || !prefix ? MODE_LABEL[m] : `${prefix} · ${MODE_LABEL[m]}`}
               </button>
             ))}
           </span>
@@ -161,7 +165,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
               disabled={!can[queryMode]}
               title={can[queryMode] ? "toggle live capture" : "build the space with a backend that has this tower first"}
             >
-              {live ? "■ stop" : queryMode === "pose" ? "● dance" : usesCam && usesMic ? "● listen + watch" : usesCam ? "● watch" : "● listen"}
+              {live ? "■ stop" : queryMode === "pose" || queryMode === "motion" ? "● dance" : usesCam && usesMic ? "● listen + watch" : usesCam ? "● watch" : "● listen"}
             </button>
             {usesCam && <div ref={previewRef} className="h-[64px] w-[86px] shrink-0 overflow-hidden rounded-md bg-ink-950/60" />}
             {usesMic && (
@@ -175,11 +179,13 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
                   : queryMode === "image" ? `1 frame / ${sendInterval} ms`
                   : queryMode === "video" ? `${videoWindow.toFixed(1)} s · ${nFrames} f / ${sendInterval} ms`
                   : queryMode === "pose" ? `${poseClip ? `${videoWindow.toFixed(1)} s · ${nFrames} f` : "still"} / ${sendInterval} ms`
+                  : queryMode === "motion" ? `words / ${motionRefresh.toFixed(2)} s`
                   : `${Math.max(audioWindow, videoWindow).toFixed(1)} s · ${nFrames} f / ${sendInterval} ms`
                 : "off"}
             </span>
           </div>
           {queryMode === "pose" && <PosePanel />}
+          {queryMode === "motion" && <MotionPanel />}
           {queryMode === "pose" && !can.pose && (
             <div className="text-[11px] text-warning">
               {poseCapable
@@ -200,8 +206,8 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
             {(queryMode === "video" || queryMode === "av" || poseClip) && <Slider label="video window" value={videoWindow} min={0.5} max={10} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("videoWindow", v)} help="Seconds of recent frames fed to the model each time." />}
             {(queryMode === "video" || queryMode === "av" || poseClip) && <Slider label="model fps" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps · ${nFrames} f`} onChange={(v) => set("videoFps", v)} help={`Frames per second inside the window (camera is sampled at this rate). window × fps = ${nFrames} frames per embedding, capped at ${MAX_VIDEO_FRAMES}; ~55 ms per frame on the GPU.`} />}
             {queryMode === "image" && <Slider label="capture" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps`} onChange={(v) => set("videoFps", v)} help="How often a camera frame is grabbed." />}
-            <Slider label="rate" value={sendInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={setSendInterval} help="How often a window is sent for embedding (latest wins if the GPU lags)." />
-            <Slider label="vector smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous media vector, before scoring." />
+            {queryMode !== "motion" && <Slider label="rate" value={sendInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={setSendInterval} help="How often a window is sent for embedding (latest wins if the GPU lags)." />}
+            {queryMode !== "motion" && <Slider label="vector smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous media vector, before scoring." />}
             <Slider label="activation smoothing" value={relSmoothing} min={0} max={0.97} step={0.01} onChange={setRelSmoothing} help="Server-side blend of the per-node relevance with its previous value, after embedding — calms the springs without blurring the embedding." />
           </div>
         </div>

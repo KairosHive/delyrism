@@ -14,6 +14,7 @@ import { useSidebar } from "./store";
 import type { DeltaEdge } from "./api";
 import { startMicCapture, type MicCapture } from "./liveAudio";
 import { startCameraCapture, type CameraCapture } from "./liveCamera";
+import { createTracker, packLandmarks, type Tracker } from "./poseTracker";
 
 export interface LiveNode { id: string; symbol: string; color: string; pull: number; }
 export interface LiveGraph {
@@ -39,15 +40,46 @@ export interface LiveParams {
 }
 
 type Status = "idle" | "connecting" | "ready" | "closed" | "error";
-export type QueryKind = "text" | "audio" | "image" | "video" | "av" | "pose";
+export type QueryKind = "text" | "audio" | "image" | "video" | "av" | "pose" | "motion";
 export type QueryMode = QueryKind;
+const tracks = (m: QueryMode) => m === "pose" || m === "motion";   // modes fed by the landmark tracker
 
 /** How the dance is tracked and drawn for the embedder (server-side, see delyrism/pose.py). */
+export type PoseTracker = "body" | "hands" | "face" | "both";
 export interface PoseOpts {
-  trace: number;                          // seconds of temporal trace behind each tracked joint
-  fit: "camera" | "window" | "body";      // framing: source camera · follow the movement · body-centred
-  joints: "extremities" | "hands" | "feet" | "limbs" | "all";
+  tracker: PoseTracker;                   // which MediaPipe model: full body · hands with fingers · face · body + hands
+  trace: number;                          // seconds of temporal trace behind each traced joint
+  fit: "camera" | "window" | "body";      // framing: source camera · follow the movement · centred on the body (hands)
+  joints: string;                         // which joints leave trails — a set from POSE_TRAILS[tracker]
   smooth: number;                         // landmark smoothing 0 (raw) .. 1 (heavy), One Euro filter
+}
+
+/** Trail sets per tracker (names match delyrism/pose.py Skeleton.joint_sets); first is the default. */
+export const POSE_TRAILS: Record<PoseTracker, { value: string; label: string }[]> = {
+  body: [
+    { value: "extremities", label: "head, wrists, ankles" }, { value: "wrists", label: "wrists" },
+    { value: "feet", label: "ankles" }, { value: "limbs", label: "elbows to ankles" }, { value: "all", label: "every joint" },
+  ],
+  hands: [
+    { value: "fingertips", label: "fingertips" }, { value: "index", label: "index fingertips" },
+    { value: "wrists", label: "wrists" }, { value: "all", label: "every joint" },
+  ],
+  face: [
+    { value: "features", label: "nose, chin, mouth, brows" }, { value: "mouth", label: "mouth" },
+    { value: "eyes", label: "irises (gaze)" }, { value: "nose", label: "nose tip" }, { value: "all", label: "every contour point" },
+  ],
+  both: [
+    { value: "extremities", label: "head, wrists, ankles" }, { value: "fingertips", label: "fingertips" },
+    { value: "limbs", label: "elbows to ankles" }, { value: "all", label: "every joint" },
+  ],
+};
+
+/** One movement quality as measured by delyrism/motion.py (value 0 = low pole, 1 = high pole). */
+export interface MotionQuality { key: string; value: number | null; raw: number | null; unit: string; low: string; high: string; }
+export interface MotionReading {
+  tracker: string; seconds: number; coverage: number;
+  qualities: MotionQuality[]; hands: MotionQuality[];
+  trends: Record<string, number | null>; text: string;
 }
 
 interface LiveState {
@@ -79,10 +111,16 @@ interface LiveState {
   audioSmoothing: number;        // server-side EMA on successive media vectors (before scoring)
   relSmoothing: number;          // server-side EMA on the relevance activations (after scoring)
   camVideo: HTMLVideoElement | null;
-  poseFps: number;               // camera frames tracked per second in pose mode (dense traces)
+  poseFps: number;               // camera frames tracked per second in pose / movement mode
   poseOpts: PoseOpts;
   posePreview: string | null;    // data URL of the latest pose drawing
   posePresent: boolean;          // a dancer was found in the latest tracked frame
+  trackerState: "off" | "loading" | "GPU" | "CPU" | "error";   // the browser landmark tracker
+  motionWindow: number;          // seconds of movement per description
+  motionContrast: number;        // 0..1, how much of the shared "movement description" direction is removed
+  motionRefresh: number;         // seconds between descriptions (each one replaces the query)
+  motion: MotionReading | null;  // the latest description from the server
+  motionApplied: { text: string; at: number } | null;   // the description the query last took, and when
 
   // the two live inputs (local echo; the socket gets debounced copies)
   context: string;
@@ -99,7 +137,7 @@ interface LiveState {
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
-  _sendBinary: ((kind: 1 | 2 | 3 | 4 | 5, buf: ArrayBuffer) => void) | null;
+  _sendBinary: ((kind: 1 | 2 | 3 | 4 | 5 | 6, buf: ArrayBuffer) => void) | null;
   _mic: MicCapture | null;
   _cam: CameraCapture | null;
   _ticker: ReturnType<typeof setInterval> | null;
@@ -112,6 +150,7 @@ interface LiveState {
   setAudioSmoothing: (v: number) => void;
   setRelSmoothing: (v: number) => void;
   setSendInterval: (v: number) => void;
+  setMotionRefresh: (v: number) => void;
   setPoseOpts: (patch: Partial<PoseOpts>) => void;
   resetPose: () => void;
   exportPose: (format: "mp4" | "npz", seconds: number) => void;
@@ -123,7 +162,67 @@ let ctxTimer: ReturnType<typeof setTimeout> | null = null;
 let qTimer: ReturnType<typeof setTimeout> | null = null;
 
 const needsMic = (m: QueryMode) => m === "audio" || m === "av";
-const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av" || m === "pose";
+const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av" || tracks(m);
+
+// ---- browser landmark tracker (pose / movement modes) ----------------------
+// MediaPipe runs here on the GPU (see poseTracker.ts) and reads the camera's
+// <video> element on every animation frame, throttled to `poseFps`; each
+// result goes to the server as a kind-6 landmark frame.  Kept outside the
+// store so tracking never triggers a React render.
+let tracker: Tracker | null = null;
+let trackerBuild: Promise<void> | null = null;
+let trackRaf: number | null = null;
+let lastTrack = 0;
+
+function stopTracking() {
+  if (trackRaf !== null) cancelAnimationFrame(trackRaf);
+  trackRaf = null;
+}
+
+function startTracking(get: () => LiveState) {
+  if (trackRaf !== null) return;
+  const loop = (now: number) => {
+    trackRaf = requestAnimationFrame(loop);
+    const s = get();
+    const video = s._cam?.video;
+    if (!tracker || !video || video.readyState < 2 || !tracks(s.queryMode)) return;
+    if (now - lastTrack < 1000 / s.poseFps) return;
+    lastTrack = now;
+    let rows: Float32Array | null = null;
+    try { rows = tracker.detect(video, now); } catch { return; }
+    s._sendBinary?.(6, packLandmarks(tracker.kind, video.videoWidth / Math.max(1, video.videoHeight), now / 1000, rows));
+  };
+  trackRaf = requestAnimationFrame(loop);
+}
+
+/** Build, swap or retire the tracker so it matches the current mode and choice. */
+async function ensureTracker(get: () => LiveState, set: (p: Partial<LiveState>) => void): Promise<void> {
+  const s = get();
+  const want = tracks(s.queryMode) && s._cam ? s.poseOpts.tracker : null;
+  if (!want) {
+    stopTracking();
+    if (tracker) { tracker.close(); tracker = null; }
+    if (s.trackerState !== "off") set({ trackerState: "off" });
+    return;
+  }
+  if (tracker?.kind === want) { startTracking(get); return; }
+  if (trackerBuild) return trackerBuild;              // building; it re-checks when done
+  set({ trackerState: "loading" });
+  trackerBuild = (async () => {
+    try {
+      const t = await createTracker(want);
+      tracker?.close();
+      tracker = t;
+      set({ trackerState: t.delegate });
+    } catch (e: any) {
+      set({ trackerState: "error", liveError: `landmark tracker: ${e?.message ?? String(e)}` });
+    } finally {
+      trackerBuild = null;
+    }
+    if (get().trackerState !== "error") await ensureTracker(get, set);   // the wanted kind may have changed
+  })();
+  return trackerBuild;
+}
 
 /** Start / stop mic + camera so exactly what the current mode needs is running. */
 async function ensureCapture(get: () => LiveState, set: (p: Partial<LiveState>) => void) {
@@ -137,14 +236,13 @@ async function ensureCapture(get: () => LiveState, set: (p: Partial<LiveState>) 
     if (needsCam(mode) && !get()._cam) {
       // the camera is sampled at the model's frame rate, so a window of
       // `videoWindow` seconds holds exactly videoWindow × videoFps frames;
-      // pose mode samples faster and streams every frame to the tracker
-      const cam = await startCameraCapture({
-        fpsMs: () => 1000 / (get().queryMode === "pose" ? get().poseFps : get().videoFps),
-        onFrame: (buf) => { if (get().queryMode === "pose") get()._sendBinary?.(5, buf); },
-      });
+      // in pose / movement mode the tracker reads the video itself and the
+      // JPEG ring idles
+      const cam = await startCameraCapture({ fpsMs: () => (tracks(get().queryMode) ? 1000 : 1000 / get().videoFps) });
       set({ _cam: cam, camVideo: cam.video });
     }
     if (!needsCam(mode) && get()._cam) { get()._cam!.stop(); set({ _cam: null, camVideo: null }); }
+    await ensureTracker(get, set);
   } catch (e: any) {
     set({ liveError: e?.message ?? String(e) });
   }
@@ -173,10 +271,23 @@ function sendWindow(get: () => LiveState) {
     out.set(new Uint8Array(v), 4 + a.byteLength);
     s._sendBinary(4, out.buffer);
   } else if (s.queryMode === "pose") {
-    // frames already stream to the tracker; this asks for an embedding of the
-    // recent trajectory (a clip of videoWindow s for a video tower, else a still)
+    // landmarks already stream to the server; this asks for an embedding of
+    // the recent trajectory (a clip of videoWindow s for a video tower, else a still)
     s._send?.({ type: "pose_tick", window: s.videoWindow, frames: videoFrameCount(s) });
+  } else if (s.queryMode === "motion") {
+    // … or for a description of its movement qualities, embedded as text
+    s._send?.({ type: "motion_tick", window: s.motionWindow, contrast: s.motionContrast });
   }
+}
+
+/** Each mode's send rate: movement mode refreshes at its own pace. */
+const tickMs = (s: LiveState) => (s.queryMode === "motion" ? s.motionRefresh * 1000 : s.sendInterval);
+
+function restartTicker(get: () => LiveState, set: (p: Partial<LiveState>) => void) {
+  const s = get();
+  if (!s._ticker) return;
+  clearInterval(s._ticker);
+  set({ _ticker: setInterval(() => sendWindow(get), tickMs(get())) });
 }
 
 export const MAX_VIDEO_FRAMES = 48;
@@ -212,9 +323,15 @@ export const useLive = create<LiveState>((set, get) => ({
   relSmoothing: 0.6,
   camVideo: null,
   poseFps: 15,
-  poseOpts: { trace: 1.0, fit: "camera", joints: "extremities", smooth: 0.5 },
+  poseOpts: { tracker: "body", trace: 1.0, fit: "camera", joints: "extremities", smooth: 0.5 },
   posePreview: null,
   posePresent: false,
+  trackerState: "off",
+  motionWindow: 3.0,
+  motionContrast: 0.7,
+  motionRefresh: 1.0,
+  motion: null,
+  motionApplied: null,
 
   context: "",
   query: "",
@@ -258,15 +375,17 @@ export const useLive = create<LiveState>((set, get) => ({
       return;
     }
     s._send?.({ type: "query_clear" });
+    // movement words come from body and hands; a face has its own description (next)
+    if (queryMode === "motion" && s.poseOpts.tracker === "face") get().setPoseOpts({ tracker: "body" });
     // switching between live modes on the fly keeps whatever capture the
     // new mode still needs and starts the rest
-    if (s.live) void ensureCapture(get, set);
+    if (s.live) { void ensureCapture(get, set); restartTicker(get, set); }
   },
   startLive: async () => {
     set({ liveError: null });
     await ensureCapture(get, set);
     if (get()._ticker) return;
-    const ticker = setInterval(() => sendWindow(get), get().sendInterval);
+    const ticker = setInterval(() => sendWindow(get), tickMs(get()));
     set({ _ticker: ticker, live: !!(get()._mic || get()._cam) });
   },
   stopLive: () => {
@@ -274,23 +393,27 @@ export const useLive = create<LiveState>((set, get) => ({
     if (s._ticker) clearInterval(s._ticker);
     s._mic?.stop();
     s._cam?.stop();
-    set({ _ticker: null, _mic: null, _cam: null, live: false, audioLevel: 0, camVideo: null, posePresent: false });
+    stopTracking();
+    if (tracker) { tracker.close(); tracker = null; }
+    set({ _ticker: null, _mic: null, _cam: null, live: false, audioLevel: 0, camVideo: null, posePresent: false,
+          trackerState: "off" });
     if (s.queryMode !== "text") s._send?.({ type: "query_clear" });
   },
   setPoseOpts: (patch) => {
-    set((s) => ({ poseOpts: { ...s.poseOpts, ...patch } }));
+    // switching tracker resets the trails to that tracker's default set
+    // unless the current one also exists there
+    if (patch.tracker && !patch.joints) {
+      const sets = POSE_TRAILS[patch.tracker];
+      if (!sets.some((o) => o.value === get().poseOpts.joints)) patch = { ...patch, joints: sets[0].value };
+    }
+    set((s) => ({ poseOpts: { ...s.poseOpts, ...patch }, ...(patch.tracker ? { posePreview: null, posePresent: false } : {}) }));
     get()._send?.({ type: "pose_params", ...patch });
+    if (patch.tracker && get().live) void ensureTracker(get, set);
   },
   resetPose: () => get()._send?.({ type: "pose_reset" }),
   exportPose: (format, seconds) => get()._send?.({ type: "pose_export", format, seconds }),
-  setSendInterval: (v) => {
-    set({ sendInterval: v });
-    const s = get();
-    if (s._ticker) {
-      clearInterval(s._ticker);
-      set({ _ticker: setInterval(() => sendWindow(get), v) });
-    }
-  },
+  setSendInterval: (v) => { set({ sendInterval: v }); restartTicker(get, set); },
+  setMotionRefresh: (v) => { set({ motionRefresh: v }); restartTicker(get, set); },
   setRelSmoothing: (v) => { set({ relSmoothing: v }); get()._send?.({ type: "rel_smoothing", value: v }); },
   setAudioSmoothing: (v) => { set({ audioSmoothing: v }); get()._send?.({ type: "audio_smoothing", value: v }); },
   setParams: (patch) => {
@@ -335,7 +458,7 @@ const SHAPE_KEYS = ["focus", "contraction", "damping", "stiffness", "repulsion",
 const shapeOf = (s: LiveState) => Object.fromEntries(SHAPE_KEYS.map((k) => [k, s[k]]));
 
 const asKind = (k: unknown): QueryKind =>
-  k === "audio" || k === "image" || k === "video" || k === "av" || k === "pose" ? k : "text";
+  k === "audio" || k === "image" || k === "video" || k === "av" || k === "pose" || k === "motion" ? k : "text";
 
 /** Open / maintain the live graph socket for the current space. */
 export function useLiveSocket() {
@@ -359,7 +482,7 @@ export function useLiveSocket() {
       sock.onopen = () => {
         attempt = 0;
         const send = (msg: object) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg)); };
-        const sendBinary = (kind: 1 | 2 | 3 | 4 | 5, buf: ArrayBuffer) => {
+        const sendBinary = (kind: 1 | 2 | 3 | 4 | 5 | 6, buf: ArrayBuffer) => {
           if (sock.readyState !== WebSocket.OPEN || sock.bufferedAmount > 2_000_000) return;
           const out = new Uint8Array(1 + buf.byteLength);
           out[0] = kind;
@@ -402,9 +525,13 @@ export function useLiveSocket() {
             relevanceSeq: s.relevanceSeq + 1,
             queryActive: !!msg.active,
             queryKind: asKind(msg.kind),
+            ...(msg.kind === "motion" && msg.active ? { motionApplied: { text: String(msg.query ?? ""), at: performance.now() } } : {}),
           }));
+        } else if (msg.type === "motion") {
+          if (useLive.getState().queryMode !== "motion") return;
+          useLive.setState({ motion: msg as MotionReading });
         } else if (msg.type === "pose") {
-          if (useLive.getState().queryMode !== "pose") return;   // a late frame after switching away
+          if (!tracks(useLive.getState().queryMode)) return;   // a late frame after switching away
           useLive.setState({ posePreview: msg.jpeg ? `data:image/jpeg;base64,${msg.jpeg}` : null, posePresent: !!msg.present });
         } else if (msg.type === "pose_export") {
           downloadBase64(msg.data, msg.format === "npz" ? "application/octet-stream" : "video/mp4",
