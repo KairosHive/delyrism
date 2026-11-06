@@ -39,6 +39,8 @@ export interface LiveParams {
 }
 
 type Status = "idle" | "connecting" | "ready" | "closed" | "error";
+export type QueryKind = "text" | "audio" | "image" | "video" | "av";
+export type QueryMode = QueryKind;
 
 interface LiveState {
   status: Status;
@@ -49,22 +51,24 @@ interface LiveState {
   relevance: Record<string, number>;
   relevanceSeq: number;          // bumps on every relevance payload
   queryActive: boolean;
-  queryKind: "text" | "audio" | "image";   // what the server's current relevance came from
-  audioCapable: boolean;         // the space's embedder has an audio tower (CLAP)
+  queryKind: QueryKind;          // what the server's current relevance came from
+  audioCapable: boolean;         // the space's embedder has an audio tower (CLAP / PE-AV)
   imageCapable: boolean;         // … an image tower (CLIP)
+  videoCapable: boolean;         // … a video tower (PE-AV, sliding window of frames)
+  avCapable: boolean;            // … a joint audio-visual tower (PE-AV)
   pending: number;               // in-flight recomputes (for the status pulse)
 
-  // ----- CLAP query (continuous microphone) / CLIP query (camera) -----
-  queryMode: "text" | "clap" | "clip";
-  listening: boolean;
-  micError: string | null;
+  // ----- live media query (mic / camera sliding windows) -----
+  queryMode: QueryMode;
+  live: boolean;                 // capture + send ticker running
+  liveError: string | null;
   audioLevel: number;            // smoothed RMS 0..~0.5
   audioWindow: number;           // seconds of audio per embedding
-  audioInterval: number;         // ms between embeddings
-  audioSmoothing: number;        // server-side EMA on successive audio / image vectors
-  watching: boolean;
-  camError: string | null;
-  camInterval: number;           // ms between camera frames
+  videoWindow: number;           // seconds of frames per embedding
+  videoFps: number;              // frames per second fed to the model (window × fps = frames)
+  sendInterval: number;          // ms between embeddings
+  audioSmoothing: number;        // server-side EMA on successive media vectors (before scoring)
+  relSmoothing: number;          // server-side EMA on the relevance activations (after scoring)
   camVideo: HTMLVideoElement | null;
 
   // the two live inputs (local echo; the socket gets debounced copies)
@@ -79,24 +83,78 @@ interface LiveState {
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
-  _sendBinary: ((kind: 1 | 2, buf: ArrayBuffer) => void) | null;
+  _sendBinary: ((kind: 1 | 2 | 3 | 4, buf: ArrayBuffer) => void) | null;
   _mic: MicCapture | null;
   _cam: CameraCapture | null;
+  _ticker: ReturnType<typeof setInterval> | null;
   setContext: (t: string) => void;
   setQuery: (t: string) => void;
   setParams: (patch: Partial<LiveParams>) => void;
-  setQueryMode: (m: "text" | "clap" | "clip") => void;
-  startListening: () => Promise<void>;
-  stopListening: () => void;
-  startWatching: () => Promise<void>;
-  stopWatching: () => void;
+  setQueryMode: (m: QueryMode) => void;
+  startLive: () => Promise<void>;
+  stopLive: () => void;
   setAudioSmoothing: (v: number) => void;
+  setRelSmoothing: (v: number) => void;
+  setSendInterval: (v: number) => void;
   set: <K extends keyof LiveState>(k: K, v: LiveState[K]) => void;
 }
 
 const DEBOUNCE_MS = 180;
 let ctxTimer: ReturnType<typeof setTimeout> | null = null;
 let qTimer: ReturnType<typeof setTimeout> | null = null;
+
+const needsMic = (m: QueryMode) => m === "audio" || m === "av";
+const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av";
+
+/** Start / stop mic + camera so exactly what the current mode needs is running. */
+async function ensureCapture(get: () => LiveState, set: (p: Partial<LiveState>) => void) {
+  const mode = get().queryMode;
+  try {
+    if (needsMic(mode) && !get()._mic) {
+      const mic = await startMicCapture({ onLevel: (rms) => set({ audioLevel: rms }) });
+      set({ _mic: mic });
+    }
+    if (!needsMic(mode) && get()._mic) { get()._mic!.stop(); set({ _mic: null, audioLevel: 0 }); }
+    if (needsCam(mode) && !get()._cam) {
+      // the camera is sampled at the model's frame rate, so a window of
+      // `videoWindow` seconds holds exactly videoWindow × videoFps frames
+      const cam = await startCameraCapture({ fpsMs: () => 1000 / get().videoFps });
+      set({ _cam: cam, camVideo: cam.video });
+    }
+    if (!needsCam(mode) && get()._cam) { get()._cam!.stop(); set({ _cam: null, camVideo: null }); }
+  } catch (e: any) {
+    set({ liveError: e?.message ?? String(e) });
+  }
+}
+
+/** Build the binary frame for the current mode from the ring buffers and send it. */
+function sendWindow(get: () => LiveState) {
+  const s = get();
+  if (!s._sendBinary) return;
+  if (s.queryMode === "audio") {
+    const a = s._mic?.window(s.audioWindow);
+    if (a) s._sendBinary(1, a);
+  } else if (s.queryMode === "image") {
+    const f = s._cam?.latest();
+    if (f) s._sendBinary(2, f);
+  } else if (s.queryMode === "video") {
+    const v = s._cam?.clip(s.videoWindow, videoFrameCount(s));
+    if (v) s._sendBinary(3, v);
+  } else if (s.queryMode === "av") {
+    const a = s._mic?.window(Math.max(s.audioWindow, s.videoWindow));
+    const v = s._cam?.clip(s.videoWindow, videoFrameCount(s));
+    if (!a || !v) return;
+    const out = new Uint8Array(4 + a.byteLength + v.byteLength);
+    new DataView(out.buffer).setUint32(0, a.byteLength, true);
+    out.set(new Uint8Array(a), 4);
+    out.set(new Uint8Array(v), 4 + a.byteLength);
+    s._sendBinary(4, out.buffer);
+  }
+}
+
+export const MAX_VIDEO_FRAMES = 48;
+export const videoFrameCount = (s: { videoWindow: number; videoFps: number }) =>
+  Math.max(1, Math.min(MAX_VIDEO_FRAMES, Math.round(s.videoWindow * s.videoFps)));
 
 export const useLive = create<LiveState>((set, get) => ({
   status: "idle",
@@ -110,18 +168,20 @@ export const useLive = create<LiveState>((set, get) => ({
   queryKind: "text",
   audioCapable: false,
   imageCapable: false,
+  videoCapable: false,
+  avCapable: false,
   pending: 0,
 
   queryMode: "text",
-  listening: false,
-  micError: null,
+  live: false,
+  liveError: null,
   audioLevel: 0,
   audioWindow: 2.5,
-  audioInterval: 600,
+  videoWindow: 3.0,
+  videoFps: 4,
+  sendInterval: 600,
   audioSmoothing: 0.5,
-  watching: false,
-  camError: null,
-  camInterval: 500,
+  relSmoothing: 0.6,
   camVideo: null,
 
   context: "",
@@ -137,6 +197,7 @@ export const useLive = create<LiveState>((set, get) => ({
   _sendBinary: null,
   _mic: null,
   _cam: null,
+  _ticker: null,
   setContext: (context) => {
     set({ context });
     if (ctxTimer) clearTimeout(ctxTimer);
@@ -155,56 +216,42 @@ export const useLive = create<LiveState>((set, get) => ({
   setQueryMode: (queryMode) => {
     const s = get();
     if (queryMode === s.queryMode) return;
-    // leaving a live mode stops its capture; the server is told to drop
-    // the old vector so the new mode starts clean
-    if (s.queryMode === "clap") s.stopListening();
-    if (s.queryMode === "clip") s.stopWatching();
     set({ queryMode });
-    if (queryMode === "text") s._send?.({ type: "query", text: s.query });
-    else s._send?.({ type: "query_clear" });
-  },
-  startListening: async () => {
-    const s = get();
-    if (s._mic) return;
-    set({ micError: null });
-    try {
-      const mic = await startMicCapture({
-        windowSec: () => get().audioWindow,
-        intervalMs: () => get().audioInterval,
-        onWindow: (buf) => get()._sendBinary?.(1, buf),
-        onLevel: (rms) => set({ audioLevel: rms }),
-      });
-      set({ _mic: mic, listening: true });
-    } catch (e: any) {
-      set({ micError: e?.message ?? String(e), listening: false });
+    if (queryMode === "text") {
+      // leaving the live modes stops capture; the server drops the old vector
+      s.stopLive();
+      s._send?.({ type: "query", text: s.query });
+      return;
     }
+    s._send?.({ type: "query_clear" });
+    // switching between live modes on the fly keeps whatever capture the
+    // new mode still needs and starts the rest
+    if (s.live) void ensureCapture(get, set);
   },
-  stopListening: () => {
+  startLive: async () => {
+    set({ liveError: null });
+    await ensureCapture(get, set);
+    if (get()._ticker) return;
+    const ticker = setInterval(() => sendWindow(get), get().sendInterval);
+    set({ _ticker: ticker, live: !!(get()._mic || get()._cam) });
+  },
+  stopLive: () => {
     const s = get();
+    if (s._ticker) clearInterval(s._ticker);
     s._mic?.stop();
-    set({ _mic: null, listening: false, audioLevel: 0 });
-    if (s.queryMode === "clap") s._send?.({ type: "query_clear" });
+    s._cam?.stop();
+    set({ _ticker: null, _mic: null, _cam: null, live: false, audioLevel: 0, camVideo: null });
+    if (s.queryMode !== "text") s._send?.({ type: "query_clear" });
   },
-  startWatching: async () => {
+  setSendInterval: (v) => {
+    set({ sendInterval: v });
     const s = get();
-    if (s._cam) return;
-    set({ camError: null });
-    try {
-      const cam = await startCameraCapture({
-        intervalMs: () => get().camInterval,
-        onFrame: (buf) => get()._sendBinary?.(2, buf),
-      });
-      set({ _cam: cam, watching: true, camVideo: cam.video });
-    } catch (e: any) {
-      set({ camError: e?.message ?? String(e), watching: false });
+    if (s._ticker) {
+      clearInterval(s._ticker);
+      set({ _ticker: setInterval(() => sendWindow(get), v) });
     }
   },
-  stopWatching: () => {
-    const s = get();
-    s._cam?.stop();
-    set({ _cam: null, watching: false, camVideo: null });
-    if (s.queryMode === "clip") s._send?.({ type: "query_clear" });
-  },
+  setRelSmoothing: (v) => { set({ relSmoothing: v }); get()._send?.({ type: "rel_smoothing", value: v }); },
   setAudioSmoothing: (v) => { set({ audioSmoothing: v }); get()._send?.({ type: "audio_smoothing", value: v }); },
   setParams: (patch) => {
     const cur = get().params;
@@ -237,6 +284,9 @@ export function explorerDeltaParams(): Partial<LiveParams> {
   };
 }
 
+const asKind = (k: unknown): QueryKind =>
+  k === "audio" || k === "image" || k === "video" || k === "av" ? k : "text";
+
 /** Open / maintain the live graph socket for the current space. */
 export function useLiveSocket() {
   const spaceId = useSidebar((s) => s.spaceId);
@@ -259,7 +309,7 @@ export function useLiveSocket() {
       sock.onopen = () => {
         attempt = 0;
         const send = (msg: object) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg)); };
-        const sendBinary = (kind: 1 | 2, buf: ArrayBuffer) => {
+        const sendBinary = (kind: 1 | 2 | 3 | 4, buf: ArrayBuffer) => {
           if (sock.readyState !== WebSocket.OPEN || sock.bufferedAmount > 2_000_000) return;
           const out = new Uint8Array(1 + buf.byteLength);
           out[0] = kind;
@@ -274,13 +324,16 @@ export function useLiveSocket() {
         if (st.context.trim()) send({ type: "context", text: st.context });
         if (st.queryMode === "text" && st.query.trim()) send({ type: "query", text: st.query });
         if (st.audioSmoothing !== 0.5) send({ type: "audio_smoothing", value: st.audioSmoothing });
+        if (st.relSmoothing > 0) send({ type: "rel_smoothing", value: st.relSmoothing });
         useLive.setState((s) => ({ params: { ...(s.params ?? ({} as LiveParams)), ...seeded } as LiveParams }));
       };
       sock.onmessage = (ev) => {
         let msg: any;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === "ready") {
-          useLive.setState((s) => ({ status: "ready", params: { ...msg.params, ...(s.params ?? {}) }, audioCapable: !!msg.audio_capable, imageCapable: !!msg.image_capable }));
+          useLive.setState((s) => ({ status: "ready", params: { ...msg.params, ...(s.params ?? {}) },
+            audioCapable: !!msg.audio_capable, imageCapable: !!msg.image_capable,
+            videoCapable: !!msg.video_capable, avCapable: !!msg.av_capable }));
         } else if (msg.type === "graph") {
           useLive.setState((s) => ({
             graph: { nodes: msg.nodes, edges: msg.edges, context: msg.context },
@@ -288,7 +341,7 @@ export function useLiveSocket() {
             relevance: msg.relevance ?? {},
             relevanceSeq: s.relevanceSeq + 1,
             queryActive: !!msg.active,
-            queryKind: msg.kind === "audio" ? "audio" : msg.kind === "image" ? "image" : "text",
+            queryKind: asKind(msg.kind),
             pending: Math.max(0, s.pending - 1),
           }));
         } else if (msg.type === "relevance") {
@@ -296,7 +349,7 @@ export function useLiveSocket() {
             relevance: msg.relevance ?? {},
             relevanceSeq: s.relevanceSeq + 1,
             queryActive: !!msg.active,
-            queryKind: msg.kind === "audio" ? "audio" : msg.kind === "image" ? "image" : "text",
+            queryKind: asKind(msg.kind),
           }));
         } else if (msg.type === "error") {
           useLive.setState((s) => ({ error: String(msg.detail ?? "error"), pending: Math.max(0, s.pending - 1) }));
@@ -316,8 +369,7 @@ export function useLiveSocket() {
       closed = true;
       if (retry) clearTimeout(retry);
       ws?.close();
-      useLive.getState().stopListening();
-      useLive.getState().stopWatching();
+      useLive.getState().stopLive();
       useLive.setState({ status: "closed", _send: null, _sendBinary: null });
     };
   }, [spaceId]);

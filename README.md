@@ -64,11 +64,15 @@ Each strategy produces a different `D′` and every Δ panel updates accordingly
 A real-time tab built on the same Δ-graph as the Explorer. Two sentences, both continuously editable:
 
 - **Context** rewrites the descriptor cloud. Every edit (debounced ~180 ms) recomputes the Δ-graph server-side and the new edges flow into the running layout — nodes keep their positions, so the graph morphs instead of re-seeding.
-- **Query** selects the overlap. Every node of the current graph is scored by cosine to the query vector; the score becomes geometry. The query has three live sources, switchable in the query card:
+- **Query** selects the overlap. Every node of the current graph is scored by cosine to the query vector; the score becomes geometry. The query has live sources besides text, switchable on the fly in the query card (which ones appear depends on the backend the space was built with):
   - **text** — a typed sentence, embedded with the space's text tower.
-  - **CLAP · mic** — the microphone streams a rolling window of audio (binary frames: kind byte, sample rate, 16-bit PCM) through the space's CLAP audio tower. Needs a space built with the `clap` backend.
-  - **CLIP · camera** — the webcam streams downsized JPEG frames through the space's CLIP image tower. Needs a space built with the `clip` backend (open-clip ViT-B/32; descriptors are embedded by its text tower, so words and pixels share one space).
-  Sound and pictures highlight the same semantic space as words. Window length, frame rate and a server-side smoothing of successive vectors are sliders.
+  - **mic** — a sliding window of microphone audio (binary frames: kind byte, sample rate, 16-bit PCM) through the space's audio tower. `clap` or `peav` backend.
+  - **camera** — the latest webcam frame through the CLIP image tower. `clip` backend (open-clip ViT-B/32).
+  - **video** — a sliding window of webcam frames (window seconds × model fps, capped at 48 frames) through the PE-AV video tower. `peav` backend.
+  - **audio + video** — the same window of sound and frames through PE-AV's joint audio-visual tower. `peav` backend.
+  Sound and pictures highlight the same semantic space as words. Two smoothings are sliders: a blend of successive media *vectors* before scoring, and a blend of the per-node *activations* after scoring (the latter calms the springs without blurring the embedding).
+
+**PE-AV** (`peav`, [facebook/pe-av-small](https://huggingface.co/facebook/pe-av-small), Apache-2.0, 0.8 B parameters, 1024-d) is Meta's Perception Encoder Audio-Visual model: one checkpoint with an audio tower, a video tower (ViT-PE-core-L at 336 px, any number of frames) and a joint audio-visual tower, each aligned with its own text head. A `peav` space keeps one descriptor matrix per head and scores an audio / video / joint query inside the head it came from (`SymbolSpace.D_heads`, `using_head`). The loader in `delyrism/peav.py` ties the shared towers by hand because transformers ≥ 5.22 fails on the checkpoint's tied weights. It needs `transformers>=5.22` and wants a GPU: on an RTX 4090 an 8-frame window embeds in ~0.4 s (≈55 ms per frame), audio in ~0.2 s; on CPU a frame costs ~0.6 s.
 
 Transport is a WebSocket (`/realtime/graph/{space_id}`): the client sends `context`, `query` and `params` messages, the server answers with `graph` (nodes, edges, relevance) or `relevance` payloads. Shaping knobs: query focus (relevance exponent), contraction, damping, overlap cut, plus the Explorer's Δ parameters (top |Δ| edges, β, sign, shift strategy). The overlap subgraph is also listed as text, grouped by archetype.
 

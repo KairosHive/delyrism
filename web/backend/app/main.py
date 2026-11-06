@@ -98,6 +98,7 @@ def backends():
             {"id": "sentence-transformer", "label": "Local · sentence-transformers", "remote": False, "audio": False, "dim": 384},
             {"id": "clap", "label": "Local · CLAP (audio+text)", "remote": False, "audio": True, "dim": 512},
             {"id": "clip", "label": "Local · CLIP ViT-B/32 (image+text)", "remote": False, "audio": False, "image": True, "dim": 512},
+            {"id": "peav", "label": "Local · PE-AV small (audio+video+text)", "remote": False, "audio": True, "video": True, "av": True, "dim": 1024},
         ],
     }
 

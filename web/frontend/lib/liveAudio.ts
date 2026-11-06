@@ -1,23 +1,20 @@
 "use client";
-// Continuous microphone capture for the CLAP query.
+// Continuous microphone capture for the live query.
 //
-// Keeps a rolling window of mono PCM and, every `intervalMs`, hands the last
-// `windowSec` seconds to `onWindow` as:
+// Keeps a rolling ring of mono PCM.  `window(sec)` returns the last `sec`
+// seconds as:
 //   uint32 LE sample-rate · int16 LE PCM
-// The socket layer prefixes the kind byte before sending.  Also
+// The store decides when to pull a window (its own send ticker), so the
+// same capture serves the audio-only and the audio+video modes.  Also
 // reports a smoothed RMS level for the meter.
 
 export interface MicCapture {
   stop: () => void;
   sampleRate: number;
+  window: (sec: number) => ArrayBuffer | null;
 }
 
-export async function startMicCapture(opts: {
-  windowSec: () => number;
-  intervalMs: () => number;
-  onWindow: (frame: ArrayBuffer) => void;
-  onLevel: (rms: number) => void;
-}): Promise<MicCapture> {
+export async function startMicCapture(opts: { onLevel: (rms: number) => void }): Promise<MicCapture> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
   });
@@ -55,30 +52,26 @@ export async function startMicCapture(opts: {
   const mute = ctx.createGain(); mute.gain.value = 0;
   proc.connect(mute); mute.connect(ctx.destination);
 
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const tick = () => {
-    const n = Math.min(filled, Math.round(sr * opts.windowSec()));
-    if (n > sr * 0.25) {
-      const out = new ArrayBuffer(4 + 2 * n);
-      new DataView(out).setUint32(0, sr, true);
-      const pcm = new Int16Array(out, 4, n);
-      let idx = (head - n + cap) % cap;
-      for (let i = 0; i < n; i++) {
-        let s = ring[idx];
-        s = s < -1 ? -1 : s > 1 ? 1 : s;
-        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        idx = (idx + 1) % cap;
-      }
-      opts.onWindow(out);
+  const takeWindow = (sec: number): ArrayBuffer | null => {
+    const n = Math.min(filled, Math.round(sr * sec));
+    if (n <= sr * 0.25) return null;
+    const out = new ArrayBuffer(4 + 2 * n);
+    new DataView(out).setUint32(0, sr, true);
+    const pcm = new Int16Array(out, 4, n);
+    let idx = (head - n + cap) % cap;
+    for (let i = 0; i < n; i++) {
+      let s = ring[idx];
+      s = s < -1 ? -1 : s > 1 ? 1 : s;
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      idx = (idx + 1) % cap;
     }
-    timer = setTimeout(tick, opts.intervalMs());
+    return out;
   };
-  timer = setTimeout(tick, opts.intervalMs());
 
   return {
     sampleRate: sr,
+    window: takeWindow,
     stop: () => {
-      if (timer) clearTimeout(timer);
       try { proc.disconnect(); src.disconnect(); mute.disconnect(); } catch {}
       stream.getTracks().forEach((t) => t.stop());
       ctx.close().catch(() => {});

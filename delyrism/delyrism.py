@@ -8,7 +8,7 @@
 # ------------------------------------------------------------
 
 from __future__ import annotations
-import math, warnings, itertools
+import math, warnings, itertools, contextlib, threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -163,6 +163,9 @@ class TextEmbedder:
         self._proj = None
         self.audio_capable = False        # <-- ADD
         self.image_capable = False
+        self.video_capable = False        # PE-AV: sliding window of frames
+        self.av_capable = False           # PE-AV: joint audio-visual tower
+        self.head = "av"                  # PE-AV: which text head encode() uses (av | audio | video)
 
         if self.backend_type == "sentence-transformer":
             self._init_original(model or "sentence-transformers/all-mpnet-base-v2")
@@ -178,12 +181,14 @@ class TextEmbedder:
             self._init_clap(model or "laion/clap-htsat-fused")
         elif self.backend_type == "clip":
             self._init_clip(model)
+        elif self.backend_type == "peav":
+            self._init_peav(model)
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav")
 
         # Check if backend was properly initialized
-        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip"):
+        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip", "peav"):
             raise RuntimeError(f"[Embedder] FAILED to initialize backend '{backend}'. Check dependencies and model availability.")
 
     # ---------- init helpers ----------
@@ -419,6 +424,35 @@ class TextEmbedder:
         except Exception as e:
             raise RuntimeError(f"CLIP init failed (open_clip): {e}")
 
+    def _init_peav(self, model_name: Optional[str] = None):
+        """Perception Encoder Audio-Visual (facebook/pe-av-*): one checkpoint
+        with an audio tower, a video tower and a joint audio-visual tower, each
+        aligned with its own text head.  `self.head` selects which text head
+        encode() uses; SymbolSpace keeps a descriptor matrix per head."""
+        try:
+            from .peav import PeAV
+            self._peav = PeAV(model_name or "facebook/pe-av-small", device=self.device)
+            self.dim = int(self._peav.dim)
+            self.audio_capable = True
+            self.video_capable = True
+            self.av_capable = True
+            self.head = "av"
+            print(f"[Embedder] PE-AV ready ({self._peav.model_name}, dim={self.dim}, device={self.device}).")
+        except Exception as e:
+            raise RuntimeError(f"PE-AV init failed: {e}")
+
+    def embed_video_frames(self, frames) -> np.ndarray:
+        """Embed a short clip (list of HxWx3 uint8 frames) through the PE-AV video tower."""
+        if not hasattr(self, "_peav"):
+            raise RuntimeError("embed_video_frames called but this backend has no video tower (use peav).")
+        return self._peav.embed_video(frames)
+
+    def embed_audio_video(self, wave: np.ndarray, sr: int, frames) -> np.ndarray:
+        """Joint audio-visual embedding of a window (PE-AV only)."""
+        if not hasattr(self, "_peav"):
+            raise RuntimeError("embed_audio_video called but this backend has no audio-visual tower (use peav).")
+        return self._peav.embed_audio_video(wave, sr, frames)
+
     @torch.no_grad()
     def embed_image(self, image) -> np.ndarray:
         """Embed a PIL image (or HxWx3 uint8 array) through the CLIP image
@@ -470,6 +504,8 @@ class TextEmbedder:
     # --- replace your embed_audio_array fallback with this (no torchaudio) ---
     @torch.no_grad()
     def embed_audio_array(self, wave: np.ndarray, sr: int) -> np.ndarray:
+        if self.backend_type == "peav":
+            return self._peav.embed_audio(np.asarray(wave, dtype=np.float32), sr)
         if self.backend_type == "audioclip":
             # resample to 48k if needed
             if sr != self._ac_sr:
@@ -664,6 +700,10 @@ class TextEmbedder:
         if self.backend_type == "sentence-transformer" and self._backend is not None:
             return np.asarray(self._backend.encode(texts, normalize_embeddings=True, batch_size=batch_size), dtype=np.float32)
 
+        # --- PE-AV text path (head selected by self.head) ---
+        if self.backend_type == "peav" and hasattr(self, "_peav"):
+            return self._peav.embed_text(list(texts), head=self.head, batch_size=batch_size)
+
         # --- open_clip text path (CLIP + AudioCLIP) ---
         if self.backend_type in ("audioclip", "clip"):
             toks = self.oc_tokenizer(texts).to(self.device)   # list[str] -> token ids
@@ -689,6 +729,9 @@ class TextEmbedder:
 
 
 # ---------- core container ----------
+_HEAD_LOCK = threading.RLock()
+
+
 @dataclass
 class SymbolSpace:
     symbols_to_descriptors: Dict[str, List[str]]
@@ -707,6 +750,14 @@ class SymbolSpace:
             self.D = l2_normalize(self.embedder.encode(self.descriptors, context=symbol_membership), axis=1)
         else:
             self.D = l2_normalize(self.embedder.encode(self.descriptors), axis=1)
+        # PE-AV: a descriptor matrix per text head so audio / video / joint
+        # queries are compared inside the space they were trained against.
+        self.D_heads: Dict[str, np.ndarray] = {}
+        if getattr(self.embedder, "backend_type", "") == "peav" and hasattr(self.embedder, "_peav"):
+            self.D_heads[self.embedder.head] = self.D
+            for h in ("av", "audio", "video"):
+                if h not in self.D_heads:
+                    self.D_heads[h] = l2_normalize(self.embedder._peav.embed_text(self.descriptors, head=h), axis=1)
         self.desc_idx = {d: i for i, d in enumerate(self.descriptors)}
         self.symbol_to_idx = {s: [self.desc_idx[d] for d in ds]
                               for s, ds in self.symbols_to_descriptors.items()}
@@ -722,6 +773,22 @@ class SymbolSpace:
                                      ).fit(self.D)
         self._pca = PCA(n_components=2, random_state=42).fit(self.D)
         self.context_override: Optional[np.ndarray] = None   # <-- ADD
+
+    @contextlib.contextmanager
+    def using_head(self, head: Optional[str]):
+        """Temporarily switch the space (descriptor matrix + embedder text head)
+        to one of PE-AV's heads so ctx_vec / make_shifted_matrix / _sent_vec all
+        work in that head's space.  No-op for other backends or head=None."""
+        if not head or head not in self.D_heads or head == self.embedder.head:
+            yield
+            return
+        with _HEAD_LOCK:
+            D0, h0 = self.D, self.embedder.head
+            self.D, self.embedder.head = self.D_heads[head], head
+            try:
+                yield
+            finally:
+                self.D, self.embedder.head = D0, h0
 
     # -------- graph --------
     def _build_graph(self):

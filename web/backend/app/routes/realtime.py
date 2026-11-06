@@ -298,11 +298,13 @@ def _live_graph(space_id: str, space, context: str, params: Dict[str, Any]) -> D
     return {"nodes": nodes, "edges": edges, "idx": idx, "D1": D1}
 
 
-def _relevance_vec(graph: Dict[str, Any], vq: Optional[np.ndarray]) -> Dict[str, float]:
-    """cosine(D1_i, v_query) over the graph's nodes, min-max normalised."""
+def _relevance_vec(graph: Dict[str, Any], vq: Optional[np.ndarray], D1: Optional[np.ndarray] = None) -> Dict[str, float]:
+    """cosine(D1_i, v_query) over the graph's nodes, min-max normalised.
+    `D1` defaults to the graph's own shifted matrix; PE-AV queries pass the
+    shifted matrix of the head their vector lives in."""
     if vq is None or not graph["nodes"]:
         return {}
-    D1 = graph.get("D1")
+    D1 = graph.get("D1") if D1 is None else D1
     if D1 is None:
         return {}
     ids = [n["id"] for n in graph["nodes"]]
@@ -311,6 +313,31 @@ def _relevance_vec(graph: Dict[str, Any], vq: Optional[np.ndarray]) -> Dict[str,
     lo, hi = float(r.min()), float(r.max())
     r = (r - lo) / (hi - lo) if hi - lo > 1e-9 else np.ones_like(r)
     return {i: round(float(x), 4) for i, x in zip(ids, r)}
+
+
+# ---- PE-AV heads -----------------------------------------------------------
+# A PE-AV space keeps one descriptor matrix per text head (av / audio / video).
+# Media vectors must be compared inside the head they came from, so the
+# context shift is recomputed in that head on demand (cached per context).
+
+def _head_for_kind(space, kind: str) -> Optional[str]:
+    heads = getattr(space, "D_heads", None) or {}
+    if not heads:
+        return None
+    return {"audio": "audio", "video": "video", "av": "av"}.get(kind, "av")
+
+
+def _shifted_for_head(space_id: str, space, graph: Dict[str, Any], context: str,
+                      params: Dict[str, Any], head: Optional[str]) -> Optional[np.ndarray]:
+    if head is None or head == getattr(space.embedder, "head", None):
+        return graph.get("D1")
+    cache = graph.setdefault("D1_heads", {})
+    if head not in cache:
+        with space.using_head(head):
+            cache[head] = engine_cache.get_or_compute_shifted_matrix(
+                f"{space_id}:{head}", space,
+                dict(weights=None, sentence=context, **{k: params[k] for k in _SHIFT_KEYS}))
+    return cache[head]
 
 
 def _text_vec(space, text: str) -> Optional[np.ndarray]:
@@ -323,31 +350,89 @@ def _text_vec(space, text: str) -> Optional[np.ndarray]:
 _CLAP_SR = 48000
 
 
+def _unit(v) -> np.ndarray:
+    v = np.asarray(v, dtype=np.float32)
+    return v / (float(np.linalg.norm(v)) + 1e-9)
+
+
+def _parse_audio(buf: bytes):
+    """uint32 LE sample-rate + int16 LE PCM mono → (float32 wave, sr)."""
+    sr = int(np.frombuffer(buf[:4], dtype="<u4")[0])
+    pcm = np.frombuffer(buf[4:], dtype="<i2")
+    return pcm.astype(np.float32) / 32768.0, sr
+
+
+def _parse_frames(buf: bytes) -> list:
+    """uint8 n + n × (uint32 LE length + JPEG) → list of HxWx3 uint8 arrays."""
+    import io
+    from PIL import Image
+    n = buf[0]
+    off, frames = 1, []
+    for _ in range(n):
+        ln = int(np.frombuffer(buf[off:off + 4], dtype="<u4")[0])
+        off += 4
+        frames.append(np.asarray(Image.open(io.BytesIO(buf[off:off + ln])).convert("RGB")))
+        off += ln
+    return frames
+
+
+def _resample_48k(wave: np.ndarray, sr: int):
+    if sr != _CLAP_SR and len(wave) > 1:
+        n_new = int(round(len(wave) * _CLAP_SR / sr))
+        t_old = np.linspace(0.0, 1.0, len(wave), endpoint=False)
+        t_new = np.linspace(0.0, 1.0, n_new, endpoint=False)
+        wave = np.interp(t_new, t_old, wave).astype(np.float32)
+    return wave, _CLAP_SR
+
+
 def _image_vec(space, jpeg: bytes) -> np.ndarray:
     """Embed a camera frame through the space's image tower (CLIP)."""
     if not hasattr(space.embedder, "embed_image") or not hasattr(space.embedder, "oc_model"):
         raise RuntimeError("the space's embedder has no image tower — rebuild it with the CLIP backend")
     import io
     from PIL import Image
-    img = Image.open(io.BytesIO(jpeg))
-    v = np.asarray(space.embedder.embed_image(img), dtype=np.float32)
-    return v / (float(np.linalg.norm(v)) + 1e-9)
+    return _unit(space.embedder.embed_image(Image.open(io.BytesIO(jpeg))))
 
 
-def _audio_vec(space, pcm16: np.ndarray, sr: int) -> np.ndarray:
-    """Embed a mic window through the space's audio tower (CLAP / AudioCLIP).
-    Resamples to 48 kHz with linear interpolation — plenty for a query."""
-    if not getattr(space.embedder, "audio_capable", False) and not hasattr(space.embedder, "_clap"):
-        raise RuntimeError("the space's embedder has no audio tower — rebuild it with the CLAP backend")
-    wave = pcm16.astype(np.float32) / 32768.0
-    if sr != _CLAP_SR and len(wave) > 1:
-        n_new = int(round(len(wave) * _CLAP_SR / sr))
-        t_old = np.linspace(0.0, 1.0, len(wave), endpoint=False)
-        t_new = np.linspace(0.0, 1.0, n_new, endpoint=False)
-        wave = np.interp(t_new, t_old, wave).astype(np.float32)
-        sr = _CLAP_SR
-    v = np.asarray(space.embedder.embed_audio_array(wave, sr), dtype=np.float32)
-    return v / (float(np.linalg.norm(v)) + 1e-9)
+def _audio_vec(space, payload: bytes) -> np.ndarray:
+    """Embed a mic window through the space's audio tower (CLAP / AudioCLIP / PE-AV)."""
+    emb = space.embedder
+    if not getattr(emb, "audio_capable", False) and not hasattr(emb, "_clap"):
+        raise RuntimeError("the space's embedder has no audio tower — rebuild it with the CLAP or PE-AV backend")
+    wave, sr = _resample_48k(*_parse_audio(payload))
+    return _unit(emb.embed_audio_array(wave, sr))
+
+
+def _video_vec(space, payload: bytes) -> np.ndarray:
+    """Embed a sliding window of camera frames through the PE-AV video tower."""
+    if not getattr(space.embedder, "video_capable", False):
+        raise RuntimeError("the space's embedder has no video tower — rebuild it with the PE-AV backend")
+    frames = _parse_frames(payload)
+    if not frames:
+        raise RuntimeError("empty video window")
+    return _unit(space.embedder.embed_video_frames(frames))
+
+
+def _av_vec(space, payload: bytes) -> np.ndarray:
+    """uint32 LE audio-length + audio payload + frames payload → joint PE-AV vector."""
+    if not getattr(space.embedder, "av_capable", False):
+        raise RuntimeError("the space's embedder has no audio-visual tower — rebuild it with the PE-AV backend")
+    alen = int(np.frombuffer(payload[:4], dtype="<u4")[0])
+    wave, sr = _resample_48k(*_parse_audio(payload[4:4 + alen]))
+    frames = _parse_frames(payload[4 + alen:])
+    if not frames:
+        raise RuntimeError("empty video window")
+    return _unit(space.embedder.embed_audio_video(wave, sr, frames))
+
+
+# binary frame kinds (first byte) → (query kind, embed fn, min payload bytes)
+_BIN_KINDS = {
+    1: ("audio", _audio_vec, 4 + 2 * 1000),
+    2: ("image", _image_vec, 100),
+    3: ("video", _video_vec, 100),
+    4: ("av", _av_vec, 4 + 4 + 2 * 1000 + 100),
+}
+_LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(audio + video)"}
 
 
 @router.websocket("/graph/{space_id}")
@@ -361,11 +446,12 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     state: Dict[str, Any] = {
         "context": "", "params": dict(_GRAPH_DEFAULTS),
-        "query_text": "", "query_kind": "text",     # text | audio | image
+        "query_text": "", "query_kind": "text",     # text | audio | image | video | av
         "vq": None,                                 # active query vector
-        "audio_pending": None,                      # latest (pcm16, sr) not yet embedded
-        "image_pending": None,                      # latest jpeg bytes not yet embedded
-        "audio_smoothing": 0.5,                     # EMA on successive audio / image vectors
+        "pending": None,                            # latest (kind, payload) not yet embedded
+        "audio_smoothing": 0.5,                     # EMA on successive media vectors (before scoring)
+        "rel_smoothing": 0.0,                       # EMA on the relevance activations (after scoring)
+        "rel_prev": None,                           # previous smoothed relevance (per node id)
         "graph_dirty": False, "query_dirty": False,
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
@@ -373,11 +459,26 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     emb = space.embedder
     await ws.send_json({"type": "ready", "params": state["params"],
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
-                        "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model"))})
+                        "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
+                        "video_capable": bool(getattr(emb, "video_capable", False)),
+                        "av_capable": bool(getattr(emb, "av_capable", False))})
 
     def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
         return {"relevance": rel, "active": state["vq"] is not None,
                 "query": state["query_text"], "kind": state["query_kind"]}
+
+    def _score() -> Dict[str, float]:
+        """Relevance of the active query inside the right head, then the
+        post-embedding EMA on the activations (live media kinds only)."""
+        head = _head_for_kind(space, state["query_kind"])
+        D1 = _shifted_for_head(space_id, space, graph, state["context"], state["params"], head)
+        rel = _relevance_vec(graph, state["vq"], D1)
+        a = state["rel_smoothing"]
+        prev = state["rel_prev"]
+        if rel and state["query_kind"] != "text" and a > 0 and prev:
+            rel = {k: round(a * prev.get(k, v) + (1.0 - a) * v, 4) for k, v in rel.items()}
+        state["rel_prev"] = rel if rel else None
+        return rel
 
     async def reader() -> None:
         while True:
@@ -388,20 +489,12 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 # binary frame, first byte = kind:
                 #   0x01 audio  → uint32 LE sample-rate + int16 PCM mono
                 #   0x02 image  → JPEG bytes
+                #   0x03 video  → uint8 n + n × (uint32 LE len + JPEG)
+                #   0x04 av     → uint32 LE audio-len + audio payload + video payload
                 buf = msg["bytes"]
-                kind = buf[0] if buf else 0
-                if kind == 1 and len(buf) > 5 + 2 * 1000:
-                    sr = int(np.frombuffer(buf[1:5], dtype="<u4")[0])
-                    pcm = np.frombuffer(buf[5:], dtype="<i2")
-                    state["audio_pending"] = (pcm, sr)   # latest wins
-                    state["image_pending"] = None
-                    state["query_kind"] = "audio"
-                    state["query_dirty"] = True
-                    wake.set()
-                elif kind == 2 and len(buf) > 100:
-                    state["image_pending"] = bytes(buf[1:])
-                    state["audio_pending"] = None
-                    state["query_kind"] = "image"
+                spec = _BIN_KINDS.get(buf[0] if buf else 0)
+                if spec and len(buf) - 1 >= spec[2]:
+                    state["pending"] = (spec[0], bytes(buf[1:]))   # latest wins
                     state["query_dirty"] = True
                     wake.set()
                 continue
@@ -419,18 +512,20 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             elif t == "query":
                 state["query_text"] = str(m.get("text") or "")
                 state["query_kind"] = "text"
-                state["audio_pending"] = None
-                state["image_pending"] = None
+                state["pending"] = None
+                state["rel_prev"] = None
                 state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
                 state["query_dirty"] = True
             elif t == "query_clear":
                 state["vq"] = None
-                state["audio_pending"] = None
-                state["image_pending"] = None
+                state["pending"] = None
+                state["rel_prev"] = None
                 state["query_text"] = ""
                 state["query_dirty"] = True
             elif t == "audio_smoothing":
                 state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
+            elif t == "rel_smoothing":
+                state["rel_smoothing"] = float(np.clip(float(m.get("value", 0.0)), 0.0, 0.97))
             elif t == "params":
                 patch = {k: v for k, v in (m.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
                 state["params"].update(patch)
@@ -438,28 +533,24 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             wake.set()
 
     async def _embed_pending() -> None:
-        """Embed the latest queued audio window or camera frame (latest
-        wins, one at a time) and EMA-blend it into the active query."""
-        pend_a, pend_i = state["audio_pending"], state["image_pending"]
-        if pend_a is None and pend_i is None:
+        """Embed the latest queued media window (latest wins, one at a time)
+        and EMA-blend it into the active query vector."""
+        pend = state["pending"]
+        if pend is None:
             return
-        state["audio_pending"] = None
-        state["image_pending"] = None
-        if pend_i is not None:
-            v = await asyncio.to_thread(_image_vec, space, pend_i)
-            kind, label = "image", "(camera)"
-        else:
-            pcm, sr = pend_a
-            v = await asyncio.to_thread(_audio_vec, space, pcm, sr)
-            kind, label = "audio", "(audio)"
+        state["pending"] = None
+        kind, payload = pend
+        fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
+        v = await asyncio.to_thread(fn, space, payload)
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
         if prev is not None and a > 0:
-            v = a * prev + (1.0 - a) * v
-            v = v / (float(np.linalg.norm(v)) + 1e-9)
+            v = _unit(a * prev + (1.0 - a) * v)
+        if state["query_kind"] != kind:
+            state["rel_prev"] = None
         state["vq"] = v
         state["query_kind"] = kind
-        state["query_text"] = label
+        state["query_text"] = _LABELS.get(kind, "")
 
     async def worker() -> None:
         nonlocal graph
@@ -472,14 +563,14 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     ctx, params = state["context"], dict(state["params"])
                     graph = await asyncio.to_thread(_live_graph, space_id, space, ctx, params)
                     await _embed_pending()
-                    rel = _relevance_vec(graph, state["vq"])
+                    rel = await asyncio.to_thread(_score)
                     state["query_dirty"] = False
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
                     await _embed_pending()
-                    rel = _relevance_vec(graph, state["vq"])
+                    rel = await asyncio.to_thread(_score)
                     await ws.send_json({"type": "relevance", **_rel_msg(rel)})
             except Exception as e:
                 await ws.send_json({"type": "error", "detail": str(e)})

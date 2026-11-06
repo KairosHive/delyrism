@@ -2,7 +2,7 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useSidebar } from "@/lib/store";
-import { useLive, useLiveSocket } from "@/lib/liveGraph";
+import { useLive, useLiveSocket, videoFrameCount, MAX_VIDEO_FRAMES, type QueryMode } from "@/lib/liveGraph";
 import { Slider } from "@/components/ui/Slider";
 import { Select } from "@/components/ui/Select";
 import { LiveDeltaGraph } from "./LiveDeltaGraph";
@@ -64,21 +64,45 @@ function Inputs() {
   );
 }
 
+const MODE_LABEL: Record<QueryMode, string> = { text: "text", audio: "mic", image: "camera", video: "video", av: "audio + video" };
+const MODE_HINT: Record<QueryMode, string> = {
+  text: "typed sentence",
+  audio: "sliding window of microphone audio through the audio tower",
+  image: "latest camera frame through the CLIP image tower",
+  video: "sliding window of camera frames through the PE-AV video tower",
+  av: "the same window of sound and frames through the joint PE-AV audio-visual tower",
+};
+
 function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; status: string; nEdges: number; queryActive: boolean; error: string | null }) {
-  const { query, setQuery, queryMode, setQueryMode, listening, startListening, stopListening, audioLevel, micError, audioCapable,
-          audioWindow, audioInterval, audioSmoothing, setAudioSmoothing, set, queryKind,
-          imageCapable, watching, startWatching, stopWatching, camError, camInterval, camVideo } = useLive(useShallow((s) => ({
-    query: s.query, setQuery: s.setQuery, queryMode: s.queryMode, setQueryMode: s.setQueryMode, listening: s.listening,
-    startListening: s.startListening, stopListening: s.stopListening, audioLevel: s.audioLevel, micError: s.micError,
-    audioCapable: s.audioCapable, audioWindow: s.audioWindow, audioInterval: s.audioInterval, audioSmoothing: s.audioSmoothing,
-    setAudioSmoothing: s.setAudioSmoothing, set: s.set, queryKind: s.queryKind,
-    imageCapable: s.imageCapable, watching: s.watching, startWatching: s.startWatching, stopWatching: s.stopWatching,
-    camError: s.camError, camInterval: s.camInterval, camVideo: s.camVideo,
+  const { query, setQuery, queryMode, setQueryMode, live, startLive, stopLive, liveError, audioLevel, queryKind,
+          audioCapable, imageCapable, videoCapable, avCapable,
+          audioWindow, videoWindow, videoFps, sendInterval, setSendInterval,
+          audioSmoothing, setAudioSmoothing, relSmoothing, setRelSmoothing, set, camVideo } = useLive(useShallow((s) => ({
+    query: s.query, setQuery: s.setQuery, queryMode: s.queryMode, setQueryMode: s.setQueryMode, live: s.live,
+    startLive: s.startLive, stopLive: s.stopLive, liveError: s.liveError, audioLevel: s.audioLevel, queryKind: s.queryKind,
+    audioCapable: s.audioCapable, imageCapable: s.imageCapable, videoCapable: s.videoCapable, avCapable: s.avCapable,
+    audioWindow: s.audioWindow, videoWindow: s.videoWindow, videoFps: s.videoFps,
+    sendInterval: s.sendInterval, setSendInterval: s.setSendInterval,
+    audioSmoothing: s.audioSmoothing, setAudioSmoothing: s.setAudioSmoothing, relSmoothing: s.relSmoothing, setRelSmoothing: s.setRelSmoothing,
+    set: s.set, camVideo: s.camVideo,
   })));
   const backend = useSidebar((s) => s.embedderBackend);
-  const clapOk = audioCapable || backend === "clap";
-  const clipOk = imageCapable || backend === "clip";
+  const can: Record<QueryMode, boolean> = {
+    text: true,
+    audio: audioCapable || backend === "clap" || backend === "peav",
+    image: imageCapable || backend === "clip",
+    video: videoCapable || backend === "peav",
+    av: avCapable || backend === "peav",
+  };
+  // show text + every live mode this space supports; if it supports none,
+  // show the three generic ones greyed out so the hint explains what to build
+  const modes: QueryMode[] = (["text", "audio", "image", "video", "av"] as QueryMode[]).filter((m) => can[m]);
+  if (modes.length === 1) modes.push("audio", "video", "av");
+  const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP" : "";
+  const usesMic = queryMode === "audio" || queryMode === "av";
+  const usesCam = queryMode === "image" || queryMode === "video" || queryMode === "av";
   const level = Math.min(1, audioLevel * 6);
+  const nFrames = videoFrameCount({ videoWindow, videoFps });
   const previewRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const host = previewRef.current;
@@ -97,14 +121,14 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
         <span className="font-normal normal-case tracking-normal text-ink-500">pulls its overlap together · stretches the rest</span>
         <span className="ml-auto flex items-center gap-2 normal-case tracking-normal">
           <span className="inline-flex overflow-hidden rounded-md border border-ink-700 text-[10px]">
-            {(["text", "clap", "clip"] as const).map((m) => (
+            {modes.map((m) => (
               <button
                 key={m}
                 onClick={() => setQueryMode(m)}
-                className={`px-2 py-0.5 transition ${queryMode === m ? "bg-[#c2a6fe]/25 text-ink-50" : "text-ink-400 hover:text-ink-100"}`}
-                title={m === "clap" ? "continuous microphone through the CLAP audio tower" : m === "clip" ? "live camera through the CLIP image tower" : "typed sentence"}
+                className={`px-2 py-0.5 transition ${queryMode === m ? "bg-[#c2a6fe]/25 text-ink-50" : can[m] ? "text-ink-400 hover:text-ink-100" : "text-ink-600"}`}
+                title={MODE_HINT[m]}
               >
-                {m === "clap" ? "CLAP · mic" : m === "clip" ? "CLIP · camera" : "text"}
+                {m === "text" || !prefix ? MODE_LABEL[m] : `${prefix} · ${MODE_LABEL[m]}`}
               </button>
             ))}
           </span>
@@ -123,60 +147,48 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
         />
-      ) : queryMode === "clip" ? (
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <button
-              className={`btn ${watching ? "border-[#c2a6fe] text-[#e2d6ff]" : ""}`}
-              onClick={() => (watching ? stopWatching() : startWatching())}
-              disabled={!clipOk}
-              title={clipOk ? "toggle the camera" : "build the space with the CLIP backend first"}
-            >
-              {watching ? "■ stop" : "● watch"}
-            </button>
-            <div ref={previewRef} className="h-[76px] w-[102px] shrink-0 overflow-hidden rounded-md bg-ink-950/60" />
-            <div className="min-w-0 flex-1">
-              <Slider label="frame rate" value={camInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={(v) => set("camInterval", v)} help="How often a camera frame is embedded." />
-              <div className="mt-2">
-                <Slider label="smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous frame's vector — higher is calmer." />
-              </div>
-            </div>
-          </div>
-          {!clipOk && (
-            <div className="text-[11px] text-warning">
-              This space was built with <span className="font-mono">{backend}</span>, which has no image tower. Choose
-              <span className="mx-1 font-mono">Local · CLIP ViT-B/32 (image+text)</span> in the sidebar and rebuild — descriptors and frames then share one space.
-            </div>
-          )}
-          {camError && <div className="text-[11px] text-danger">{camError}</div>}
-        </div>
       ) : (
         <div className="space-y-2">
           <div className="flex items-center gap-3">
             <button
-              className={`btn ${listening ? "border-[#c2a6fe] text-[#e2d6ff]" : ""}`}
-              onClick={() => (listening ? stopListening() : startListening())}
-              disabled={!clapOk}
-              title={clapOk ? "toggle the microphone" : "build the space with the CLAP backend first"}
+              className={`btn ${live ? "border-[#c2a6fe] text-[#e2d6ff]" : ""}`}
+              onClick={() => (live ? stopLive() : startLive())}
+              disabled={!can[queryMode]}
+              title={can[queryMode] ? "toggle live capture" : "build the space with a backend that has this tower first"}
             >
-              {listening ? "■ stop" : "● listen"}
+              {live ? "■ stop" : usesCam && usesMic ? "● listen + watch" : usesCam ? "● watch" : "● listen"}
             </button>
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-ink-800">
-              <div className="h-full rounded-full transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%`, background: "linear-gradient(90deg,#c2a6fe,#3bbdb0)" }} />
-            </div>
-            <span className="font-mono text-[10px] text-ink-500">{listening ? `${audioWindow.toFixed(1)} s / ${audioInterval} ms` : "mic off"}</span>
+            {usesCam && <div ref={previewRef} className="h-[64px] w-[86px] shrink-0 overflow-hidden rounded-md bg-ink-950/60" />}
+            {usesMic && (
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-ink-800">
+                <div className="h-full rounded-full transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%`, background: "linear-gradient(90deg,#c2a6fe,#3bbdb0)" }} />
+              </div>
+            )}
+            <span className="ml-auto font-mono text-[10px] text-ink-500">
+              {live
+                ? queryMode === "audio" ? `${audioWindow.toFixed(1)} s / ${sendInterval} ms`
+                  : queryMode === "image" ? `1 frame / ${sendInterval} ms`
+                  : queryMode === "video" ? `${videoWindow.toFixed(1)} s · ${nFrames} f / ${sendInterval} ms`
+                  : `${Math.max(audioWindow, videoWindow).toFixed(1)} s · ${nFrames} f / ${sendInterval} ms`
+                : "off"}
+            </span>
           </div>
-          {!clapOk && (
+          {!can[queryMode] && (
             <div className="text-[11px] text-warning">
-              This space was built with <span className="font-mono">{backend}</span>, which has no audio tower. Choose
-              <span className="mx-1 font-mono">Local · CLAP (audio+text)</span> in the sidebar and rebuild — descriptors and sound then share one space.
+              This space was built with <span className="font-mono">{backend}</span>, which has no {MODE_LABEL[queryMode]} tower. Choose
+              <span className="mx-1 font-mono">{queryMode === "image" ? "Local · CLIP ViT-B/32" : queryMode === "audio" ? "Local · CLAP or PE-AV" : "Local · PE-AV small"}</span>
+              in the sidebar and rebuild — descriptors and media then share one space.
             </div>
           )}
-          {micError && <div className="text-[11px] text-danger">{micError}</div>}
-          <div className="grid grid-cols-3 gap-3">
-            <Slider label="window" value={audioWindow} min={0.5} max={6} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("audioWindow", v)} help="Seconds of recent audio embedded each time." />
-            <Slider label="rate" value={audioInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={(v) => set("audioInterval", v)} help="How often a window is sent." />
-            <Slider label="smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous audio vector — higher is calmer." />
+          {liveError && <div className="text-[11px] text-danger">{liveError}</div>}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {usesMic && <Slider label="audio window" value={audioWindow} min={0.5} max={6} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("audioWindow", v)} help="Seconds of recent sound embedded each time." />}
+            {(queryMode === "video" || queryMode === "av") && <Slider label="video window" value={videoWindow} min={0.5} max={10} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("videoWindow", v)} help="Seconds of recent frames fed to the model each time." />}
+            {(queryMode === "video" || queryMode === "av") && <Slider label="model fps" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps · ${nFrames} f`} onChange={(v) => set("videoFps", v)} help={`Frames per second inside the window (camera is sampled at this rate). window × fps = ${nFrames} frames per embedding, capped at ${MAX_VIDEO_FRAMES}; ~55 ms per frame on the GPU.`} />}
+            {queryMode === "image" && <Slider label="capture" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps`} onChange={(v) => set("videoFps", v)} help="How often a camera frame is grabbed." />}
+            <Slider label="rate" value={sendInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={setSendInterval} help="How often a window is sent for embedding (latest wins if the GPU lags)." />
+            <Slider label="vector smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous media vector, before scoring." />
+            <Slider label="activation smoothing" value={relSmoothing} min={0} max={0.97} step={0.01} onChange={setRelSmoothing} help="Server-side blend of the per-node relevance with its previous value, after embedding — calms the springs without blurring the embedding." />
           </div>
         </div>
       )}
