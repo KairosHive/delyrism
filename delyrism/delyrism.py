@@ -868,7 +868,7 @@ class SymbolSpace:
         gm = getattr(self, "global_mode", None)
         return dict(gm) if gm else {"mode": "none", "pcs": 0}
 
-    def set_global_mode(self, mode: str = "none", pcs: int = 0) -> Dict:
+    def set_global_mode(self, mode: str = "none", pcs: int = 1) -> Dict:
         if mode not in GLOBAL_MODES:
             raise ValueError(f"Unknown global mode '{mode}' (expected one of {GLOBAL_MODES})")
         pcs = int(min(max(int(pcs), 0), OFFSET_MAX_PCS))

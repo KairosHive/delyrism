@@ -204,8 +204,9 @@ class GlobalModeRequest(BaseModel):
     space_id: str
     # "none" → raw geometry; "descriptor" → descriptor offset removed
     mode: Literal["none", "descriptor"] = "none"
-    # top principal directions of the descriptor cloud also removed (0–5)
-    pcs: int = Field(0, ge=0, le=5)
+    # top principal directions of the descriptor cloud also removed (0–5);
+    # ignored when mode is "none"
+    pcs: int = Field(1, ge=0, le=5)
 
 
 class GlobalModeResponse(BaseModel):

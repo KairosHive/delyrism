@@ -225,7 +225,7 @@ export const useSidebar = create<SidebarState>((set) => ({
   deltaSign: "up",
 
   globalMode: "none",
-  globalModePcs: 0,
+  globalModePcs: 1,      // one principal direction removed with the offset when the switch is on
   globalModeNonce: 0,
   buildNonce: 0,
 
