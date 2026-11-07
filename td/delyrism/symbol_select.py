@@ -7,22 +7,16 @@
 # activated symbols (rounded up, ≥ 1) form the mosaic, each with a share
 # proportional to its activation among them.  Symbolpin forces one symbol.
 #
-# Mosaic: a lattice repeating in 4 × 4 blocks of 16 cells.  The shares become
-# cell counts (largest remainder, ≥ 1 each), the symbols are interleaved by
-# smooth weighted round-robin and laid onto the 4 × 4 Bayer ranking, so each
-# symbol's cells are spread evenly through the block.  The lattice is the
-# densest one in which any symbol of the set fits any cell
-# (td/assets/lakota/mosaics.tsv, see td/tools/lakota_prepare.py --mosaics).
-#
-# A new mosaic is adopted once it has been stable for Symbolhold seconds and
-# crossfades in over Symbolfade.  Output (one sample): cur_* / prev_* lattice
-# (v1x v1y v2x v2y), weight and slot0..15 (atlas index per Bayer rank, −1 =
-# empty), plus act_<name> for monitoring.
+# The selection (symbols + shares, shares rounded to 5 %) is published in this
+# operator's storage as 'mosaic' = {cur, prev, mix}; tiles_layout.py composes
+# each mosaic as a symmetric snowflake tiling (mosaic_compose.py).  A new
+# mosaic is adopted once it has been stable for Symbolhold seconds and
+# crossfades in over Symbolfade.  Output (one sample): cur_w / prev_w and
+# act_<name> for monitoring.
 
 import math
 import numpy as np
 
-SLOTS = 16
 _s = {'act': None, 'cur': None, 'prev': None, 'mix': 1.0, 'cand': None, 'cand_t': 0.0, 'shown': None}
 
 
@@ -34,26 +28,6 @@ def _table(name):
 	return [{h: t[r, h].val for h in head} for r in range(1, t.numRows)]
 
 
-def _counts(shares):
-	"""Largest-remainder cell counts over SLOTS, at least one per symbol."""
-	n = len(shares)
-	raw = np.asarray(shares, float) * (SLOTS - n)
-	c = np.floor(raw).astype(int) + 1
-	for k in np.argsort(-(raw - np.floor(raw)))[: SLOTS - int(c.sum())]:
-		c[k] += 1
-	return c
-
-
-def _sequence(counts):
-	"""Smooth weighted round-robin: each symbol's turns spread evenly over the 16 ranks."""
-	cw = np.zeros(len(counts))
-	seq = []
-	for _ in range(SLOTS):
-		cw += counts
-		k = int(np.argmax(cw))
-		cw[k] -= SLOTS
-		seq.append(k)
-	return seq
 
 
 def onCook(scriptOp):
@@ -61,7 +35,6 @@ def onCook(scriptOp):
 	scriptOp.clear()
 	rows = [r for r in _table('table_tilings') if r['mode'] == 'upright']
 	K = len(rows)
-	lattices = {r['key']: [float(r[c]) for c in ('v1x', 'v1y', 'v2x', 'v2y')] for r in _table('table_mosaics')}
 	dt = min(0.1, max(0.0, float(absTime.stepSeconds)))
 
 	variant = P.Earthvariant.eval()
@@ -110,14 +83,11 @@ def onCook(scriptOp):
 		shares = [float(sm[k]) / tot for k in keep]
 	want = None
 	if keep:
-		counts = _counts(shares)
-		seq = _sequence(counts)
-		key = '+'.join(sorted(rows[k]['name'] for k in keep))
-		lat = lattices.get(key)
-		if lat is not None:
-			want = dict(key=key, lattice=lat, slots=[keep[i] for i in seq],
-						label=' · '.join(f"{rows[k]['name']} {c}/16" for k, c in zip(keep, counts)),
-						sig=(key, tuple(int(c) for c in counts)))
+		q = [max(1, int(round(x * 20))) for x in shares]          # shares in 5 % steps
+		qs = [x / sum(q) for x in q]
+		want = dict(symbols=[int(k) for k in keep], shares=qs,
+					label=' · '.join(f"{rows[k]['name']} {round(100 * x)}%" for k, x in zip(keep, qs)),
+					sig=(tuple(int(k) for k in keep), tuple(q)))
 
 	# ---- adopt it once stable for Symbolhold seconds, then crossfade
 	cur = _s['cur']
@@ -133,14 +103,10 @@ def onCook(scriptOp):
 		_s['cand'] = None
 	_s['mix'] = min(1.0, _s['mix'] + dt / max(1e-3, float(P.Symbolfade)))
 
+	scriptOp.store('mosaic', {'cur': _s['cur'], 'prev': _s['prev'], 'mix': _s['mix']})
 	scriptOp.numSamples = 1
-	for tag, m, wgt in (('cur', _s['cur'], _s['mix']), ('prev', _s['prev'], 1.0 - _s['mix'])):
-		lat = m['lattice'] if m else [0.0, 0.0, 0.0, 0.0]
-		for c, v in zip(('v1x', 'v1y', 'v2x', 'v2y'), lat):
-			scriptOp.appendChan(f'{tag}_{c}')[0] = v
-		scriptOp.appendChan(f'{tag}_w')[0] = wgt if m else 0.0
-		for r in range(SLOTS):
-			scriptOp.appendChan(f'{tag}_slot{r}')[0] = float(m['slots'][r]) if m else -1.0
+	scriptOp.appendChan('cur_w')[0] = _s['mix'] if _s['cur'] else 0.0
+	scriptOp.appendChan('prev_w')[0] = (1.0 - _s['mix']) if _s['prev'] else 0.0
 	for k, r in enumerate(rows):
 		scriptOp.appendChan('act_' + r['name'])[0] = float(sm[k]) if k < len(sm) else 0.0
 
