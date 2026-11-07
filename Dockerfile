@@ -22,7 +22,8 @@ RUN npm run build
 
 
 # ---------- 2. runtime image -------------------------------------------------
-FROM python:3.10-slim
+# 3.11: transformers >= 5.22 (PE-AV, Voxtral) requires Python >= 3.11
+FROM python:3.11-slim
 
 # system libs the engine needs (audio, video, build tools for any source
 # distributions pip pulls in; libgl1 + libglib2.0-0 for the OpenCV that
@@ -52,6 +53,11 @@ COPY --from=frontend-builder /build/out ./web/frontend/out
 
 # Railway / Heroku-style $PORT, fall back to 8000 for local runs
 ENV PORT=8000
+# The hosted site has no TouchDesigner and no TTS service next to it: no OSC
+# stream, no spoken word.  The live graph itself (context x text query) runs
+# as usual; the installation features (OSC, voice, local GPU embedders,
+# transcription) are for local runs.
+ENV DELYRISM_OSC=0     DELYRISM_SPEAK=0
 EXPOSE 8000
 # the package itself (delyrism engine + delyrism.server), without re-resolving deps
 COPY pyproject.toml README.md ./

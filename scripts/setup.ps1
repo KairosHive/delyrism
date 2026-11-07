@@ -33,7 +33,7 @@ if (-not (Test-Path .venv\Scripts\python.exe)) { uv venv --python 3.11 .venv; Ch
 $py = '.venv\Scripts\python.exe'
 uv pip install --python $py torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128; Check
 uv pip install --python $py -r requirements.txt -r web/backend/requirements.txt --override scripts/overrides.txt; Check
-uv pip install --python $py -e '.[server,live,vectorize,topology,media]' --override scripts/overrides.txt; Check
+uv pip install --python $py -e '.[all]' --override scripts/overrides.txt; Check
 uv pip install --python $py 'nodejs-wheel>=22,<23'; Check
 
 Step 'frontend (npm install)'

@@ -122,6 +122,39 @@ python -m delyrism.motion dance.mp4 --tracker body --window 3 --every 1 --values
 
 MediaPipe's models (pose 9 MB, hand 8 MB, face 4 MB) download on first use, into `~/.cache/delyrism/mediapipe` for Python and into the browser cache for the live tab.
 
+## Graphemes: drawing motion in one orthogonal basis
+
+The `delyrism.graphemes` module holds this work. `delyrism/graphemes/glyphs.py` gathers symbols as pen motion. Omniglot provides 1,623 characters from 50 alphabets, each drawn by 20 people with the pen's timing (about 45 MB, fetched once into `~/.cache/delyrism/glyphs`). Symbol fonts add alchemical, planetary, zodiac, I Ching, religious, runic, Ogham, Phoenician, Old Italic, Gothic and Old Turkic signs (430 in all), thinned to centre lines, traced into strokes and timed with the two-thirds power law of human drawing. The Four Elements, Planets and Chinese Zodiac structures map to their canonical glyphs (`glyphs.structure_drawings`). Structures without a glyph enter through one drawing of each symbol.
+
+`delyrism/graphemes/basis.py` turns a drawing into a 3D path at 60 Hz (pen-down strokes on the drawing plane, pen lifts above it), cuts it into fragments, and expresses each fragment's velocity in an orthonormal wavelet packet basis. The wavelet family and packet tree are the joint best basis (Coifman and Wickerhauser) over 60,000 fragments from Omniglot's 30 training alphabets, the orthonormal basis that writes them with the lowest entropy, which selects Symlet-6. Its six strongest atoms are the graphemes: a straight stroke, an S-bend, a bow and three finer waves (named by the path each draws across a stroke), each oriented by the phase of its coefficient, plus three atoms for the lifts. Fragments are cut at pen changes, then wherever the six graphemes rebuild each piece best: once the symbol is drawn, a dynamic program minimises the share of the whole symbol's motion they miss plus a fixed cost per cut (`segment_optimal`, `CUT_COST`), so cuts go where the symbol needs them. Every fragment is normalised to the same length before projection, so the graphemes are scale-free and a fine wiggle splits into small S-bends and bows. With this cut, six graphemes rebuild all of 300 sampled drawings from the 20 unseen alphabets and 99% of the font symbols within 2% of the symbol's size, with 5.7 and 3.6 fragments per symbol on average. The double wave and the two wiggles carry 12 to 22% of the bending; the straight grapheme carries most of the total motion because it holds every fragment's forward progress. The basis itself was learned on fragments cut at speed minima and sharp turns (`method="speed"`).
+
+Orthonormality splits a fragment's energy exactly across atoms, so a motion becomes a distribution over grapheme tokens (atom, direction, and position on a 3×3 grid of the symbol), and a symbol is the distribution of its glyph or of one drawing of it. `symbol_weights` turns a motion's distribution into weights over any set of symbols, with a temperature that sets how sharply they concentrate. A rough redraw of an Element, Planet or Chinese Zodiac glyph (rotated up to 20°, stretched up to 15%, noisy, re-timed) gets the right symbol 95 to 99% of the time. Between different people drawing the same unseen character, with one reference drawing per symbol, the right symbol comes first 44% of the time among 20 (chance 5%).
+
+```python
+from delyrism.graphemes import glyphs, default_basis
+B = default_basis()                                  # delyrism/graphemes/data/grapheme_basis.npz, 6 graphemes
+planets = glyphs.structure_drawings("planets")
+profiles = {s: B.profile([d]) for s, d in planets.items()}
+p = B.encode(xyz)                                    # (T, 3) motion at 60 Hz, z > 0 while the pen is up
+weights = B.symbol_weights(p, profiles)              # {"VENUS": 0.71, "MARS": 0.12, ...}
+```
+
+```bash
+python -m delyrism.graphemes gui                     # draw and watch the graphemes live (opens a local page)
+python -m delyrism.graphemes symbols planets         # each symbol's strongest grapheme tokens
+python -m delyrism.graphemes learn                   # relearn the basis from Omniglot
+```
+
+### From IMU or pose to symbol weights
+
+`delyrism/graphemes/bridge.py` turns a movement into a hand path and reads it against a set of symbols through the graphemes. A pose joint (a wrist) is projected onto the body's front plane. A wrist IMU, or any fused quaternion, is read as a pointer, with gravity-referenced elevation and yaw as the path. Windows of fixed arc length slide along the path, each written in the wavelet basis, which gives P(grapheme | motion) and an ordered grapheme sequence. Ten visual symbols (circle, cross, X, triangle up, triangle down, square, spiral, wave, zigzag, infinity) are drawn procedurally in their common ways, and a motion's weight on each comes from aligning grapheme sequences (DTW). `add_symbol` adds any symbol from a drawing, and `add_symbol_path` adds a recorded movement as one more way of drawing a symbol.
+
+`delyrism/graphemes/datasets.py` fetches the test data: UTD-MHAD (a wrist IMU and a Kinect skeleton recorded together while 8 people draw an X, circles and a triangle in the air), EMOKINE (one dancer in a 17-sensor Xsens suit, CC BY 4.0, only the motion CSVs are read out of the archive), and AIST++ 3D dance keypoints, read with an unpickler that only rebuilds numpy arrays. On UTD-MHAD, the Kinect hand path names the drawn shape among circle, X and triangle 94% of the time, and the right symbol comes first among all ten 43% of the time. Circle and spiral, and X and infinity, are close as air motions. With one person's recordings added as templates, the other seven people's gestures come first 86% of the time among ten from pose and 54% from the wrist IMU. On EMOKINE dance, the forearm-quaternion stream and the hand-position stream agree on the top symbol in 48% of 3 s windows (30% by chance).
+
+`invented_symbols(n)` generates an alphabet nobody has seen (strokes built from lines, arcs, hooks, loops, zigzags and waves, chosen from 150 candidates to lie far apart in grapheme space). Six graphemes rebuild all 12 of the default set within 2% of their size (median 0.4%). Simple symbols sit close to most movement, so `calibrate(paths)` learns each symbol's distance mean and spread over ordinary movement, and `weights` then standardises distances (distinct mode, the default once calibrated; `mode="faithful"` keeps the nearest symbol). On UTD-MHAD's 21 arm actions this raises the number of different winning symbols from 4 to 7 and the share of the most frequent one falls from 56% to 20%. `glyphs.image_drawing(path)` turns a drawing image (photo, scan or export) into a symbol through the same thinning and tracing.
+
+The GUI (`python -m delyrism.graphemes gui`, options `--drawings FOLDER`, `--out FILE`) writes one self-contained page and opens it in the browser. Its drawing pad cuts each stroke where the six graphemes fit best and shows the grapheme weights as you draw, per fragment and for the whole drawing, by grapheme and direction. The page also draws each grapheme as an animated stroke, mixes them, and rebuilds every image in the drawings folder fragment by fragment (the bundled samples by default).
+
 ## Story generator
 
 A separate tab. Weaves Δ-graph motifs into micro-fiction with:

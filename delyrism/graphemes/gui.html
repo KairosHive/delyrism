@@ -1,0 +1,648 @@
+<title>Delyrism Graphemes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; each section = a short lede and a grid of live canvases drawn in grapheme ink */
+:root {
+  --paper: #eef1f5; --card: #f8fafc; --ink: #1b2433; --muted: #657083; --rule: #d6dce4;
+  --g1: #0d8587; --g2: #c97416; --g3: #bd2f73; --g4: #6449d1; --g5: #2f8f3a;
+  --g6: #8a6a12; --g7: #2a67b8; --g8: #9a4f4f;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0f141b; --card: #161d27; --ink: #e5eaf1; --muted: #8e99aa; --rule: #263142;
+  --g1: #33b9bb; --g2: #f0a24c; --g3: #e8609f; --g4: #9c87ff; --g5: #62c86a;
+  --g6: #d8b44e; --g7: #6ea8f0; --g8: #d48f8f; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #0f141b; --card: #161d27; --ink: #e5eaf1; --muted: #8e99aa; --rule: #263142;
+  --g1: #33b9bb; --g2: #f0a24c; --g3: #e8609f; --g4: #9c87ff; --g5: #62c86a;
+  --g6: #d8b44e; --g7: #6ea8f0; --g8: #d48f8f; color-scheme: dark }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 56px; }
+h1, h2 { font-family: var(--display); font-weight: 700; text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(34px, 6vw, 58px); line-height: 1.02; }
+h2 { font-size: clamp(22px, 3vw, 28px); }
+.lede { max-width: 64ch; color: var(--muted); margin: 10px 0 0; }
+.eyebrow { font: 500 11px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+header { display: grid; gap: 14px; }
+header .stats { display: flex; flex-wrap: wrap; gap: 8px 22px; font: 400 13px/1.4 var(--mono); color: var(--muted); }
+header .stats b { color: var(--ink); font-weight: 500; }
+section { display: grid; gap: 18px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.card .head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.card .name { font: 700 15px/1.2 var(--display); }
+.card .share { font: 400 11px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+canvas { display: block; width: 100%; max-width: 100%; }
+.stroke { aspect-ratio: 16 / 9; }
+.rose { aspect-ratio: 1; width: 62%; margin: 0 auto; }
+.spark { aspect-ratio: 5 / 1; }
+.mixer { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.mixer .stage { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 10px; display: grid; gap: 8px; }
+.mixer .stage canvas.big { aspect-ratio: 3 / 2; max-width: 620px; justify-self: center; }
+.mixer .stage canvas.bars { aspect-ratio: 6 / 1; }
+.controls { display: grid; gap: 10px; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+button { font: 500 13px/1 var(--body); color: var(--ink); background: var(--card); border: 1px solid var(--rule);
+  border-radius: 999px; padding: 7px 12px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--g4); outline-offset: 2px; }
+.row { display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; }
+.row .tag { font: 700 13px/1 var(--display); }
+.row label { display: grid; gap: 2px; font: 400 11px/1.2 var(--mono); color: var(--muted); }
+.row input[type=range] { width: 100%; }
+.dir { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: center; font: 400 11px/1.2 var(--mono); color: var(--muted); }
+.drawings { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.drawings .card canvas.big { aspect-ratio: 1; }
+.drawings .card canvas.bars { aspect-ratio: 4 / 1; }
+.inkrow { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; align-items: center; font: 400 12px/1.2 var(--mono); color: var(--muted); }
+#inkbar, #bendbar { height: 12px; }
+.sub { font: 400 11px/1.3 var(--mono); color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 400 12px/1 var(--mono); color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+.lifts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.lifts canvas { aspect-ratio: 5 / 2; }
+footer { font: 400 12px/1.6 var(--mono); color: var(--muted); max-width: 80ch; border-top: 1px solid var(--rule); padding-top: 14px; }
+.studio { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.padbox { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 10px; display: grid; gap: 10px; }
+#pad { aspect-ratio: 1; touch-action: none; cursor: crosshair; border-radius: 6px; background:
+  linear-gradient(var(--rule) 1px, transparent 1px) 0 0 / 12.5% 12.5%, linear-gradient(90deg, var(--rule) 1px, transparent 1px) 0 0 / 12.5% 12.5%; }
+.padbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.padbar .note { font: 400 12px/1.3 var(--mono); color: var(--muted); }
+.readout { display: grid; gap: 16px; }
+.panel { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.panel h3 { margin: 0; font: 700 14px/1.2 var(--display); display: flex; justify-content: space-between; gap: 8px; }
+.panel h3 small { font: 400 11px/1.2 var(--mono); color: var(--muted); }
+.bars { display: grid; gap: 5px; }
+.bar { display: grid; grid-template-columns: 112px minmax(0, 1fr) 42px 18px; gap: 8px; align-items: center; font: 400 12px/1.2 var(--mono); }
+.bar .lab { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar .track { height: 10px; background: var(--paper); border-radius: 5px; overflow: hidden; }
+.bar .fill { height: 100%; width: 0; border-radius: 5px; transition: width 80ms linear; }
+.bar .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.bar .arr { display: inline-block; text-align: center; color: var(--muted); }
+#grid { aspect-ratio: 8 / 9.4; }
+.capture { font: 400 12px/1.4 var(--mono); color: var(--muted); }
+.capture b { color: var(--ink); font-weight: 500; }
+@media (max-width: 720px) { .mixer, .studio { grid-template-columns: minmax(0, 1fr); } }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">delyrism · motion → graphemes → symbols</span>
+    <h1>Graphemes</h1>
+    <p class="lede">Every stroke of a symbol, and every stretch of a movement, is cut into fragments and each fragment is written as a weighted sum of six motion shapes from one orthonormal wavelet basis. The shapes are scale-free, since every fragment is normalised to the same length, so a small wiggle reads as small S-bends and bows. Each shape can point in any of eight directions.</p>
+    <div class="stats"><span>basis <b id="st-wav">sym6</b> wavelet packets</span><span>learned on <b>19,280</b> drawings</span><span><b>6</b> shapes × <b>8</b> directions + <b>3</b> lifts</span></div>
+  </header>
+
+  <section>
+    <div><h2>Draw one</h2>
+      <p class="lede">Draw with a mouse, a pen or a finger. Each stroke is cut where the six graphemes fit best. A dynamic program chooses the cut points that let the six rebuild every fragment most closely, with a small cost per cut, so a fine wiggle splits into its bends and a clean arc stays whole. Cuts are weighed against the whole symbol, so every stroke is re-cut each time you lift the pen. The coloured line is what the six rebuild, coloured by the grapheme that bends each fragment most. The weights update as you draw.</p></div>
+    <div class="studio">
+      <div class="padbox">
+        <canvas id="pad" aria-label="drawing pad"></canvas>
+        <div class="padbar"><span class="note" id="padnote">Example drawing. Clear it to draw your own.</span>
+          <span style="display:flex;gap:6px"><button id="undo" type="button">Undo stroke</button><button id="clear" type="button">Clear</button></span></div>
+        <div class="dir"><span class="row tag">✂</span><label for="lam">cut readiness: higher cuts more, lower keeps fragments long <input id="lam" type="range" min="0.002" max="0.05" step="0.001" value="0.01"></label></div>
+      </div>
+      <div class="readout">
+        <div class="panel"><h3><span>This fragment <span style="display:inline-flex;gap:4px;vertical-align:middle">
+            <button id="prevf" type="button" aria-label="previous fragment" style="padding:3px 9px">‹</button><button id="nextf" type="button" aria-label="next fragment" style="padding:3px 9px">›</button></span></span>
+            <small id="fraginfo">the one being drawn</small></h3>
+          <span class="sub" id="fragcolour">hover a fragment on the pad, or step with the arrows</span>
+          <span class="sub">solid: bends the path · pale: changes the pace along it</span>
+          <div class="bars" id="fragbars"></div></div>
+        <div class="panel"><h3>Whole drawing <small id="drawinfo"></small></h3>
+          <div class="inkrow"><span>ink by colour</span><canvas id="inkbar" aria-label="length of line in each colour"></canvas></div>
+          <div class="inkrow"><span>bending</span><canvas id="bendbar" aria-label="how the bending splits across graphemes"></canvas></div>
+          <span class="sub">weights (energy): the straight grapheme carries every fragment's forward motion, so it holds most of the energy even where the line is coloured</span>
+          <div class="bars" id="totbars"></div>
+          <canvas id="grid" aria-label="grapheme by direction weights"></canvas>
+          <div class="capture" id="capture"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div><h2>The graphemes</h2>
+      <p class="lede">Each card draws a straight stroke with one grapheme added across it, so you see the bend it makes. The bar strip is its velocity over the stroke, and the rosette shows it in its eight directions.</p></div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section>
+    <div><h2>Mix them</h2>
+      <p class="lede">A fragment is the straight grapheme plus any amount of the other five. Along the stroke a grapheme changes the pace, which you see in the moving pen. Across it, it bends the path. Pick a preset to see how familiar shapes decompose.</p></div>
+    <div class="mixer">
+      <div class="stage"><canvas class="big" id="mix"></canvas><canvas class="bars" id="mixbars"></canvas></div>
+      <div class="controls">
+        <div class="presets" id="presets"></div>
+        <div id="sliders" class="controls"></div>
+        <div class="dir"><span class="row tag">∠</span><label for="dir">direction <input id="dir" type="range" min="0" max="360" step="1" value="0"></label></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div><h2>Your drawings, in graphemes</h2>
+      <p class="lede">Each drawing is cut the same way, at pen lifts and wherever the six graphemes fit best, and every fragment is rebuilt from the six. Colour marks the grapheme that bends a fragment most, measured across the stroke, and fragments in ink colour are close to straight. Grey dots are your original line. Under each drawing, the ink bar measures the colours by length of line, the bending bar shows how the bending splits across graphemes, and the energy bar is the grapheme distribution itself. The straight grapheme carries every fragment's forward motion, so it holds most of the energy even where the line is coloured.</p></div>
+    <div class="legend" id="legend"></div>
+    <div class="drawings" id="drawings"></div>
+    <div><button id="replay" type="button">Replay drawing</button></div>
+  </section>
+
+  <section>
+    <div><h2>Lifts</h2>
+      <p class="lede">Three more graphemes carry the third axis, the pen leaving the drawing plane between strokes and coming back. Each plot is a side view, with height over the length of one lift.</p></div>
+    <div class="lifts" id="lifts"></div>
+  </section>
+
+  <footer>The basis is the Coifman–Wickerhauser joint best basis of Symlet-6 wavelet packets over 60,000 stroke fragments from Omniglot's 30 training alphabets. Its atoms are orthonormal, so a fragment's energy splits exactly across the graphemes, and that split is the grapheme distribution used to weight symbols. Fragments are time-normalised to 32 steps and length-normalised before the transform.</footer>
+</div>
+
+<script>
+const DATA = __DATA__;
+const NAMES = ["straight", "S-bend", "bow", "double wave", "early wiggle", "late wiggle", "triple wave", "fine wiggle", "tremor"];   // named by the path each draws across a stroke
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const css = () => { const s = getComputedStyle(document.documentElement);
+  const g = k => s.getPropertyValue(k).trim();
+  return { ink: g("--ink"), muted: g("--muted"), rule: g("--rule"), card: g("--card"),
+           gr: [g("--ink"), g("--g1"), g("--g2"), g("--g3"), g("--g4"), g("--g5"), g("--g6"), g("--g7"), g("--g8")] }; };
+let C = css();
+const refreshColors = () => { C = css(); };
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", refreshColors);
+new MutationObserver(refreshColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+const L = DATA.planar[0].length;
+const atoms = DATA.planar;
+const WALL = DATA.W, KEPT = DATA.kept, BANDS = DATA.bands;
+const GROUPS = KEPT.map(i => [i]);                                      // the six graphemes
+let LAMBDA = 0.01;                                                       // cost of one cut
+const NG = GROUPS.length;
+const G0 = WALL[KEPT[0]];
+function bent(vec, k, rot = [1, 0]) {                     // the straight grapheme with vec added across it
+  const pts = [[0, 0]]; let x = 0, y = 0;
+  for (let t = 0; t < L; t++) { const re = G0[t], im = k ? 0.6 * vec[t] : 0;
+    x += re * rot[0] - im * rot[1]; y += re * rot[1] + im * rot[0]; pts.push([x, y]); }
+  return pts;
+}
+// complex helpers: [re, im]
+function pathFromCoefs(coefs, rot = [1, 0], scale = 1, start = [0, 0]) {
+  // coefs: array of [re, im] per atom; returns points of cumsum
+  const pts = [[start[0], start[1]]];
+  let x = start[0], y = start[1];
+  for (let t = 0; t < L; t++) {
+    let re = 0, im = 0;
+    for (let k = 0; k < coefs.length; k++) { re += coefs[k][0] * atoms[k][t]; im += coefs[k][1] * atoms[k][t]; }
+    const rr = re * rot[0] - im * rot[1], ii = re * rot[1] + im * rot[0];
+    x += rr * scale; y += ii * scale; pts.push([x, y]);
+  }
+  return pts;
+}
+function fit(canvas) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1), r = canvas.getBoundingClientRect();
+  const w = Math.max(10, Math.round(r.width * dpr)), h = Math.max(10, Math.round(r.height * dpr));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  return { ctx: canvas.getContext("2d"), w, h, dpr };
+}
+function bounds(lists) {
+  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  for (const P of lists) for (const [x, y] of P) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+  return [a, b, c, d];
+}
+function mapper(bb, w, h, pad) {
+  const [a, b, c, d] = bb, sw = Math.max(c - a, 1e-6), sh = Math.max(d - b, 1e-6);
+  const s = Math.min((w - 2 * pad) / sw, (h - 2 * pad) / sh);
+  const ox = (w - s * sw) / 2 - s * a, oy = (h + s * sh) / 2 + s * b;
+  return ([x, y]) => [ox + s * x, oy - s * y];
+}
+function strokePath(ctx, pts, m, upto, color, width) {
+  const n = Math.max(1, Math.min(pts.length - 1, Math.floor(upto)));
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); let p = m(pts[0]); ctx.moveTo(p[0], p[1]);
+  for (let i = 1; i <= n; i++) { p = m(pts[i]); ctx.lineTo(p[0], p[1]); }
+  const frac = upto - Math.floor(upto);
+  if (frac > 0 && n < pts.length - 1) { const q = m(pts[n + 1]); ctx.lineTo(p[0] + (q[0] - p[0]) * frac, p[1] + (q[1] - p[1]) * frac); p = [p[0] + (q[0] - p[0]) * frac, p[1] + (q[1] - p[1]) * frac]; }
+  ctx.stroke();
+  return p;
+}
+function pen(ctx, p, color, r) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 2 * Math.PI); ctx.fill(); }
+
+// ---- cards
+const cardsEl = document.getElementById("cards");
+const cardItems = GROUPS.map((grp, k) => {
+  const vec = k < KEPT.length ? WALL[KEPT[k]] : WALL[BANDS[k - KEPT.length].rep];
+  const el = document.createElement("div"); el.className = "card";
+  const tag = k < KEPT.length ? `${(DATA.energy[k] * 100).toFixed(0)}%` : `band of ${grp.length}`;
+  el.innerHTML = `<div class="head"><span class="name">g${k} · ${NAMES[k]}</span><span class="share">${tag}</span></div>
+    <canvas class="stroke" aria-label="grapheme ${k} drawn as a stroke"></canvas><canvas class="spark" aria-hidden="true"></canvas><canvas class="rose" aria-label="grapheme ${k} in eight directions"></canvas>`;
+  cardsEl.appendChild(el);
+  return { el, k, vec, pts: bent(vec, k), canv: el.querySelectorAll("canvas") };
+});
+document.getElementById("st-wav").textContent = DATA.wavelet;
+
+function drawCard(item, t) {
+  const [cs, cv, cr] = item.canv, col = C.gr[item.k];
+  { const { ctx, w, h, dpr } = fit(cs); ctx.clearRect(0, 0, w, h);
+    const m = mapper(bounds([item.pts, [[0, -0.18], [0, 0.18]]]), w, h, 14 * dpr);
+    const upto = reduce ? L : ((t % 2.6) / 1.8) * L;
+    ctx.globalAlpha = 0.18; strokePath(ctx, item.pts, m, L, col, 6 * dpr); ctx.globalAlpha = 1;
+    const p = strokePath(ctx, item.pts, m, Math.min(L, upto), col, 3.2 * dpr);
+    if (upto < L) pen(ctx, p, col, 4.5 * dpr); }
+  { const { ctx, w, h } = fit(cv); ctx.clearRect(0, 0, w, h);
+    const a = item.vec, mx = Math.max(...a.map(Math.abs)) || 1, bw = w / L;
+    ctx.fillStyle = C.rule; ctx.fillRect(0, h / 2, w, 1);
+    a.forEach((v, i) => { ctx.fillStyle = col; const hh = (v / mx) * (h / 2 - 2); ctx.fillRect(i * bw + 0.5, h / 2 - Math.max(hh, 0), bw - 1, Math.abs(hh)); }); }
+  { const { ctx, w, h, dpr } = fit(cr); ctx.clearRect(0, 0, w, h);
+    const paths = []; for (let d = 0; d < 8; d++) { const ang = d * Math.PI / 4; paths.push(bent(item.vec, item.k, [Math.cos(ang), Math.sin(ang)])); }
+    const m = mapper(bounds(paths), w, h, 6 * dpr);
+    paths.forEach((P, d) => { ctx.globalAlpha = d === 0 ? 1 : 0.45; strokePath(ctx, P, m, L, d === 0 ? col : C.muted, (d === 0 ? 2.4 : 1.4) * dpr); });
+    ctx.globalAlpha = 1; }
+}
+
+// ---- mixer
+const sliders = document.getElementById("sliders");
+const state = { a: [0, 0, 0, 0, 0], b: [0, 0, 0, 0, 0], dir: 0, t0: performance.now() };
+for (let k = 1; k < 6; k++) {
+  const row = document.createElement("div"); row.className = "row";
+  row.innerHTML = `<span class="tag" style="color:var(--g${k})">g${k}</span>
+    <label for="al${k}">along · ${NAMES[k]}<input id="al${k}" type="range" min="-1.2" max="1.2" step="0.01" value="0"></label>
+    <label for="ac${k}">across<input id="ac${k}" type="range" min="-1.2" max="1.2" step="0.01" value="0"></label>`;
+  sliders.appendChild(row);
+  row.querySelector(`#al${k}`).addEventListener("input", e => { state.a[k - 1] = +e.target.value; state.t0 = performance.now(); });
+  row.querySelector(`#ac${k}`).addEventListener("input", e => { state.b[k - 1] = +e.target.value; state.t0 = performance.now(); });
+}
+document.getElementById("dir").addEventListener("input", e => { state.dir = +e.target.value; });
+const presetsEl = document.getElementById("presets");
+Object.entries(DATA.presets).forEach(([name, rel]) => {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = name;
+  b.addEventListener("click", () => {
+    rel.forEach(([re, im], i) => { state.a[i] = re; state.b[i] = im;
+      document.getElementById(`al${i + 1}`).value = re; document.getElementById(`ac${i + 1}`).value = im; });
+    state.t0 = performance.now();
+  });
+  presetsEl.appendChild(b);
+});
+function drawMixer(now) {
+  const coefs = [[1, 0]].concat(state.a.map((v, i) => [v, state.b[i]]));
+  const ang = state.dir * Math.PI / 180, pts = pathFromCoefs(coefs, [Math.cos(ang), Math.sin(ang)]);
+  { const { ctx, w, h, dpr } = fit(document.getElementById("mix")); ctx.clearRect(0, 0, w, h);
+    const m = mapper(bounds([pts]), w, h, 22 * dpr);
+    const t = Math.max(0, (now - state.t0) / 1000), upto = reduce ? L : Math.max(0, Math.min(L, (t % 3.2) / 2.2 * L));
+    ctx.globalAlpha = 0.15; strokePath(ctx, pts, m, L, C.ink, 9 * dpr); ctx.globalAlpha = 1;
+    // colour each step by the grapheme contributing most to it
+    for (let i = 0; i < Math.min(L, Math.ceil(upto)); i++) {
+      let best = 0, bv = -1;
+      for (let k = 0; k < 6; k++) { const v = Math.hypot(coefs[k][0], coefs[k][1]) * Math.abs(atoms[k][i]); if (v > bv) { bv = v; best = k; } }
+      ctx.strokeStyle = C.gr[best]; ctx.lineWidth = 4 * dpr; ctx.lineCap = "round";
+      const p = m(pts[i]), q = m(pts[i + 1]), f = Math.min(1, upto - i);
+      ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f); ctx.stroke();
+    }
+    if (upto > 0 && upto < L) { const i = Math.floor(upto), f = upto - i, p = m(pts[i]), q = m(pts[Math.min(L, i + 1)]); pen(ctx, [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f], C.ink, 5 * dpr); } }
+  { const { ctx, w, h, dpr } = fit(document.getElementById("mixbars")); ctx.clearRect(0, 0, w, h);
+    const e = coefs.map(([re, im]) => re * re + im * im), s = e.reduce((x, y) => x + y, 0) || 1, bw = w / 6;
+    ctx.font = `${10 * dpr}px ${getComputedStyle(document.body).getPropertyValue("--mono") || "monospace"}`;
+    e.forEach((v, k) => { const hh = (v / s) * (h - 14 * dpr); ctx.fillStyle = C.gr[k]; ctx.fillRect(k * bw + 6 * dpr, h - hh - 12 * dpr, bw - 12 * dpr, hh);
+      ctx.fillStyle = C.muted; ctx.fillText(`g${k} ${(v / s * 100).toFixed(0)}%`, k * bw + 6 * dpr, h - 2 * dpr); }); }
+}
+
+// A grapheme acts along a fragment (changing its pace, invisible in the still line) or across it
+// (bending the path).  Colour follows the bending only: the across part relative to the stroke's direction.
+function shapeOf(c32) {                                   // c32: all 32 coefficients [re, im]
+  const c0 = c32[KEPT[0]], th = Math.atan2(c0[1], c0[0]), co = Math.cos(th), si = Math.sin(th);
+  const e = [], acrossE = [], dirs = [];
+  GROUPS.forEach((grp, k) => { let ee = 0, ae = 0, best = grp[0], bv = -1;
+    grp.forEach(i => { const [re, im] = c32[i], v = re * re + im * im; ee += v; if (v > bv) { bv = v; best = i; }
+      if (k) { const a = -re * si + im * co; ae += a * a; } });
+    e.push(ee); acrossE.push(ae); dirs.push(Math.atan2(c32[best][1], c32[best][0])); });
+  const bend = acrossE.reduce((a, b) => a + b, 0);
+  const dom = bend > 0.05 * e[0] ? acrossE.indexOf(Math.max(...acrossE)) : 0;
+  return { e, acrossE, dirs, dom };
+}
+
+// ---- drawings
+const legend = document.getElementById("legend");
+NAMES.slice(0, NG).forEach((n, k) => { const s = document.createElement("span"); s.innerHTML = `<i style="background:${k ? `var(--g${k})` : "var(--ink)"}"></i>g${k} ${n}`; legend.appendChild(s); });
+const drawEl = document.getElementById("drawings");
+const drawItems = DATA.drawings.map(d => {
+  const el = document.createElement("div"); el.className = "card";
+  el.innerHTML = `<div class="head"><span class="name">${d.name}</span><span class="share">${d.fragments.length} fragments</span></div><canvas class="big" aria-label="${d.name} rebuilt from graphemes"></canvas><canvas class="bars" aria-hidden="true"></canvas>`;
+  drawEl.appendChild(el);
+  const item = { d, el, canv: el.querySelectorAll("canvas") };
+  segmentDrawing(item);
+  return item;
+});
+function segmentDrawing(item) {                           // pen lifts, then the optimal cuts for the whole symbol, as on the pad
+  const frs = [], total = item.d.strokes.reduce((a, P) => a + pathLen(P), 0);
+  item.d.strokes.forEach(P => { const cuts = segmentDP(P, total);
+    for (let q = 0; q < cuts.length - 1; q++) { const f = project(P.slice(cuts[q], cuts[q + 1] + 1));
+      if (f) { const s = f.e.reduce((a, b) => a + b, 0) || 1;
+        frs.push({ pts: f.pts, dom: f.dom, len: f.len, e: f.e.map(v => v / s * f.len), b: f.acrossE.map(v => v / s * f.len) }); } } });
+  const tot = new Array(NG).fill(0), ink = new Array(NG).fill(0), bend = new Array(NG).fill(0);
+  frs.forEach(f => { f.e.forEach((v, k) => { tot[k] += v; }); f.b.forEach((v, k) => { bend[k] += v; }); ink[f.dom] += f.len; });
+  Object.assign(item, { frs, tot, ink, bend });
+  item.el.querySelector(".share").textContent = `${frs.length} fragments`;
+}
+let drawT0 = performance.now();
+document.getElementById("replay").addEventListener("click", () => { drawT0 = performance.now(); });
+function drawDrawing(item, now) {
+  const [cb, cbar] = item.canv;
+  { const { ctx, w, h, dpr } = fit(cb); ctx.clearRect(0, 0, w, h);
+    const m = mapper(bounds([item.d.ghost].concat(item.frs.map(f => f.pts))), w, h, 14 * dpr);
+    ctx.fillStyle = C.muted; ctx.globalAlpha = 0.35;
+    item.d.ghost.forEach(p => { const q = m(p); ctx.fillRect(q[0] - dpr, q[1] - dpr, 2 * dpr, 2 * dpr); });
+    ctx.globalAlpha = 1;
+    const per = 0.42, t = Math.max(0, (now - drawT0) / 1000);
+    item.frs.forEach((f, i) => {
+      const local = reduce ? 1 : Math.max(0, Math.min(1, (t - i * per) / per));
+      if (local <= 0) return;
+      const p = strokePath(ctx, f.pts, m, local * L, C.gr[f.dom], 2.8 * dpr);
+      if (local < 1) pen(ctx, p, C.gr[f.dom], 4 * dpr);
+    }); }
+  stackedRows(cbar, [["ink", item.ink], ["bending", item.bend], ["energy", item.tot]]);
+}
+function stackedRows(canvas, rows) {                      // labelled stacked bars, one per row
+  const { ctx, w, h, dpr } = fit(canvas); ctx.clearRect(0, 0, w, h);
+  const lab = 50 * dpr, gap = 5 * dpr, rh = (h - gap * (rows.length - 1)) / rows.length;
+  ctx.font = `${10 * dpr}px ui-monospace, Consolas, monospace`; ctx.textBaseline = "middle";
+  rows.forEach(([name, vals], r) => {
+    const y = r * (rh + gap), s = vals.reduce((a, b) => a + b, 0) || 1; let x = lab;
+    ctx.fillStyle = C.muted; ctx.fillText(name, 0, y + rh / 2);
+    vals.forEach((v, k) => { const ww = v / s * (w - lab); ctx.fillStyle = C.gr[k]; ctx.fillRect(x, y, Math.max(0, ww - 1), rh); x += ww; });
+  });
+}
+
+// ---- lifts
+const liftsEl = document.getElementById("lifts");
+const liftItems = DATA.lift.map((a, k) => {
+  const el = document.createElement("div"); el.className = "card";
+  el.innerHTML = `<div class="head"><span class="name">lift ${k}</span><span class="share">pen height</span></div><canvas aria-label="lift grapheme ${k}"></canvas>`;
+  liftsEl.appendChild(el);
+  let z = 0; const pts = [[0, 0]]; a.forEach((v, i) => { z += v; pts.push([(i + 1) / L, z]); });
+  return { el, pts, canv: el.querySelector("canvas") };
+});
+function drawLift(item, now) {
+  const { ctx, w, h, dpr } = fit(item.canv); ctx.clearRect(0, 0, w, h);
+  const ys = item.pts.map(p => p[1]), lo = Math.min(...ys), hi = Math.max(...ys), pad = 12 * dpr;
+  const m = ([x, y]) => [pad + x * (w - 2 * pad), h - pad - (y - lo) / Math.max(hi - lo, 1e-6) * (h - 2 * pad)];
+  ctx.fillStyle = C.rule; const base = m([0, Math.max(lo, Math.min(hi, 0))]); ctx.fillRect(pad, base[1], w - 2 * pad, 1 * dpr);
+  const upto = reduce ? L : ((now / 1000) % 2.4) / 1.8 * L;
+  ctx.globalAlpha = 0.2; strokePath(ctx, item.pts, m, L, C.gr[2], 5 * dpr); ctx.globalAlpha = 1;
+  const p = strokePath(ctx, item.pts, m, Math.min(L, upto), C.gr[2], 2.6 * dpr);
+  if (upto < L) pen(ctx, p, C.gr[2], 4 * dpr);
+}
+
+// ---- draw one: the same cutting and projection as delyrism/graphemes.py, live
+const FS = 60, ARROWS = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"];
+const padEl = document.getElementById("pad");
+let strokes = [], cur = null, example = true, lastFrag = null;
+const median = a => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+
+function resample(st) {                                   // to 60 Hz in time, y up
+  if (st.length < 2) return null;
+  const t0 = st[0].t, t1 = st[st.length - 1].t;
+  if (t1 - t0 < 0.05) return null;
+  const out = []; let j = 0;
+  for (let t = t0; t <= t1 + 1e-9; t += 1 / FS) {
+    while (j < st.length - 2 && st[j + 1].t < t) j++;
+    const a = st[j], b = st[j + 1], f = b.t > a.t ? Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t))) : 0;
+    out.push([a.x + (b.x - a.x) * f, -(a.y + (b.y - a.y) * f)]);
+  }
+  return out;
+}
+function smooth(P, sigma = 1.2) {
+  const k = [-3, -2, -1, 0, 1, 2, 3].map(d => Math.exp(-d * d / (2 * sigma * sigma))), ks = k.reduce((a, b) => a + b, 0);
+  return P.map((_, i) => { let x = 0, y = 0; for (let d = -3; d <= 3; d++) { const q = P[Math.min(P.length - 1, Math.max(0, i + d))]; x += q[0] * k[d + 3]; y += q[1] * k[d + 3]; } return [x / ks, y / ks]; });
+}
+function cutPoints(P) {                                   // speed minima and sharp turns, at least 0.1 s apart
+  const n = P.length, gap = 6, h = 3, kk = 3;
+  if (n < 2 * gap + 1) return [];
+  const v = P.map((_, i) => { const a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)]; return Math.hypot(b[0] - a[0], b[1] - a[1]); });
+  const med = median(v), cand = [];
+  for (let i = gap; i < n - gap; i++) { let ok = v[i] < 0.35 * med; for (let j = i - h; ok && j <= i + h; j++) if (v[j] < v[i]) ok = false; if (ok) cand.push(i); }
+  const ang = new Array(n).fill(0);
+  for (let i = kk; i < n - kk; i++) {
+    const u1 = [P[i][0] - P[i - kk][0], P[i][1] - P[i - kk][1]], u2 = [P[i + kk][0] - P[i][0], P[i + kk][1] - P[i][1]];
+    const n1 = Math.hypot(u1[0], u1[1]), n2 = Math.hypot(u2[0], u2[1]);
+    if (n1 > 1e-6 && n2 > 1e-6) ang[i] = Math.acos(Math.max(-1, Math.min(1, (u1[0] * u2[0] + u1[1] * u2[1]) / (n1 * n2)))) * 180 / Math.PI;
+  }
+  for (let i = gap; i < n - gap; i++) { let ok = ang[i] > 70; for (let j = i - h; ok && j <= i + h; j++) if (ang[j] > ang[i]) ok = false; if (ok) cand.push(i); }
+  cand.sort((a, b) => a - b);
+  // a pause is one cut: cuts also need the pen to have travelled 2.5% of the pad since the last one
+  const s = [0]; for (let i = 1; i < n; i++) s.push(s[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
+  const out = [], minTravel = 0.025;
+  for (const i of cand) { const last = out.length ? out[out.length - 1] : 0;
+    if ((!out.length || i - last >= gap) && s[i] - s[last] >= minTravel && s[n - 1] - s[i] >= minTravel) out.push(i); }
+  return out;
+}
+function project(seg) {                                   // time-normalise, length-normalise, project on the six
+  if (seg.length < 2) return null;
+  const m = seg.length, Q = [];
+  for (let i = 0; i <= L; i++) { const u = i / L * (m - 1), j = Math.min(m - 2, Math.floor(u)), f = u - j;
+    Q.push([seg[j][0] + (seg[j + 1][0] - seg[j][0]) * f, seg[j][1] + (seg[j + 1][1] - seg[j][1]) * f]); }
+  const z = []; let len = 0;
+  for (let i = 0; i < L; i++) { const dx = Q[i + 1][0] - Q[i][0], dy = Q[i + 1][1] - Q[i][1]; z.push([dx, dy]); len += Math.hypot(dx, dy); }
+  if (len < 1e-4) return null;
+  z.forEach(s => { s[0] /= len; s[1] /= len; });
+  const total = z.reduce((a, s) => a + s[0] * s[0] + s[1] * s[1], 0);
+  const c32 = WALL.map(a => { let re = 0, im = 0; for (let t = 0; t < L; t++) { re += a[t] * z[t][0]; im += a[t] * z[t][1]; } return [re, im]; });
+  const { e, acrossE, dirs, dom } = shapeOf(c32);
+  const core = e.slice(0, KEPT.length).reduce((a, b) => a + b, 0);
+  const pts = [[Q[0][0], Q[0][1]]]; let x = Q[0][0], y = Q[0][1];   // what the six rebuild
+  for (let t = 0; t < L; t++) { let re = 0, im = 0; KEPT.forEach(i => { re += c32[i][0] * WALL[i][t]; im += c32[i][1] * WALL[i][t]; });
+    x += re * len; y += im * len; pts.push([x, y]); }
+  return { e, acrossE, dirs, total, captured: core / total, len, pts, dom };
+}
+function dirSplit(angle, e) {                             // energy at an angle over the two nearest of 8 directions
+  const out = new Array(8).fill(0); let a = angle; if (a < 0) a += 2 * Math.PI;
+  const b = a / (2 * Math.PI) * 8, lo = Math.floor(b) % 8, w = b - Math.floor(b);
+  out[lo] += e * (1 - w); out[(lo + 1) % 8] += e * w; return out;
+}
+function fitShare(seg) {                                  // share of a fragment's motion the six capture (fast path)
+  const m = seg.length; if (m < 2) return null;
+  let px = seg[0][0], py = seg[0][1], len = 0, tot = 0; const zx = new Float64Array(L), zy = new Float64Array(L);
+  for (let i = 1; i <= L; i++) { const u = i / L * (m - 1), j = Math.min(m - 2, Math.floor(u)), f = u - j;
+    const x = seg[j][0] + (seg[j + 1][0] - seg[j][0]) * f, y = seg[j][1] + (seg[j + 1][1] - seg[j][1]) * f;
+    zx[i - 1] = x - px; zy[i - 1] = y - py; len += Math.hypot(zx[i - 1], zy[i - 1]); px = x; py = y; }
+  if (len < 1e-5) return null;
+  for (let t = 0; t < L; t++) tot += zx[t] * zx[t] + zy[t] * zy[t];
+  let got = 0;
+  for (const i of KEPT) { const a = WALL[i]; let re = 0, im = 0; for (let t = 0; t < L; t++) { re += a[t] * zx[t]; im += a[t] * zy[t]; } got += re * re + im * im; }
+  return { share: got / tot, len };
+}
+function pathLen(P) { let t = 0; for (let i = 1; i < P.length; i++) t += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return t; }
+function segmentDP(P, symTotal) {
+  // the cut points minimising (motion the six miss, weighted by its share of the symbol's ink) + LAMBDA per fragment
+  const n = P.length; if (n < 8) return [0, n - 1];
+  const m = Math.min(n, 110), cand = Array.from({ length: m }, (_, i) => Math.round(i * (n - 1) / (m - 1)));
+  const own = pathLen(P), total = symTotal || own;
+  if (own < 1e-4) return [0, n - 1];
+  const best = new Float64Array(m).fill(Infinity), from = new Int32Array(m).fill(-1); best[0] = 0;
+  for (let j = 1; j < m; j++) for (let i = 0; i < j; i++) {
+    if (best[i] === Infinity || (cand[j] - cand[i] < 4 && !(i === 0 && j === m - 1))) continue;
+    const f = fitShare(P.slice(cand[i], cand[j] + 1));
+    const cost = (f ? (1 - f.share) * f.len / total : 0) + LAMBDA;
+    if (best[i] + cost < best[j]) { best[j] = best[i] + cost; from[j] = i; }
+  }
+  const out = []; for (let j = m - 1; j > 0; j = from[j]) out.push(cand[j]); out.push(0);
+  return out.reverse();
+}
+const segCache = new WeakMap();
+function cutsFor(key, P, total, finished, allowStale) {
+  const hit = segCache.get(key);
+  if (hit && hit.lambda === LAMBDA && hit.n === P.length && (allowStale || Math.abs(hit.total - total) < 1e-9)) return hit.cuts;
+  const cuts = segmentDP(P, total);
+  if (finished) segCache.set(key, { lambda: LAMBDA, n: P.length, total, cuts });
+  return cuts;
+}
+function analyseAll() {
+  const frags = [];
+  const Ps = strokes.map(st => { const R = resample(st); return R ? smooth(R) : null; });
+  const total = Ps.reduce((a, P) => a + (P ? pathLen(P) : 0), 0);
+  strokes.forEach((st, si) => {
+    const P = Ps[si]; if (!P) return;
+    // while a stroke is being drawn, earlier strokes keep their cuts; at pen-up all are re-cut for the whole symbol
+    const cuts = cutsFor(st, P, total, st !== cur, cur !== null && st !== cur);
+    for (let q = 0; q < cuts.length - 1; q++) {
+      const f = project(P.slice(cuts[q], cuts[q + 1] + 1));
+      if (f) { f.stroke = si; f.cut = P[cuts[q]]; frags.push(f); }
+    }
+  });
+  return frags;
+}
+
+// readout rows
+function makeBars(el, extra) {
+  const rows = NAMES.slice(0, NG).map((n, k) => { const r = document.createElement("div"); r.className = "bar";
+    r.innerHTML = `<span class="lab">g${k} ${n}</span><span class="track"><span class="fill" data-col="${k ? `var(--g${k})` : "var(--ink)"}"></span></span><span class="val">0%</span><span class="arr"></span>`;
+    el.appendChild(r); return r; });
+  if (extra) { const r = document.createElement("div"); r.className = "bar";
+    r.innerHTML = `<span class="lab">beyond the six</span><span class="track"><span class="fill" data-col="var(--muted)"></span></span><span class="val">0%</span><span class="arr"></span>`;
+    el.appendChild(r); rows.push(r); }
+  return rows;
+}
+const fragRows = makeBars(document.getElementById("fragbars"), true);
+const totRows = makeBars(document.getElementById("totbars"), false);
+function setRow(r, share, angle, solid = share) {
+  const fill = r.querySelector(".fill"), col = fill.dataset.col;
+  const cut = share > 0 ? Math.max(0, Math.min(100, solid / share * 100)) : 100;
+  fill.style.background = `linear-gradient(90deg, ${col} 0 ${cut}%, color-mix(in srgb, ${col} 32%, transparent) ${cut}% 100%)`;
+  fill.style.width = `${Math.max(0, Math.min(100, share * 100)).toFixed(1)}%`;
+  r.querySelector(".val").textContent = `${(share * 100).toFixed(0)}%`;
+  const arr = r.querySelector(".arr");
+  if (angle === null || share < 0.02) { arr.textContent = ""; } else { arr.textContent = "→"; arr.style.transform = `rotate(${-angle}rad)`; }
+}
+
+let sel = null, lastFrags = [];                         // the fragment the panel shows (null: the last one)
+function renderStudio() {
+  const frags = analyseAll();
+  lastFrags = frags;
+  const shown = frags.length ? (sel === null || sel >= frags.length ? frags.length - 1 : sel) : -1;
+  const { ctx, w, h, dpr } = fit(padEl); ctx.clearRect(0, 0, w, h);
+  const toPx = ([x, y]) => [x * w, -y * w];
+  // your ink
+  ctx.strokeStyle = C.muted; ctx.globalAlpha = 0.35; ctx.lineWidth = 7 * dpr; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  strokes.forEach(st => { if (st.length < 2) return; ctx.beginPath(); ctx.moveTo(st[0].x * w, st[0].y * w); st.forEach(p => ctx.lineTo(p.x * w, p.y * w)); ctx.stroke(); });
+  ctx.globalAlpha = 1;
+  // what the six rebuild, coloured by the grapheme that bends each fragment most
+  if (shown >= 0) {                                       // halo on the fragment the panel describes
+    const fs = frags[shown]; ctx.strokeStyle = C.gr[fs.dom]; ctx.globalAlpha = 0.3; ctx.lineWidth = 12 * dpr; ctx.beginPath();
+    let p = toPx(fs.pts[0]); ctx.moveTo(p[0], p[1]); fs.pts.forEach(q => { p = toPx(q); ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.globalAlpha = 1; }
+  frags.forEach(f => {
+    ctx.strokeStyle = C.gr[f.dom]; ctx.lineWidth = 2.6 * dpr; ctx.beginPath();
+    let p = toPx(f.pts[0]); ctx.moveTo(p[0], p[1]); f.pts.forEach(q => { p = toPx(q); ctx.lineTo(p[0], p[1]); }); ctx.stroke();
+    const c0 = toPx(f.cut); ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(c0[0], c0[1], 2.6 * dpr, 0, 2 * Math.PI); ctx.fill();
+  });
+  // this fragment: the last one of the stroke being drawn (or the last drawn)
+  const f = shown >= 0 ? frags[shown] : null;
+  if (f) {
+    const s = f.total;
+    f.e.forEach((v, k) => setRow(fragRows[k], v / s, f.dirs[k], k === 0 ? v / s : f.acrossE[k] / s));
+    setRow(fragRows[NG], Math.max(0, 1 - f.captured), null);
+    document.getElementById("fraginfo").textContent = `${shown + 1} of ${frags.length} · ${(f.len * 100).toFixed(0)}% of pad width`;
+    document.getElementById("fragcolour").innerHTML = f.dom
+      ? `coloured <b style="color:var(--g${f.dom})">g${f.dom} ${NAMES[f.dom]}</b>, the longest solid bar: it bends this fragment most`
+      : `coloured <b>g0 straight</b>: it bends less than 5% of its forward motion`;
+  } else { fragRows.forEach(r => setRow(r, 0, null)); document.getElementById("fraginfo").textContent = "draw to start"; }
+  // whole drawing: length-weighted grapheme x direction distribution
+  const G6 = Array.from({ length: NG }, () => new Array(8).fill(0)); let wsum = 0, capt = 0, lsum = 0;
+  frags.forEach(fr => { const es = fr.e.reduce((a, b) => a + b, 0) || 1;
+    fr.e.forEach((v, k) => { const d = dirSplit(fr.dirs[k], v / es * fr.len); d.forEach((x, j) => { G6[k][j] += x; }); });
+    wsum += fr.len; capt += fr.captured * fr.len; lsum += fr.len; });
+  const tot = G6.reduce((a, r) => a + r.reduce((x, y) => x + y, 0), 0) || 1;
+  G6.forEach((r, k) => { const m = r.reduce((x, y) => x + y, 0); let best = 0; r.forEach((x, j) => { if (x > r[best]) best = j; });
+    setRow(totRows[k], m / tot, m > 0 ? best * Math.PI / 4 : null); });
+  document.getElementById("drawinfo").textContent = `${strokes.filter(s => s.length > 1).length} strokes · ${frags.length} fragments`;
+  { const bend = new Array(NG).fill(0);
+    frags.forEach(fr => { const es = fr.e.reduce((a, b) => a + b, 0) || 1; fr.acrossE.forEach((v, k) => { bend[k] += v / es * fr.len; }); });
+    const { ctx: g, w: bw, h: bh } = fit(document.getElementById("bendbar")); g.clearRect(0, 0, bw, bh);
+    const s = bend.reduce((a, b) => a + b, 0); let x = 0;
+    if (s > 0) bend.forEach((v, k) => { const ww = v / s * bw; g.fillStyle = C.gr[k]; g.fillRect(x, 0, Math.max(0, ww - 1), bh); x += ww; });
+    else { g.fillStyle = C.rule; g.fillRect(0, 0, bw, bh); } }
+  { const ink = new Array(NG).fill(0); frags.forEach(fr => { ink[fr.dom] += fr.len; });
+    const { ctx: g, w: iw, h: ih } = fit(document.getElementById("inkbar")); g.clearRect(0, 0, iw, ih);
+    const s = ink.reduce((a, b) => a + b, 0); let x = 0;
+    if (s > 0) ink.forEach((v, k) => { const ww = v / s * iw; g.fillStyle = C.gr[k]; g.fillRect(x, 0, Math.max(0, ww - 1), ih); x += ww; });
+    else { g.fillStyle = C.rule; g.fillRect(0, 0, iw, ih); } }
+  document.getElementById("capture").innerHTML = frags.length
+    ? `The six graphemes carry <b>${(capt / lsum * 100).toFixed(1)}%</b> of the drawing's motion energy. The grid shows each grapheme's weight in each of the 8 directions.`
+    : "The grid fills in as you draw.";
+  { const { ctx: g, w: gw, h: gh, dpr: gd } = fit(document.getElementById("grid")); g.clearRect(0, 0, gw, gh);
+    const left = 34 * gd, top = 4 * gd, bottom = 16 * gd, cw = (gw - left - 4 * gd) / 8, ch = (gh - top - bottom) / NG, mx = Math.max(...G6.flat(), 1e-9);
+    g.font = `${10 * gd}px ui-monospace, Consolas, monospace`; g.textBaseline = "middle";
+    G6.forEach((r, k) => { g.fillStyle = C.muted; g.fillText(`g${k}`, 4 * gd, top + (k + 0.5) * ch);
+      r.forEach((x, j) => { g.fillStyle = C.rule; g.fillRect(left + j * cw + 1, top + k * ch + 1, cw - 2, ch - 2);
+        g.globalAlpha = Math.sqrt(x / mx); g.fillStyle = C.gr[k]; g.fillRect(left + j * cw + 1, top + k * ch + 1, cw - 2, ch - 2); g.globalAlpha = 1; }); });
+    g.fillStyle = C.muted; g.textAlign = "center"; ARROWS.forEach((a, j) => g.fillText(a, left + (j + 0.5) * cw, gh - 7 * gd)); g.textAlign = "left"; }
+}
+let studioQueued = false;
+const scheduleStudio = () => { if (!studioQueued) { studioQueued = true; requestAnimationFrame(() => { studioQueued = false; try { renderStudio(); } catch (e) { console.error(e); } }); } };
+function addPoint(e) { const r = padEl.getBoundingClientRect(); cur.push({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.width, t: e.timeStamp / 1000 }); }
+padEl.addEventListener("pointerdown", e => {
+  if (example) { strokes = []; example = false; document.getElementById("padnote").textContent = "Lift the pen between strokes. Each stroke is analysed as you draw it."; }
+  sel = null; padEl.setPointerCapture(e.pointerId); cur = []; strokes.push(cur); addPoint(e); e.preventDefault(); scheduleStudio();
+});
+padEl.addEventListener("pointermove", e => {
+  if (!cur && e.buttons === 0 && lastFrags.length) {     // hover: show the nearest fragment
+    const r = padEl.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = -(e.clientY - r.top) / r.width;
+    let best = null, bd = 0.04;
+    lastFrags.forEach((f, i) => f.pts.forEach(q => { const d = Math.hypot(q[0] - x, q[1] - y); if (d < bd) { bd = d; best = i; } }));
+    if (best !== null && best !== sel) { sel = best; scheduleStudio(); }
+    return;
+  }
+  if (!cur) return; (e.getCoalescedEvents ? e.getCoalescedEvents() : [e]).forEach(addPoint); scheduleStudio(); });
+["pointerup", "pointercancel", "lostpointercapture"].forEach(n => padEl.addEventListener(n, () => { cur = null; scheduleStudio(); }));
+document.getElementById("clear").addEventListener("click", () => { strokes = []; example = false; scheduleStudio();
+  document.getElementById("padnote").textContent = "Lift the pen between strokes. Each stroke is analysed as you draw it."; });
+const stepFrag = d => { if (!lastFrags.length) return; const cur0 = sel === null ? lastFrags.length - 1 : sel;
+  sel = (cur0 + d + lastFrags.length) % lastFrags.length; scheduleStudio(); };
+document.getElementById("prevf").addEventListener("click", () => stepFrag(-1));
+document.getElementById("nextf").addEventListener("click", () => stepFrag(1));
+document.getElementById("undo").addEventListener("click", () => { strokes.pop(); scheduleStudio(); });
+document.getElementById("lam").addEventListener("input", e => { LAMBDA = +e.target.value; drawItems.forEach(segmentDrawing); drawT0 = performance.now(); scheduleStudio(); });
+new ResizeObserver(scheduleStudio).observe(padEl);
+// an example to start from: an S-curve and a hooked bar, timed like a hand (slow at the ends)
+(function seed() {
+  const ease = u => u * u * (3 - 2 * u), mk = (fn, dur, t0) => Array.from({ length: 70 }, (_, i) => { const u = i / 69, p = fn(u); return { x: p[0], y: p[1], t: t0 + ease(u) * dur }; });
+  strokes = [mk(u => [0.5 - 0.17 * Math.sin(2 * Math.PI * u), 0.14 + 0.5 * u], 1.3, 0),
+             mk(u => u < 0.7 ? [0.22 + 0.5 * (u / 0.7), 0.76] : [0.72 + 0.08 * Math.sin((u - 0.7) / 0.3 * Math.PI), 0.76 - 0.08 * (1 - Math.cos((u - 0.7) / 0.3 * Math.PI))], 1.0, 2)];
+  scheduleStudio();
+})();
+const _refresh = refreshColors;
+
+function frame(now) {
+  if (!reduce) requestAnimationFrame(frame);           // keep the loop alive whatever happens below
+  now = Math.max(now, performance.now() - 50);
+  const t = now / 1000;
+  const parts = [() => cardItems.forEach(c => drawCard(c, t)), () => drawMixer(now),
+                 () => drawItems.forEach(d => drawDrawing(d, now)), () => liftItems.forEach(l => drawLift(l, now))];
+  for (const draw of parts) { try { draw(); } catch (e) { if (!frame.warned) { console.error(e); frame.warned = true; } } }
+}
+requestAnimationFrame(frame);
+if (reduce) window.addEventListener("resize", () => requestAnimationFrame(frame));
+</script>

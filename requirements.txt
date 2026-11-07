@@ -15,7 +15,7 @@ python-multipart>=0.0.6  # For file uploads
 websockets>=12.0
 
 # ---- Embedding backends ----
-sentence-transformers>=2.3.1,<3.0
+sentence-transformers>=5      # 2.x caps transformers <5, which PE-AV (>=5.22) needs
 # ≥5.22 for the PE-AV backend (PeAudioVideoModel); the CLAP shims in the
 # engine cover the 4.x→5.x API changes (ClapProcessor audios=→audio=,
 # get_audio_features returning a ModelOutput).
@@ -63,3 +63,9 @@ python-osc
 
 # ---- Pose query (delyrism/pose.py, Live tab) ----
 mediapipe>=0.10.14       # PoseLandmarker; pulls opencv-contrib-python
+
+# ---- Graphemes (delyrism/graphemes) ----
+opencv-contrib-python>=4.8   # thinning glyphs into strokes (cv2.ximgproc)
+fonttools>=4.40              # symbol-font coverage
+pandas>=2.0                  # EMOKINE motion CSVs
+pywavelets>=1.6              # wavelet packet best basis (learning only)

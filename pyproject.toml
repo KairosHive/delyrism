@@ -4,6 +4,7 @@
 #                       pose / motion), structures/*.json shipped as package data
 #   delyrism.server     the FastAPI backend incl. the live Δ-graph socket, OSC to
 #                       TouchDesigner, speech client, live profile  (python -m delyrism.server)
+#   delyrism.graphemes  symbols and movement in one orthogonal wavelet basis
 #   symbol_vectorizer   hand-drawn symbols → vector graphics + space JSON
 #
 #   uv pip install -e ".[server,live,vectorize]"            (from a checkout)
@@ -61,6 +62,12 @@ live = [
 vectorize = [
     "opencv-contrib-python>=4.8",
 ]
+# delyrism.graphemes (symbols and movement in one wavelet basis)
+graphemes = [
+    "opencv-contrib-python>=4.8",
+    "fonttools>=4.40",
+    "pywavelets>=1.6",
+]
 # Topology tab (persistent homology)
 topology = ["ripser>=0.6.7"]
 # audio / image / video embedders (CLAP, CLIP, PE-AV) and audio contexts
@@ -73,7 +80,7 @@ media = [
     "regex",
     "tqdm",
 ]
-all = ["delyrism[server,live,vectorize,topology,media]"]
+all = ["delyrism[server,live,vectorize,graphemes,topology,media]"]
 
 [project.scripts]
 delyrism-server = "delyrism.server.__main__:main"
@@ -86,4 +93,4 @@ include = ["delyrism*", "symbol_vectorizer*"]
 exclude = ["delyrism.legacy*"]
 
 [tool.setuptools.package-data]
-delyrism = ["structures/*.json"]
+delyrism = ["structures/*.json", "graphemes/data/*.npz", "graphemes/*.html", "graphemes/samples/*.png"]
