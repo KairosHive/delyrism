@@ -6,6 +6,11 @@ word in the graph), has the TTS service synthesise it and sends
 `/delyrism/speak s word  s wav-path  f seconds` over OSC to TouchDesigner,
 which plays it.  The same word is not spoken twice in a row unless `repeat`.
 
+Movement (MediaPipe) queries — kinds in `media_kinds`, i.e. pose / motion —
+have no edits to wait for: the word is spoken whenever the top activated node
+changes and then stays on top for `delay` s, at most once every `min_gap` s
+(the slowed voice and its reverb take a few seconds to ring out).
+
 Mood: the word is spoken in a mood sampled from the queried sub-network.
 Every descriptor of the space has a distribution over MOODS (the Chatterbox
 style tags that measurably change delivery).  It comes from the cosine
@@ -18,7 +23,7 @@ time the distributions of the nodes the query activates (relevance ≥
 `mood_threshold`; the top node if none) are averaged, weighted by relevance,
 sharpened by 1/`mood_temperature`, and a mood is sampled from the result.
 
-Configuration: env DELYRISM_SPEAK (1/0), DELYRISM_SPEAK_DELAY (s),
+Configuration: env DELYRISM_SPEAK (1/0), DELYRISM_SPEAK_DELAY (s), DELYRISM_SPEAK_GAP (s),
 DELYRISM_TTS_URL (default http://127.0.0.1:8010) — or GET/POST /realtime/speech.
 GET /realtime/speech/moods/{space_id} shows the balance and each mood's most
 typical descriptors.
@@ -55,6 +60,9 @@ class SpeechConfig:
         self.delay = float(os.environ.get("DELYRISM_SPEAK_DELAY", "1.0"))
         self.url = os.environ.get("DELYRISM_TTS_URL", "http://127.0.0.1:8010").rstrip("/")
         self.repeat = False
+        self.media = True                # also speak on top-node changes in movement modes
+        self.media_kinds = ("pose", "motion")
+        self.min_gap = float(os.environ.get("DELYRISM_SPEAK_GAP", "4.0"))   # s between movement-driven words
         self.mood = True                 # speak in a sampled mood (else always neutral)
         self.mood_threshold = 0.5        # relevance (0–1) for a node to count as activated
         self.mood_temperature = 1.0      # < 1 sharpens the averaged distribution, > 1 flattens it
@@ -66,11 +74,13 @@ class SpeechConfig:
 
     def configure(self, **kw: Any) -> Dict[str, Any]:
         for key, cast in (("enabled", bool), ("delay", float), ("url", str), ("repeat", bool),
+                          ("media", bool), ("min_gap", float),
                           ("mood", bool), ("mood_threshold", float), ("mood_temperature", float),
                           ("mood_tau", float)):
             if kw.get(key) is not None:
                 setattr(self, key, cast(kw[key]))
         self.delay = max(0.0, self.delay)
+        self.min_gap = max(0.0, self.min_gap)
         self.mood_temperature = max(0.05, self.mood_temperature)
         self.mood_tau = max(0.05, self.mood_tau)
         self.url = self.url.rstrip("/")
@@ -82,6 +92,7 @@ class SpeechConfig:
         except Exception as ex:
             tts = {"reachable": False, "error": str(ex)[:120]}
         return dict(enabled=self.enabled, delay=self.delay, url=self.url, repeat=self.repeat,
+                    media=self.media, media_kinds=list(self.media_kinds), min_gap=self.min_gap,
                     mood=self.mood, mood_threshold=self.mood_threshold,
                     mood_temperature=self.mood_temperature, mood_tau=self.mood_tau,
                     moods=[m[0] for m in MOODS], last_word=self.last_word, last_mood=self.last_mood,

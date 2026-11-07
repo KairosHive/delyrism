@@ -34,7 +34,9 @@ export async function startCameraCapture(opts: {
   quality?: number;
 }): Promise<CameraCapture> {
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+    // ask for a high frame rate: the landmark tracker can only track as many
+    // frames per second as the camera delivers (many default to 30 or less)
+    video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 }, facingMode: "user" },
     audio: false,
   });
   const video = document.createElement("video");

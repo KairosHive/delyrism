@@ -612,7 +612,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "pose": None,                               # PoseStream, made on the first pose frame
         "pose_frame": None,                         # latest camera jpeg not yet tracked
         "pose_lm": [],                              # browser landmark frames not yet appended (all kept)
-        "pose_drawn": 0.0,                          # last preview time (drawn at most 20 per second)
+        "pose_drawn": 0.0,                          # last preview time (one per tracked batch, ≤ 75 per second)
         "pose_opts": dict(_POSE_DEFAULTS),
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
@@ -626,10 +626,17 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "layout_source": "browser" if sim.client_fresh(time.perf_counter()) else "server-sim",
         "browser_fps": round(sim.client_fps, 1), "awake": sim.awake, "nodes": len(sim.ids),
         "context": state["context"][:60]})
-    speak: Dict[str, Any] = {"task": None, "last": None}
+    speak: Dict[str, Any] = {"task": None, "last": None, "top": None, "t": 0.0, "heard": 0.0,
+                             "synth": False, "again": False}
+
+    def _speakable() -> bool:
+        k = state["query_kind"]
+        return speech.cfg.enabled and state["vq"] is not None and (
+            k == "text" or (speech.cfg.media and k in speech.cfg.media_kinds))
 
     async def speak_later() -> None:
-        """Debounced voice: `speech.cfg.delay` s after the last text-query edit,
+        """Debounced voice: `speech.cfg.delay` s after the last text-query edit
+        — or, in a movement mode, after the top activated node changed —
         speak the word with the highest query relevance (if it changed)."""
         try:
             await asyncio.sleep(speech.cfg.delay)
@@ -637,14 +644,24 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 if not state["query_dirty"] and not state["graph_dirty"]:
                     break
                 await asyncio.sleep(0.05)
-            if not speech.cfg.enabled or state["query_kind"] != "text" or state["vq"] is None:
+            if not _speakable():
                 return
+            if state["query_kind"] != "text":
+                # movement: never cut the last word off — wait until it has been
+                # heard (its voice + 1 s of its reverb), at least min_gap after it began
+                hold = max(speech.cfg.min_gap, speak["heard"] + 1.0)
+                wait = speak["t"] + hold - time.perf_counter()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                if not _speakable():
+                    return
             rel = state.get("rel_prev") or {}
             if not rel:
                 return
             word = max(rel, key=rel.get)
             if word == speak["last"] and not speech.cfg.repeat:
                 return
+            speak["synth"] = True
             # mood sampled from the queried sub-network (see app/speech.py)
             mood = (await asyncio.to_thread(speech.choose_mood, space, dict(rel))
                     if speech.cfg.mood else dict(mood="neutral", tag=None, probs={}, nodes=[]))
@@ -652,6 +669,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if not res:
                 return
             speak["last"] = word
+            speak["t"] = time.perf_counter()                    # playback starts now
+            speak["heard"] = float(res.get("voice_duration") or res.get("duration") or 0.0)
             speech.cfg.last_mood = mood
             if osc.is_owner(osc_token):
                 osc.send([mixed("/delyrism/speak", word, res["path"], float(res["duration"]), mood["mood"])])
@@ -659,11 +678,34 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                                 "mood": mood["mood"], "mood_probs": mood["probs"]})
         except asyncio.CancelledError:
             pass
+        finally:
+            speak["synth"] = False
+            if speak["again"]:              # the top node moved on while this word was synthesised
+                speak["again"] = False
+                asyncio.get_running_loop().call_soon(schedule_speak)
 
     def schedule_speak() -> None:
         if speak["task"] is not None:
             speak["task"].cancel()
         speak["task"] = asyncio.create_task(speak_later())
+
+    def media_top_changed(rel: Dict[str, float]) -> None:
+        """Movement modes: (re)start the voice timer when the top node changes."""
+        if not rel or not speech.cfg.media or state["query_kind"] not in speech.cfg.media_kinds:
+            return
+        top = max(rel, key=rel.get)
+        if top != speak["top"]:
+            speak["top"] = top
+            if speak["synth"]:              # don't drop the word being synthesised; look again after
+                speak["again"] = True
+                return
+            if top != speak["last"] or speech.cfg.repeat:
+                schedule_speak()
+            elif speak["task"] is not None:
+                speak["task"].cancel()      # back to the word just spoken: nothing new to say
+
+    if speech.cfg.enabled and speech.cfg.mood:              # embed the mood anchors now, not at the first word
+        asyncio.create_task(asyncio.to_thread(speech.mood_matrix, space))
 
     await ws.send_json({"type": "ready", "params": state["params"],
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
@@ -748,7 +790,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             elif t == "query_clear":
                 if speak["task"] is not None:
                     speak["task"].cancel()
-                speak["last"] = None
+                speak["last"] = speak["top"] = None
                 state["vq"] = None
                 state["pending"] = None
                 state["rel_prev"] = None
@@ -871,12 +913,14 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     sim.set_relevance(rel, state["vq"] is not None)
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
+                    media_top_changed(rel)
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
                     await _embed_pending()
                     rel = await asyncio.to_thread(_score)
                     sim.set_relevance(rel, state["vq"] is not None)
                     await ws.send_json({"type": "relevance", **_rel_msg(rel)})
+                    media_top_changed(rel)
             except Exception as e:
                 await ws.send_json({"type": "error", "detail": str(e)})
             if state["graph_dirty"] or state["query_dirty"]:
@@ -899,7 +943,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                         await asyncio.to_thread(old.close)
                 marks = [f for f in marks if f[0] == kind]
                 now = time.monotonic()
-                draw = now - state["pose_drawn"] >= 0.05
+                draw = now - state["pose_drawn"] >= 1.0 / 75.0   # every tracked batch, up to 75 Hz (≈ 3 ms each)
                 try:
                     found, preview = await asyncio.to_thread(_pose_ingest, state["pose"], marks,
                                                              dict(state["pose_opts"]), draw)

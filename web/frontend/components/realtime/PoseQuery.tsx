@@ -48,6 +48,26 @@ export function TrackerPicker({ allow }: { allow?: PoseTracker[] }) {
   );
 }
 
+/** Measured tracking rates, so the "tracking" setting can be checked live:
+ *  camera frames in, frames tracked, MediaPipe time per frame, drawings back. */
+export function TrackRate() {
+  const { st, target } = useLive(useShallow((s) => ({ st: s.trackStats, target: s.poseFps })));
+  if (!st) return null;
+  const reach = Math.min(target, st.camFps || target);
+  const short = st.trackFps < 0.9 * reach;
+  const camShort = st.camFps > 0 && st.camFps < 0.9 * target;
+  const budget = st.detectMs > 1000 / Math.max(1, target);
+  const f = (x: number) => x.toFixed(x < 10 ? 1 : 0);
+  return (
+    <div className={`col-span-full font-mono text-[10px] leading-tight ${short ? "text-warning" : "text-ink-500"}`}
+         title="camera: new frames per second delivered · tracked: frames run through MediaPipe (target = the tracking setting) · ms: MediaPipe time per frame · drawing: pose drawings back from the server">
+      camera {f(st.camFps)} fps · tracked {f(st.trackFps)}/{target} fps · {st.detectMs.toFixed(1)} ms/frame · drawing {f(st.previewFps)} fps
+      {camShort && <span className="text-warning"> · the camera delivers only {f(st.camFps)} fps</span>}
+      {budget && <span className="text-warning"> · MediaPipe needs more than a frame&apos;s time — lower the rate or the GPU load</span>}
+    </div>
+  );
+}
+
 /** The pose drawing as the server last rendered it, with an in-frame dot. */
 export function PosePreview({ size = 132 }: { size?: number }) {
   const { live, posePreview, posePresent, tracker } = useLive(useShallow((s) => ({
@@ -102,6 +122,7 @@ export function PosePanel() {
                   onChange={(v) => setPoseOpts({ smooth: v })} help="One Euro filter on the landmarks: calms jitter when still, keeps fast gestures sharp. 0 = raw tracker." />
           <Slider label="tracking" value={poseFps} min={5} max={60} step={1} format={(v) => `${v} fps`}
                   onChange={(v) => set("poseFps", v)} help="Frames tracked per second (on the GPU). Denser tracking draws smoother trails." />
+          <TrackRate />
           <div className="flex flex-wrap items-end gap-1.5">
             <button className="btn" onClick={resetPose} disabled={!live} title="clear the trajectory and its trails">reset</button>
             <button className="btn" onClick={() => exportPose("mp4", 10)} disabled={!live} title="last 10 s as an mp4 of moving landmarks">⤓ mp4</button>

@@ -40,6 +40,13 @@ export interface LiveParams {
 }
 
 type Status = "idle" | "connecting" | "ready" | "closed" | "error";
+export interface TrackStats {
+  camFps: number;       // new frames per second from the camera
+  trackFps: number;     // frames tracked per second (target: poseFps)
+  detectMs: number;     // MediaPipe time per tracked frame
+  previewFps: number;   // pose drawings back from the server per second
+}
+
 export type QueryKind = "text" | "audio" | "image" | "video" | "av" | "pose" | "motion";
 export type QueryMode = QueryKind;
 const tracks = (m: QueryMode) => m === "pose" || m === "motion";   // modes fed by the landmark tracker
@@ -116,6 +123,7 @@ interface LiveState {
   posePreview: string | null;    // data URL of the latest pose drawing
   posePresent: boolean;          // a dancer was found in the latest tracked frame
   trackerState: "off" | "loading" | "GPU" | "CPU" | "error";   // the browser landmark tracker
+  trackStats: TrackStats | null;  // measured rates while tracking (2 Hz)
   motionWindow: number;          // seconds of movement per description
   motionContrast: number;        // 0..1, how much of the shared "movement description" direction is removed
   motionRefresh: number;         // seconds between descriptions (each one replaces the query)
@@ -165,34 +173,89 @@ const needsMic = (m: QueryMode) => m === "audio" || m === "av";
 const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av" || tracks(m);
 
 // ---- browser landmark tracker (pose / movement modes) ----------------------
-// MediaPipe runs here on the GPU (see poseTracker.ts) and reads the camera's
-// <video> element on every animation frame, throttled to `poseFps`; each
-// result goes to the server as a kind-6 landmark frame.  Kept outside the
-// store so tracking never triggers a React render.
+// MediaPipe runs here on the GPU (see poseTracker.ts).  It is driven by the
+// camera itself (requestVideoFrameCallback: once per new camera frame, so no
+// frame is tracked twice and none is skipped by display-rate jitter), paced
+// to `poseFps` with a deadline accumulator, so the average rate is exactly the
+// setting whenever the camera and the GPU can deliver it.  Each result goes to
+// the server as a kind-6 landmark frame.  Kept outside the store so tracking
+// never triggers a React render; `trackStats` (2 Hz) reports the real rates.
 let tracker: Tracker | null = null;
 let trackerBuild: Promise<void> | null = null;
-let trackRaf: number | null = null;
-let lastTrack = 0;
+let trackHandle: { stop: () => void } | null = null;
+
+/** Events per second over the last second. */
+class Rate {
+  private t: number[] = [];
+  hit(now: number) { this.t.push(now); this.trim(now); }
+  fps(now: number) { this.trim(now); return this.t.length > 1 ? (this.t.length - 1) * 1000 / Math.max(1, now - this.t[0]) : 0; }
+  private trim(now: number) { while (this.t.length && now - this.t[0] > 1000) this.t.shift(); }
+}
+const rates = { cam: new Rate(), track: new Rate(), preview: new Rate() };
+let detectMs = 0;
+export const notePreview = () => rates.preview.hit(performance.now());
 
 function stopTracking() {
-  if (trackRaf !== null) cancelAnimationFrame(trackRaf);
-  trackRaf = null;
+  trackHandle?.stop();
+  trackHandle = null;
 }
 
-function startTracking(get: () => LiveState) {
-  if (trackRaf !== null) return;
-  const loop = (now: number) => {
-    trackRaf = requestAnimationFrame(loop);
-    const s = get();
-    const video = s._cam?.video;
-    if (!tracker || !video || video.readyState < 2 || !tracks(s.queryMode)) return;
-    if (now - lastTrack < 1000 / s.poseFps) return;
-    lastTrack = now;
-    let rows: Float32Array | null = null;
-    try { rows = tracker.detect(video, now); } catch { return; }
-    s._sendBinary?.(6, packLandmarks(tracker.kind, video.videoWidth / Math.max(1, video.videoHeight), now / 1000, rows));
+function startTracking(get: () => LiveState, set: (p: Partial<LiveState>) => void) {
+  if (trackHandle !== null) return;
+  type VF = HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number) => void) => number;
+                                 cancelVideoFrameCallback?: (h: number) => void };
+  let stopped = false, due = 0, lastStats = 0, raf = -1;
+  let video: VF | null = null, vHandle = -1, fresh = false, lastFrame = -1e9;
+
+  // mark each new camera frame (requestVideoFrameCallback); rAF does the work
+  const watch = (v: VF | null) => {
+    if (video && vHandle >= 0) video.cancelVideoFrameCallback?.(vHandle);
+    video = v; vHandle = -1;
+    if (!v?.requestVideoFrameCallback) return;
+    const cb = (now: number) => {
+      fresh = true; lastFrame = now; rates.cam.hit(now);
+      if (!stopped && video === v) vHandle = v.requestVideoFrameCallback!(cb);
+    };
+    vHandle = v.requestVideoFrameCallback(cb);
   };
-  trackRaf = requestAnimationFrame(loop);
+
+  const loop = (now: number) => {
+    if (stopped) return;
+    raf = requestAnimationFrame(loop);
+    const s = get();
+    const v = (s._cam?.video ?? null) as VF | null;
+    if (v !== video) watch(v);
+    if (now - lastStats >= 500) {
+      lastStats = now;
+      set({ trackStats: { camFps: rates.cam.fps(now), trackFps: rates.track.fps(now), detectMs, previewFps: rates.preview.fps(now) } });
+    }
+    if (!tracker || !v || v.readyState < 2 || !tracks(s.queryMode)) return;
+    // new camera frames only, while the frame callback is alive (it can pause
+    // for an off-screen video — then pace on time alone)
+    if (now - lastFrame < 500) {
+      if (!fresh) return;
+      fresh = false;
+    }
+    const interval = 1000 / Math.max(1, s.poseFps);
+    if (now < due - 4) return;                                  // ahead of the set rate: skip this frame
+    due = now - due > interval ? now + interval : due + interval;   // far behind → resync, else keep the cadence
+    const t0 = performance.now();
+    let rows: Float32Array | null = null;
+    try { rows = tracker.detect(v, now); } catch { return; }
+    const dt = performance.now() - t0;
+    detectMs = detectMs ? 0.9 * detectMs + 0.1 * dt : dt;
+    rates.track.hit(now);
+    s._sendBinary?.(6, packLandmarks(tracker.kind, v.videoWidth / Math.max(1, v.videoHeight), now / 1000, rows));
+  };
+  raf = requestAnimationFrame(loop);
+  trackHandle = {
+    stop: () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+      watch(null);
+      set({ trackStats: null });
+    },
+  };
 }
 
 /** Build, swap or retire the tracker so it matches the current mode and choice. */
@@ -205,7 +268,7 @@ async function ensureTracker(get: () => LiveState, set: (p: Partial<LiveState>) 
     if (s.trackerState !== "off") set({ trackerState: "off" });
     return;
   }
-  if (tracker?.kind === want) { startTracking(get); return; }
+  if (tracker?.kind === want) { startTracking(get, set); return; }
   if (trackerBuild) return trackerBuild;              // building; it re-checks when done
   set({ trackerState: "loading" });
   trackerBuild = (async () => {
@@ -326,6 +389,7 @@ export const useLive = create<LiveState>((set, get) => ({
   poseOpts: { tracker: "body", trace: 1.0, fit: "camera", joints: "extremities", smooth: 0.5 },
   posePreview: null,
   posePresent: false,
+  trackStats: null,
   trackerState: "off",
   motionWindow: 3.0,
   motionContrast: 0.7,
@@ -532,6 +596,7 @@ export function useLiveSocket() {
           useLive.setState({ motion: msg as MotionReading });
         } else if (msg.type === "pose") {
           if (!tracks(useLive.getState().queryMode)) return;   // a late frame after switching away
+          notePreview();
           useLive.setState({ posePreview: msg.jpeg ? `data:image/jpeg;base64,${msg.jpeg}` : null, posePresent: !!msg.present });
         } else if (msg.type === "pose_export") {
           downloadBase64(msg.data, msg.format === "npz" ? "application/octet-stream" : "video/mp4",

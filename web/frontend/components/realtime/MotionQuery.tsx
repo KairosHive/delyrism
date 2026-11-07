@@ -3,7 +3,7 @@ import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useLive, type MotionQuality } from "@/lib/liveGraph";
 import { Slider } from "@/components/ui/Slider";
-import { TrackerPicker, PosePreview } from "./PoseQuery";
+import { TrackerPicker, PosePreview, TrackRate } from "./PoseQuery";
 
 const NAMES: Record<string, string> = {
   energy: "energy", time: "time", weight: "weight", space: "space", flow: "flow",
@@ -126,6 +126,7 @@ export function MotionPanel() {
                 onChange={(v) => set("motionContrast", v)} help="Removes the direction every movement description shares, so what is distinctive in this one moves the graph. 0 = the raw description; 0.7 lets contrasting movements reorder the graph about twice as much." />
         <Slider label="tracking" value={poseFps} min={10} max={60} step={1} format={(v) => `${v} fps`}
                 onChange={(v) => set("poseFps", v)} help="Frames tracked per second (on the GPU). The qualities need at least 20 for speed and smoothness." />
+        <TrackRate />
         <Slider label="landmark smoothing" value={poseOpts.smooth} min={0} max={1} step={0.05}
                 onChange={(v) => setPoseOpts({ smooth: v })} help="One Euro filter on the landmarks. Some smoothing keeps tracker jitter from reading as jerky movement." />
       </div>
