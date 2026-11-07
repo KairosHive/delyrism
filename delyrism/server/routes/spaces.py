@@ -52,6 +52,7 @@ def create_space(cfg: SpaceConfig) -> SpaceCreateResponse:
         owners=space.owner,
         embedding_dim=int(space.D.shape[1]),
         color_map=color_map_to_hex(space.get_symbol_color_dict(palette=cfg.palette)),
+        modalities=engine_cache.modalities(space.embedder),
     )
 
 
@@ -67,6 +68,7 @@ def get_space_info(space_id: str, palette: str = "AuroraPop") -> dict:
         "owners": space.owner,
         "embedding_dim": int(space.D.shape[1]),
         "color_map": color_map_to_hex(space.get_symbol_color_dict(palette=palette)),
+        "modalities": engine_cache.modalities(space.embedder),
     }
 
 

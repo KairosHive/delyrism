@@ -12,18 +12,20 @@ result.  The cache is in-process; this server is intended to run as one or two
 workers since the engine holds large numpy state.
 """
 from __future__ import annotations
+import gc
 import hashlib
 import json
 import os
 import threading
 from functools import lru_cache
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from delyrism import SymbolSpace, TextEmbedder
 
 
 # The engine knows only these primitive backend ids:
-_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav"}
+_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav",
+                    "embeddinggemma2"}
 
 # UI-facing Cloudflare presets — same mapping the Streamlit app uses.  Each UI
 # id collapses to backend="cloudflare" + a specific @cf/... model.
@@ -57,8 +59,63 @@ def _hash(payload: Any) -> str:
 
 # ---- embedder cache ---------------------------------------------------------
 
-_embedder_cache: Dict[str, TextEmbedder] = {}
+_embedder_cache: Dict[str, TextEmbedder] = {}     # insertion order = least recently used first
 _embedder_lock = threading.Lock()
+
+
+def max_embedders() -> int:
+    """How many embedders may stay loaded at once (env DELYRISM_MAX_EMBEDDERS,
+    CLI --max-embedders; 0 = no limit).  Loading one more evicts the least
+    recently used embedder together with the spaces built on it, so on a tight
+    GPU switching backends never holds two models.  Open sockets on an evicted
+    space keep working; its memory is released when the last one closes."""
+    try:
+        return max(0, int(os.environ.get("DELYRISM_MAX_EMBEDDERS", "0") or 0))
+    except ValueError:
+        return 0
+
+
+def modalities(emb: Any) -> List[str]:
+    """The query modalities an embedder handles (binary WS kinds: audio 0x01,
+    image 0x02, video 0x03, av 0x04); "text" always."""
+    out = ["text"]
+    if getattr(emb, "audio_capable", False) or hasattr(emb, "_clap"):
+        out.append("audio")
+    if getattr(emb, "image_capable", False) or hasattr(emb, "oc_model"):
+        out.append("image")
+    if getattr(emb, "video_capable", False):
+        out.append("video")
+    if getattr(emb, "av_capable", False):
+        out.append("av")
+    return out
+
+
+def release_memory() -> None:
+    """Collect dropped models (the encode cache makes a reference cycle) and
+    hand freed CUDA blocks back to the driver for other processes."""
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _evict_embedder(fp: str) -> None:
+    """Drop one embedder and every cached space and result built on it
+    (caller holds _embedder_lock)."""
+    emb = _embedder_cache.pop(fp, None)
+    if emb is None:
+        return
+    with _space_lock:
+        sids = [sid for sid, sp in _space_cache.items() if sp.embedder is emb]
+    for sid in sids:
+        invalidate_space(sid)
+        invalidate_results(sid)
+    del emb
+    release_memory()
+    print(f"[engine_cache] evicted embedder {fp} and {len(sids)} space(s)")
 
 
 def _add_encode_cache(emb: TextEmbedder, max_entries: int = 512) -> None:
@@ -146,8 +203,13 @@ def get_embedder(cfg: Dict[str, Any]) -> Tuple[str, TextEmbedder]:
     one instance even though the constructor args were rewritten."""
     fp = _hash(cfg)
     with _embedder_lock:
-        emb = _embedder_cache.get(fp)
-        if emb is None:
+        emb = _embedder_cache.pop(fp, None)
+        if emb is not None:
+            _embedder_cache[fp] = emb          # most recently used
+        else:
+            cap = max_embedders()
+            while cap and len(_embedder_cache) >= cap:
+                _evict_embedder(next(iter(_embedder_cache)))
             engine_backend, engine_model = _resolve_backend(
                 cfg.get("backend", "cloudflare-bge-m3"),
                 cfg.get("model"),
@@ -353,6 +415,7 @@ def get_or_compute_shifted_matrix(space_id: str, space, params: Dict[str, Any]):
 def cache_stats() -> Dict[str, int]:
     return {
         "embedders": len(_embedder_cache),
+        "max_embedders": max_embedders(),
         "spaces": len(_space_cache),
         "results": len(_result_cache),
     }

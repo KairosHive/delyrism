@@ -4,6 +4,7 @@
                               [--profile live.json] [--warmup]
                               [--osc-host 127.0.0.1] [--osc-port 7000] [--osc-hz 60]
                               [--tts-url http://127.0.0.1:8010] [--static DIR]
+                              [--max-embedders N]
 
 Also installed as the `delyrism-server` command.  Flags override the profile.
 GET /healthz -> {"ok": true, "ready": ...} for process managers.
@@ -35,10 +36,15 @@ def main(argv=None) -> None:
     ap.add_argument("--osc-hz", type=float)
     ap.add_argument("--tts-url", help="TTS service for the spoken word (default http://127.0.0.1:8010)")
     ap.add_argument("--static", help="serve this static frontend at /")
+    ap.add_argument("--max-embedders", type=int,
+                    help="keep at most N embedders loaded; loading another evicts the least recently used "
+                         "with its spaces (env DELYRISM_MAX_EMBEDDERS, default 0 = no limit)")
     ap.add_argument("--log-level", default="info")
     a = ap.parse_args(argv)
 
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    if a.max_embedders is not None:
+        os.environ["DELYRISM_MAX_EMBEDDERS"] = str(max(0, a.max_embedders))
     import uvicorn
     from . import profile as live_profile
     from .main import create_app

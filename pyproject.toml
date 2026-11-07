@@ -19,7 +19,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "delyrism"
-version = "0.4.1"
+version = "0.5.0"
 description = "Symbol spaces, context Δ-graphs and the live delyrism engine"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -76,8 +76,10 @@ graphemes = [
 ]
 # Topology tab (persistent homology)
 topology = ["ripser>=0.6.7"]
-# audio / image / video embedders (CLAP, CLIP, PE-AV) and audio contexts
+# audio / image / video embedders (CLAP, CLIP, PE-AV, EmbeddingGemma 2) and audio contexts
 media = [
+    "sentence-transformers>=6.2",   # EmbeddingGemma 2's image / audio / video inputs
+    "torchvision",                  # its video processor (install from the same index as torch)
     "librosa>=0.10",
     "soundfile>=0.12",
     "open-clip-torch>=2.24",

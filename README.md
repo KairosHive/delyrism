@@ -35,7 +35,7 @@ backend as `delyrism.server` (`python -m delyrism.server`, or the
 |---|---|
 | `web` | the hosted website (API, Topology, Builder PDFs) on CPU, what the Docker image installs |
 | `server` · `topology` | the API · persistent homology |
-| `live` · `media` | local pose / movement queries · audio, image and video embedders (CLAP, CLIP, PE-AV) |
+| `live` · `media` | local pose / movement queries · audio, image and video embedders (CLAP, CLIP, PE-AV, EmbeddingGemma 2) |
 | `vectorize` · `graphemes` | `symbol_vectorizer` · `delyrism.graphemes` |
 | `all` | everything |
 

@@ -435,28 +435,34 @@ def _resample_48k(wave: np.ndarray, sr: int):
     return wave, _CLAP_SR
 
 
+def _has_image(emb) -> bool:
+    return hasattr(emb, "embed_image") and (getattr(emb, "image_capable", False) or hasattr(emb, "oc_model"))
+
+
 def _image_vec(space, jpeg: bytes) -> np.ndarray:
-    """Embed a camera frame through the space's image tower (CLIP)."""
-    if not hasattr(space.embedder, "embed_image") or not hasattr(space.embedder, "oc_model"):
-        raise RuntimeError("the space's embedder has no image tower — rebuild it with the CLIP backend")
+    """Embed a camera frame through the space's image tower (CLIP, EmbeddingGemma 2)."""
+    if not _has_image(space.embedder):
+        raise RuntimeError("the space's embedder has no image tower — rebuild it with CLIP or EmbeddingGemma 2")
     import io
     from PIL import Image
     return _unit(space.embedder.embed_image(Image.open(io.BytesIO(jpeg))))
 
 
 def _audio_vec(space, payload: bytes) -> np.ndarray:
-    """Embed a mic window through the space's audio tower (CLAP / AudioCLIP / PE-AV)."""
+    """Embed a mic window through the space's audio tower (CLAP / AudioCLIP / PE-AV / EmbeddingGemma 2)."""
     emb = space.embedder
     if not getattr(emb, "audio_capable", False) and not hasattr(emb, "_clap"):
-        raise RuntimeError("the space's embedder has no audio tower — rebuild it with the CLAP or PE-AV backend")
-    wave, sr = _resample_48k(*_parse_audio(payload))
+        raise RuntimeError("the space's embedder has no audio tower — rebuild it with CLAP, PE-AV or EmbeddingGemma 2")
+    wave, sr = _parse_audio(payload)
+    if not getattr(emb, "audio_resamples", False):     # EmbeddingGemma 2 resamples to 16 kHz itself
+        wave, sr = _resample_48k(wave, sr)
     return _unit(emb.embed_audio_array(wave, sr))
 
 
 def _video_vec(space, payload: bytes) -> np.ndarray:
-    """Embed a sliding window of camera frames through the PE-AV video tower."""
+    """Embed a sliding window of camera frames through the video tower (PE-AV, EmbeddingGemma 2)."""
     if not getattr(space.embedder, "video_capable", False):
-        raise RuntimeError("the space's embedder has no video tower — rebuild it with the PE-AV backend")
+        raise RuntimeError("the space's embedder has no video tower — rebuild it with PE-AV or EmbeddingGemma 2")
     frames = _parse_frames(payload)
     if not frames:
         raise RuntimeError("empty video window")
@@ -577,8 +583,8 @@ def _pose_vec(space, stream: PoseStream, opts: Dict[str, Any], window: float, fr
     if getattr(emb, "video_capable", False):
         clip = render_clip(traj, seconds=window, fps=frames / window, style=style)
         return _unit(emb.embed_video_frames(list(clip)))
-    if not hasattr(emb, "embed_image") or not hasattr(emb, "oc_model"):
-        raise RuntimeError("the space's embedder has no video or image tower — rebuild it with PE-AV or CLIP")
+    if not _has_image(emb):
+        raise RuntimeError("the space's embedder has no video or image tower — rebuild it with PE-AV, CLIP or EmbeddingGemma 2")
     from PIL import Image
     return _unit(emb.embed_image(Image.fromarray(render_frame(traj, style=style))))
 
@@ -749,7 +755,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                         "pose_opts": dict(state["pose_opts"]), "symbols": list(space.symbols),
                         "motion": prof.motion.model_dump(), "transcript": dict(state["transcript"]),
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
-                        "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
+                        "image_capable": _has_image(emb),
+                        "modalities": engine_cache.modalities(emb),
                         "video_capable": bool(getattr(emb, "video_capable", False)),
                         "av_capable": bool(getattr(emb, "av_capable", False)),
                         "pose_capable": _pose_capable()})
@@ -1153,3 +1160,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         osc.unregister(osc_token)
         if state["pose"] is not None:
             await asyncio.to_thread(state["pose"].close)
+        if engine_cache.get_space(space_id) is not space:
+            # the space was evicted (max_embedders) while this socket held it:
+            # free its model once this frame is gone
+            asyncio.get_running_loop().call_later(0.2, engine_cache.release_memory)

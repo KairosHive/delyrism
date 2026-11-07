@@ -39,6 +39,7 @@ class SpaceCreateResponse(BaseModel):
     owners: Dict[str, str]
     embedding_dim: int
     color_map: Dict[str, str]
+    modalities: List[str] = ["text"]      # query modalities of the embedder: text, audio, image, video, av
 
 
 # ----------------------- proposal -----------------------

@@ -188,9 +188,11 @@ class TextEmbedder:
             self._init_clip(model)
         elif self.backend_type == "peav":
             self._init_peav(model)
+        elif self.backend_type == "embeddinggemma2":
+            self._init_gemma2(model or "google/embeddinggemma-2")
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav | embeddinggemma2")
 
         # Check if backend was properly initialized
         if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip", "peav"):
@@ -446,8 +448,44 @@ class TextEmbedder:
         except Exception as e:
             raise RuntimeError(f"PE-AV init failed: {e}")
 
+    def _init_gemma2(self, model_name: str):
+        """EmbeddingGemma 2 (google/embeddinggemma-2, 740M): text, image, audio
+        and video in one 768-d space through sentence-transformers >= 6.
+        Text (descriptors and queries alike) is encoded with one named prompt,
+        `default_instruction` if it names one of the model's prompts, else
+        "SentenceSimilarity"; media take no prompt.  bf16 (fp16 gives NaN)."""
+        try:
+            from sentence_transformers import SentenceTransformer
+            self._backend = SentenceTransformer(model_name, device=self.device,
+                                                model_kwargs={"torch_dtype": torch.bfloat16})
+            self._backend.eval()
+            prompts = getattr(self._backend, "prompts", {}) or {}
+            want = self.default_instruction
+            self._g2_prompt = want if want in prompts else ("SentenceSimilarity" if "SentenceSimilarity" in prompts else None)
+            self.default_instruction = None      # a prompt name here, not a Qwen-style instruction
+            self.dim = int(self._backend.get_embedding_dimension() if hasattr(self._backend, "get_embedding_dimension")
+                           else self._backend.get_sentence_embedding_dimension())
+            mods = set(getattr(self._backend, "modalities", None) or ())
+            self.image_capable = "image" in mods
+            self.audio_capable = "audio" in mods
+            self.video_capable = "video" in mods
+            self._ac_sr = 16000
+            self.audio_resamples = True      # embed_audio_array takes any rate (the server skips its 48 kHz step)
+            print(f"[Embedder] EmbeddingGemma 2 ready ({model_name}, dim={self.dim}, prompt={self._g2_prompt}, "
+                  f"modalities={sorted(mods)}, device={self.device}).")
+        except Exception as e:
+            raise RuntimeError(f"EmbeddingGemma 2 init failed: {e}")
+
+    def _g2_media(self, item: dict) -> np.ndarray:
+        with torch.no_grad():
+            z = self._backend.encode(item, normalize_embeddings=True, show_progress_bar=False)
+        z = np.asarray(z, dtype=np.float32).reshape(-1)
+        return z / (float(np.linalg.norm(z)) + 1e-8)
+
     def embed_video_frames(self, frames) -> np.ndarray:
-        """Embed a short clip (list of HxWx3 uint8 frames) through the PE-AV video tower."""
+        """Embed a short clip (list of HxWx3 uint8 frames) through the video tower (PE-AV, EmbeddingGemma 2)."""
+        if self.backend_type == "embeddinggemma2":
+            return self._g2_media({"video": [np.asarray(f, dtype=np.uint8) for f in frames]})
         if not hasattr(self, "_peav"):
             raise RuntimeError("embed_video_frames called but this backend has no video tower (use peav).")
         return self._peav.embed_video(frames)
@@ -461,7 +499,12 @@ class TextEmbedder:
     @torch.no_grad()
     def embed_image(self, image) -> np.ndarray:
         """Embed a PIL image (or HxWx3 uint8 array) through the CLIP image
-        tower.  Available on the `clip` and `audioclip` backends."""
+        tower.  Available on the `clip`, `audioclip` and `embeddinggemma2` backends."""
+        from PIL import Image
+        if self.backend_type == "embeddinggemma2":
+            if not isinstance(image, Image.Image):
+                image = Image.fromarray(np.asarray(image))
+            return self._g2_media({"image": image.convert("RGB")})
         if not hasattr(self, "oc_model"):
             raise RuntimeError("embed_image called but this backend has no image tower (use clip).")
         from PIL import Image
@@ -511,6 +554,15 @@ class TextEmbedder:
     def embed_audio_array(self, wave: np.ndarray, sr: int) -> np.ndarray:
         if self.backend_type == "peav":
             return self._peav.embed_audio(np.asarray(wave, dtype=np.float32), sr)
+        if self.backend_type == "embeddinggemma2":
+            wave = np.asarray(wave, dtype=np.float32)
+            if wave.ndim > 1:
+                wave = wave.mean(axis=-1) if wave.shape[-1] <= 8 else wave.mean(axis=0)
+            if sr != self._ac_sr and len(wave) > 1:      # mono 16 kHz
+                n_new = int(round(len(wave) * self._ac_sr / sr))
+                wave = np.interp(np.linspace(0.0, 1.0, n_new, endpoint=False),
+                                 np.linspace(0.0, 1.0, len(wave), endpoint=False), wave).astype(np.float32)
+            return self._g2_media({"audio": wave})
         if self.backend_type == "audioclip":
             # resample to 48k if needed
             if sr != self._ac_sr:
@@ -705,6 +757,14 @@ class TextEmbedder:
         # --- SentenceTransformer (handles batching internally usually, but we can force it if needed) ---
         if self.backend_type == "sentence-transformer" and self._backend is not None:
             return np.asarray(self._backend.encode(texts, normalize_embeddings=True, batch_size=batch_size), dtype=np.float32)
+
+        # --- EmbeddingGemma 2: one named prompt for descriptors and queries ---
+        if self.backend_type == "embeddinggemma2" and self._backend is not None:
+            kw = {"prompt_name": self._g2_prompt} if self._g2_prompt else {}
+            with torch.no_grad():
+                z = self._backend.encode(list(texts), normalize_embeddings=True, batch_size=batch_size,
+                                         show_progress_bar=False, **kw)
+            return np.asarray(z, dtype=np.float32)
 
         # --- PE-AV text path (head selected by self.head) ---
         if self.backend_type == "peav" and hasattr(self, "_peav"):

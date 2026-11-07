@@ -87,5 +87,6 @@ def setup(req: SetupRequest) -> Dict[str, Any]:
         "embedding_dim": int(space.D.shape[1]),
         "color_map": color_map_to_hex(space.get_symbol_color_dict(palette=prof.palette)),
         "global_mode": {"mode": info.get("mode"), "pcs": info.get("pcs")},
+        "modalities": engine_cache.modalities(space.embedder),
         "profile": prof.model_dump(),
     }

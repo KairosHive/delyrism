@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.4.1)
+# Delyrism live API (package `delyrism`, v0.5)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -22,7 +22,7 @@ uv pip install "delyrism[server,live,vectorize] @ git+https://github.com/KairosH
 | `live` | opencv-contrib-python, mediapipe | pose drawing, movement description |
 | `vectorize` | opencv-contrib-python | `symbol_vectorizer` |
 | `topology` | ripser | Topology tab |
-| `media` | librosa, open-clip, timm, … | audio / image / video embedders |
+| `media` | librosa, open-clip, timm, torchvision, sentence-transformers>=6.2, … | audio / image / video embedders (CLAP, CLIP, PE-AV, EmbeddingGemma 2) |
 | `all` | everything | |
 
 The package ships `delyrism/structures/*.json` (Lakota and the other symbol
@@ -41,6 +41,7 @@ python -m delyrism.server --host 127.0.0.1 --port 8000 --profile live_profile.js
 #   --osc-host 127.0.0.1 --osc-port 7000 --osc-hz 60   (override the profile)
 #   --tts-url http://127.0.0.1:8010                     (the TTS service; default)
 #   --static DIR                                        (serve a frontend at /)
+#   --max-embedders 1                                   (keep one model loaded: see Embedders)
 delyrism-server …                                       # same, as a console script
 ```
 
@@ -100,10 +101,10 @@ TTS service at `url`; without it nothing is spoken and nothing fails.
 
 | method | path | body → result |
 |---|---|---|
-| POST | `/live/setup` | `{"symbols": {NAME: [descriptor, …]}, "profile": {…partial…}?}` → `{space_id, symbols, descriptors, owners: {descriptor: symbol}, embedding_dim, color_map: {symbol: "#hex"}, global_mode: {mode, pcs}, profile}`. **Idempotent**: same symbols + profile → same `space_id` (cache hit, ~ms). Builds with the profile's embedder and applies its global mode. 400 if no symbol has descriptors, 502 if the embedder fails. |
+| POST | `/live/setup` | `{"symbols": {NAME: [descriptor, …]}, "profile": {…partial…}?}` → `{space_id, symbols, descriptors, owners: {descriptor: symbol}, embedding_dim, color_map: {symbol: "#hex"}, global_mode: {mode, pcs}, modalities: ["text", …], profile}`. **Idempotent**: same symbols + profile → same `space_id` (cache hit, ~ms). Builds with the profile's embedder and applies its global mode. 400 if no symbol has descriptors, 502 if the embedder fails. |
 | GET | `/live/profile` | → the current profile |
 | POST | `/live/profile` | full profile → the applied profile (422 if invalid) |
-| GET | `/spaces/{space_id}` | → 200 `{space_id, symbols, descriptors, owners, embedding_dim, color_map}` · 404 unknown (e.g. after a server restart: call `/live/setup` again) |
+| GET | `/spaces/{space_id}` | → 200 `{space_id, symbols, descriptors, owners, embedding_dim, color_map, modalities}` · 404 unknown (e.g. after a server restart: call `/live/setup` again) |
 | GET | `/spaces/presets/{name}` | → `{name, symbols}` from the shipped structures (`lakota`, `elements`, …) |
 | GET | `/realtime/osc` · POST | OSC status / `{enabled, host, port, hz, scale}`. The status has `owner: {space_id, symbols, context, layout_source, …}` for the socket TouchDesigner currently shows (null when none); TD also gets `/delyrism/space s space_id` with the labels (on owner change and about 1/s). |
 | GET | `/realtime/speech` · POST | speech status / settings (as in the profile) |
@@ -117,7 +118,7 @@ One socket per interactive screen. The socket that most recently sent an
 input owns the OSC output (TouchDesigner follows it).
 
 **On open** the server sends
-`{"type": "ready", "params": {…graph params…}, "shape": {…}, "pose_opts": {…}, "symbols": [...], "motion": {…profile.motion…}, "pose_capable": bool, …}`
+`{"type": "ready", "params": {…graph params…}, "shape": {…}, "pose_opts": {…}, "symbols": [...], "motion": {…profile.motion…}, "pose_capable": bool, "modalities": ["text", …], …}`
 or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 
 ### Client → server (JSON text frames)
@@ -136,6 +137,20 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "params", "params": {…}}` · `{"type": "shape", "shape": {…}}` | per-socket overrides |
 
 ### Client → server (binary frames)
+
+Media queries (the embedder must handle the modality: `modalities` in the
+`/live/setup`, `/spaces/{id}` and `ready` responses):
+
+```
+0x01 audio   uint32 LE sample rate + int16 LE PCM mono   (any rate; ≥ 1000 samples)
+0x02 image   one JPEG
+0x03 video   uint8 n + n × (uint32 LE length + JPEG)      a window of frames, oldest first
+0x04 av      uint32 LE audio length + audio payload + frames payload   (PE-AV only)
+```
+
+Each becomes the query (`relevance.kind` = `audio` | `image` | `video` | `av`),
+blended with the previous media vector by `audio_smoothing`.
+
 
 Landmarks from the browser tracker (`web/frontend/lib/poseTracker.ts`
 `packLandmarks`, run in `trackWorker.ts`), one message per tracked frame:
@@ -193,6 +208,28 @@ columnar JSON; ~2.6 KB for a 16-node graph, ~26/s at `hz: 30`.
 
 Row order is stable between frames; it changes only when a faded row is
 dropped (then `id`/`uid` tell you which is which).
+
+## Embedders
+
+`profile.embedder` = `{"backend": ID, "model": null}`; `GET /backends` lists the
+ids with their modalities.  Every space reports `modalities` (`["text", …]`).
+
+| backend | modalities | notes |
+|---|---|---|
+| `sentence-transformer` | text | default, all-mpnet-base-v2 (768-d) |
+| `embeddinggemma2` | text, audio, image, video | `google/embeddinggemma-2` (740M, 768-d, bf16, ~1.5 GB). Descriptors and text queries both use the model's `SentenceSimilarity` prompt (`"task: sentence similarity \| query: …"`); set `default_instruction` to another prompt name of the model (`Document`, `Clustering`, …) to change it. Media take no prompt. Audio is resampled to mono 16 kHz. Needs the `media` extra (torchvision, sentence-transformers>=6.2). |
+| `clap` · `clip` · `peav` | text + audio · image · audio, video, av | see `GET /backends` |
+| `qwen3` · `qwen2` · `cloudflare-*` | text | |
+
+**Memory.** Embedders stay loaded once built (one per distinct config).
+`--max-embedders N` (env `DELYRISM_MAX_EMBEDDERS`, default 0 = no limit) caps
+them: building another evicts the least recently used embedder together with
+every space built on it (`GET /spaces/{id}` → 404 afterwards; call
+`/live/setup` again to rebuild).  A socket still open on an evicted space keeps
+working, and the model is freed (and its CUDA memory returned) when the last
+such socket closes.  To switch backends without ever holding two models, close
+the graph sockets of the old space first, then call `/live/setup` with the new
+embedder.  `GET /spaces/cache/stats` → `{embedders, max_embedders, spaces, results}`.
 
 ## symbol_vectorizer
 
