@@ -9,7 +9,7 @@
 
 import * as React from "react";
 import { create } from "zustand";
-import { wsUrl } from "./api";
+import { rebuildLostSpace, wsUrl } from "./api";
 import { useSidebar } from "./store";
 import type { DeltaEdge } from "./api";
 import { startMicCapture, type MicCapture } from "./liveAudio";
@@ -696,12 +696,26 @@ export function useLiveSocket() {
         }
       };
       sock.onerror = () => useLive.setState({ status: "error" });
-      sock.onclose = () => {
+      sock.onclose = (ev) => {
         useLive.setState({ status: closed ? "closed" : "connecting", _send: null });
-        if (!closed) {
-          attempt += 1;
-          retry = setTimeout(connect, Math.min(8000, 500 * 2 ** attempt));
+        if (closed) return;
+        if (ev.code === 4404) {
+          // the server lost the space (restart): rebuild it under the same id,
+          // then reconnect; the rebuild bumps buildNonce like a Rebuild click
+          rebuildLostSpace().then((r) => {
+            if (closed) return;
+            if (r) {
+              useLive.setState({ error: null });
+              attempt = 0;
+              connect();
+            } else {
+              useLive.setState({ status: "error", error: "the server lost this space, rebuild it" });
+            }
+          });
+          return;
         }
+        attempt += 1;
+        retry = setTimeout(connect, Math.min(8000, 500 * 2 ** attempt));
       };
     };
     connect();

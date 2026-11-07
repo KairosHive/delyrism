@@ -1,10 +1,25 @@
 "use client";
 import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
-import { api, SpaceConfig, SpaceCreateResponse } from "@/lib/api";
+import { api, onSpaceRebuilt, rememberSpaceConfig, SpaceConfig, SpaceCreateResponse } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { ExportButton } from "./ExportButton";
 import { GlobalModeControl } from "./GlobalModeControl";
+
+/** The store update after a build, shared by the button and by the automatic
+ *  rebuild of a space the server lost (lib/api.ts).  The nonce bump makes
+ *  every control re-apply its server-side setting (global mode, context). */
+function applyBuild(data: SpaceCreateResponse) {
+  const st = useSidebar.getState();
+  st.setBulk({
+    spaceId: data.space_id,
+    symbols: data.symbols,
+    colorMap: data.color_map,
+    buildNonce: st.buildNonce + 1,
+  });
+}
+
+onSpaceRebuilt(applyBuild);
 
 /**
  * Build / rebuild the SymbolSpace.  Lives directly under the Console cards
@@ -26,7 +41,6 @@ export function BuildButton() {
   const ctxText = useSidebar((s) => s.qwenGlobalContext);
   const dthr = useSidebar((s) => s.descriptorThreshold);
   const spaceId = useSidebar((s) => s.spaceId);
-  const setBulk = useSidebar((s) => s.setBulk);
 
   const build = useMutation({
     mutationFn: async () => {
@@ -44,16 +58,11 @@ export function BuildButton() {
         contextual_embeddings: false,
         palette: "AuroraPop",
       };
-      return api.post<SpaceCreateResponse>("/spaces", body);
+      const res = await api.post<SpaceCreateResponse>("/spaces", body);
+      rememberSpaceConfig(body);
+      return res;
     },
-    onSuccess: (data) => {
-      setBulk({
-        spaceId: data.space_id,
-        symbols: data.symbols,
-        colorMap: data.color_map,
-        buildNonce: useSidebar.getState().buildNonce + 1,
-      });
-    },
+    onSuccess: applyBuild,
   });
 
   return (

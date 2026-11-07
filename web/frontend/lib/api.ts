@@ -54,12 +54,58 @@ function recordTiming(path: string, res: Response, totalMs: number) {
   _listeners.forEach((fn) => fn());
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// ---------- lost spaces ----------
+// Built spaces live in the server's memory.  A restart (redeploy, crash,
+// the host recycling the container) forgets them while the page still holds
+// their id, and every call answers 404 "unknown space_id".  The id is a hash
+// of the build config, so posting the last config again rebuilds the same
+// space under the same id; the failed call is then retried once.
+
+let lastSpaceConfig: SpaceConfig | null = null;
+let rebuilding: Promise<SpaceCreateResponse | null> | null = null;
+const rebuiltListeners = new Set<(r: SpaceCreateResponse) => void>();
+
+/** Remember the config of the space the page is using (BuildButton calls this). */
+export function rememberSpaceConfig(cfg: SpaceConfig): void {
+  lastSpaceConfig = cfg;
+}
+
+/** Called after a lost space was rebuilt, with the new /spaces response. */
+export function onSpaceRebuilt(fn: (r: SpaceCreateResponse) => void): () => void {
+  rebuiltListeners.add(fn);
+  return () => {
+    rebuiltListeners.delete(fn);
+  };
+}
+
+export function isLostSpace(status: number, detail: string): boolean {
+  return status === 404 && detail.includes("unknown space_id");
+}
+
+/** Rebuild the remembered space once, however many calls found it missing. */
+export function rebuildLostSpace(): Promise<SpaceCreateResponse | null> {
+  if (!lastSpaceConfig) return Promise.resolve(null);
+  if (!rebuilding) {
+    rebuilding = send<SpaceCreateResponse>("/spaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lastSpaceConfig),
+    }, false)
+      .then((r) => {
+        rebuiltListeners.forEach((fn) => fn(r));
+        return r;
+      })
+      .catch(() => null)
+      .finally(() => {
+        rebuilding = null;
+      });
+  }
+  return rebuilding;
+}
+
+async function send<T>(path: string, init: RequestInit, retryLost: boolean): Promise<T> {
   const t0 = performance.now();
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    ...init,
-  });
+  const res = await fetch(`${BASE}${path}`, init);
   recordTiming(path, res, performance.now() - t0);
   if (!res.ok) {
     let detail = res.statusText;
@@ -67,22 +113,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const j = await res.json();
       detail = (j as any).detail ?? JSON.stringify(j);
     } catch {}
+    if (retryLost && isLostSpace(res.status, String(detail)) && (await rebuildLostSpace())) {
+      return send<T>(path, init, false);
+    }
     throw new Error(`${res.status} ${detail}`);
   }
   return res.json() as Promise<T>;
+}
+
+function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return send<T>(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  }, true);
 }
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
-  upload: async <T>(path: string, form: FormData): Promise<T> => {
-    const t0 = performance.now();
-    const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });
-    recordTiming(path, res, performance.now() - t0);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return res.json() as Promise<T>;
-  },
+  upload: <T>(path: string, form: FormData): Promise<T> =>
+    send<T>(path, { method: "POST", body: form }, true),
 };
 
 // ---------- typed helpers (mirror schemas.py) ----------
