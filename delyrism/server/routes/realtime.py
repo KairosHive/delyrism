@@ -310,7 +310,62 @@ _GRAPH_DEFAULTS: Dict[str, Any] = dict(
     gamma=0.5, prompt_template="{sent}, {desc}", pool_type="avg", pool_w=0.7,
     membership_alpha=0.0, top_abs_edges=30, min_abs_delta=0.01, within_symbol=False,
     connected_only=True, sign_filter="up", sym_filter=None,
+    # media habituation (see _Habituation): beta per kind, or one number for
+    # image + video; 0 = off.  tau = time constant of the running mean, s.
+    habituation=0.0, habituation_tau=60.0,
 )
+_HAB_KEYS = ("habituation", "habituation_tau")     # scoring only: changing them does not rebuild the graph
+_HAB_KINDS = ("image", "video", "audio", "av", "pose")
+
+
+def _hab_beta(params: Dict[str, Any], kind: str) -> float:
+    """habituation strength for `kind`: a number applies to image and video,
+    a {kind: beta} map to the kinds it names."""
+    h = params.get("habituation") or 0.0
+    try:
+        b = float(h.get(kind, 0.0)) if isinstance(h, dict) else (float(h) if kind in ("image", "video") else 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return float(np.clip(b, 0.0, 1.0))
+
+
+class _Habituation:
+    """Per-kind running mean of recent raw media vectors, subtracted before
+    scoring: a camera that always sees the same room stops lighting the same
+    few descriptors, and what changes in the picture carries the query.
+
+        b       = beta · min(1, seconds since the mean started / tau)   (warm-up)
+        scored  = unit(v − b · mu)
+        mu     ← mu + (1 − exp(−dt / tau)) · (v − mu)     (after scoring: a frame is not in its own mean)
+
+    The mean is tracked for every media kind whether beta is on or not, so
+    turning it on starts from a warm mean.  It lives with the socket and
+    survives query_clear and mode switches."""
+
+    def __init__(self) -> None:
+        self.mu: Dict[str, np.ndarray] = {}
+        self.t0: Dict[str, float] = {}
+        self.t: Dict[str, float] = {}
+
+    def apply(self, kind: str, v: np.ndarray, beta: float, tau: float, now: float):
+        """→ (vector to score, effective beta)."""
+        tau = max(1e-3, float(tau))
+        mu = self.mu.get(kind)
+        out, b = v, 0.0
+        if mu is not None and beta > 0:
+            b = beta * min(1.0, (now - self.t0[kind]) / tau)
+            d = v - b * mu
+            n = float(np.linalg.norm(d))
+            if n > 1e-6:                 # beta 1 on a perfectly static scene leaves nothing: keep the raw vector
+                out = (d / n).astype(np.float32)
+        if mu is None:
+            self.mu[kind], self.t0[kind] = np.asarray(v, dtype=np.float32).copy(), now
+        else:
+            a = 1.0 - float(np.exp(-max(0.0, now - self.t[kind]) / tau))
+            self.mu[kind] = (mu + a * (v - mu)).astype(np.float32)
+        self.t[kind] = now
+        return out, round(b, 4)
+
 _SHIFT_KEYS = ("strategy", "beta", "gate", "tau", "within_symbol_softmax", "gamma",
                "prompt_template", "pool_type", "pool_w", "membership_alpha")
 
@@ -659,7 +714,9 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "lm_t": 0.0,                                # perf_counter of the last landmark frame
         "sim_hz": 0.0,                              # JSON stream of the layout to this client (0 = off)
         "vq_target": None,                          # transcript: the embedding the query glides toward
-        "vq_raw": None,                             # the latest raw query embedding (before the media EMA / glide)
+        "vq_raw": None,                             # the latest raw query embedding (before habituation / media EMA / glide)
+        "hab": _Habituation(),                      # per-kind running mean of media vectors
+        "hab_last": None,                           # {"kind", "beta_eff"} of the latest media vector
         "shown": {"context": "", "vctx": None},     # what the layout shows: the graph's context ...
         "scored": {"vq": None, "vq_raw": None, "kind": "text", "text": "", "active": False},   # ... and the scored query
         "transcript": prof.transcript.model_dump(), # {tau, hz} latent smoothing of spoken-text queries
@@ -796,7 +853,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         """The query as it is about to be scored (kept with the layout for snapshots)."""
         vq = state["vq"]
         return {"vq": vq, "vq_raw": state["vq_raw"], "kind": state["query_kind"],
-                "text": state["query_text"], "active": vq is not None}
+                "text": state["query_text"], "active": vq is not None,
+                "hab": state["hab_last"] if state["query_kind"] in _HAB_KINDS else None}
 
     def _snapshot(req_id: Any, fmt: str) -> Dict[str, Any]:
         """One recording sample (WS {"type": "snapshot"}): the layout as the
@@ -817,6 +875,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             "query_vec": _vec_out(q["vq"], fmt), "query_target": _vec_out(q["vq_raw"], fmt),
             "nodes": {**fr["nodes"], "relevance": [float(rel.get(i, 0.0)) for i in fr["nodes"]["id"]]},
             "edges": fr["edges"],
+            "habituation": q.get("hab") if q["active"] else None,
             "embedder": {"backend": getattr(emb, "backend_type", None), "model": getattr(emb, "model_name", None),
                          "dim": int(space.D.shape[1])},
             "vec_format": fmt,
@@ -997,7 +1056,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             elif t == "params":
                 patch = {k: v for k, v in (m.get("params") or {}).items() if k in _GRAPH_DEFAULTS}
                 state["params"].update(patch)
-                state["graph_dirty"] = True
+                if any(k not in _HAB_KEYS for k in patch):
+                    state["graph_dirty"] = True
             wake.set()
 
     async def _embed_pending() -> None:
@@ -1039,6 +1099,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
         state["vq_raw"] = v
+        if kind in _HAB_KINDS:
+            prm = state["params"]
+            v, b = state["hab"].apply(kind, v, _hab_beta(prm, kind), float(prm.get("habituation_tau") or 60.0),
+                                      time.perf_counter())
+            state["hab_last"] = {"kind": kind, "beta_eff": b}
+        else:
+            state["hab_last"] = None
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
         # each movement description already sums up a whole window, so it

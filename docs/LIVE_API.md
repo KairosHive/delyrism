@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.5.2)
+# Delyrism live API (package `delyrism`, v0.5.3)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -135,7 +135,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "motion_tick", "window": 3, "contrast": 0.7, "relative": 1}` | describe the last `window` s now (not needed when `profile.motion.auto`) |
 | `{"type": "motion_reset"}` | forget the session's movement range (new dancer) |
 | `{"type": "pose_reset"}` | clear the trajectory |
-| `{"type": "params", "params": {…}}` · `{"type": "shape", "shape": {…}}` | per-socket overrides |
+| `{"type": "params", "params": {…}}` · `{"type": "shape", "shape": {…}}` | per-socket overrides (graph params include `habituation`, `habituation_tau`: see binary frames) |
 
 ### Client → server (binary frames)
 
@@ -151,6 +151,30 @@ Media queries (the embedder must handle the modality: `modalities` in the
 
 Each becomes the query (`relevance.kind` = `audio` | `image` | `video` | `av`),
 blended with the previous media vector by `audio_smoothing`.
+
+**Habituation** (graph params, so `profile.graph` or `{"type": "params"}`;
+off by default): a camera that always sees the same room keeps lighting the
+same few descriptors, because every frame shares the room (and the modality's
+own offset).  Each socket keeps a running mean `mu` of the raw vectors of each
+media kind (image, video, audio, av, pose) and scores
+
+```
+b      = beta_kind · min(1, seconds since mu started / habituation_tau)    (warm-up: first frames are not cancelled)
+scored = unit(v − b · mu)                                                  (then the usual audio_smoothing EMA)
+mu    ← mu + (1 − exp(−dt / habituation_tau)) · (v − mu)                   (after scoring; dt = wall-clock s since the last vector of that kind)
+```
+
+| param | default | |
+|---|---|---|
+| `habituation` | `0` | a number = beta for image and video; or a map `{"image": 0.5, "video": 0.5, "audio": 0, "av": 0, "pose": 0}` (missing kinds 0). Clipped to 0…1 |
+| `habituation_tau` | `60` | time constant of the running mean, s |
+
+The mean is tracked for every media kind even while beta is 0 (so switching it
+on starts warm), lives as long as the socket, and survives `query_clear` and
+mode switches.  Changing these params re-scores the next media vector; it
+does not rebuild the graph.  At beta 1 a perfectly static scene leaves only
+noise once the mean has caught up; a vector that cancels completely falls back
+to the raw one.  Text, speech and movement-words queries are not habituated.
 
 
 Landmarks from the browser tracker (`web/frontend/lib/poseTracker.ts`
@@ -203,7 +227,8 @@ ones still being scored):
  "query_text": "lightning" | null,      // the text / transcript / movement words; "(camera)" etc. for media
  "query_vec": [...] | null,             // the vector the relevance was scored with (after the media EMA / speech glide)
  "query_target": [...] | null,          // the latest raw embedding: = query_vec for text, the transcript's target
-                                        // while the glide moves toward it, the newest media vector before the EMA
+                                        // while the glide moves toward it, the newest media vector before habituation and the EMA
+ "habituation": {"kind": "image", "beta_eff": 0.5} | null,   // media queries: the warm-up-scaled beta used for the latest vector
  "nodes": {…the sim frame's node columns…, "relevance": [...]},   // relevance = the scored 0…1 activation;
                                         // rel = the same after the layout's contrast curve; alive=false = fading out
  "edges": {…the sim frame's edge columns…},                       // delta = signed Δ cosine (3 decimals)
