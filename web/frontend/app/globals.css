@@ -223,3 +223,33 @@ input[type="range"].morph-slider::-moz-range-thumb {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+
+/* Builder tab · the Egregore invitation: its logo at the centre of Egregore's own
+   spiral of orbiting particles (miner_ui.html, initSpiralAnimation) */
+.egregore-orbit {
+  position: absolute; left: 50%; top: 50%; border-radius: 50%; pointer-events: none;
+  animation: egregore-orbit var(--speed) linear infinite;
+  animation-delay: var(--delay);
+  animation-direction: var(--dir);
+}
+@keyframes egregore-orbit {
+  from { transform: rotate(0deg) translateX(var(--r)) rotate(0deg); }
+  to   { transform: rotate(360deg) translateX(var(--r)) rotate(-360deg); }
+}
+.egregore-logo {
+  animation: egregore-breathe 6s ease-in-out infinite;
+  filter: drop-shadow(0 0 18px rgba(72, 174, 221, 0.45)) drop-shadow(0 0 42px rgba(217, 199, 145, 0.22));
+}
+@keyframes egregore-breathe {
+  0%, 100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 16px rgba(72, 174, 221, 0.40)) drop-shadow(0 0 38px rgba(217, 199, 145, 0.20)); }
+  50%      { transform: translateY(-4px) scale(1.03); filter: drop-shadow(0 0 26px rgba(140, 226, 236, 0.60)) drop-shadow(0 0 60px rgba(217, 199, 145, 0.32)); }
+}
+.egregore-halo {
+  background: radial-gradient(circle, rgba(140, 226, 236, 0.15) 0%, rgba(52, 97, 163, 0.10) 34%, rgba(217, 199, 145, 0.06) 52%, transparent 70%);
+  animation: egregore-halo 6s ease-in-out infinite;
+}
+@keyframes egregore-halo { 0%, 100% { opacity: 0.7; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.04); } }
+@media (prefers-reduced-motion: reduce) {
+  .egregore-orbit, .egregore-logo, .egregore-halo { animation: none; }
+  .egregore-orbit { transform: rotate(calc(var(--angle) * 1deg)) translateX(var(--r)); }
+}
