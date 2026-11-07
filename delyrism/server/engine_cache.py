@@ -222,6 +222,11 @@ def get_embedder(cfg: Dict[str, Any]) -> Tuple[str, TextEmbedder]:
                 default_context=cfg.get("default_context"),
             )
             _add_encode_cache(emb)
+            # first media query of each kind would otherwise pay the lazy
+            # CUDA / processor init; do it here, while the caller waits anyway
+            warm = emb.warm_media() if hasattr(emb, "warm_media") else {}
+            if warm:
+                print(f"[engine_cache] warmed media towers (s): {warm}")
             _embedder_cache[fp] = emb
     return fp, emb
 

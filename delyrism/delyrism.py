@@ -472,9 +472,38 @@ class TextEmbedder:
             self._ac_sr = 16000
             self.audio_resamples = True      # embed_audio_array takes any rate (the server skips its 48 kHz step)
             print(f"[Embedder] EmbeddingGemma 2 ready ({model_name}, dim={self.dim}, prompt={self._g2_prompt}, "
-                  f"modalities={sorted(mods)}, device={self.device}).")
+                  f"modalities={sorted(mods & {'text', 'image', 'audio', 'video'})}, device={self.device}).")
         except Exception as e:
             raise RuntimeError(f"EmbeddingGemma 2 init failed: {e}")
+
+    def warm_media(self) -> Dict[str, float]:
+        """Run one small encode through each media tower the backend has
+        (image, audio, video), so the first live query of each kind does not
+        pay the lazy CUDA / processor initialisation (~2-10 s on a GPU).
+        Returns seconds per modality; failures are skipped.  GPU only: on a
+        CPU every call costs the same, so warming would only slow the build."""
+        import time
+        out: Dict[str, float] = {}
+        if not str(self.device).startswith("cuda"):
+            return out
+        rng = np.random.default_rng(0)
+        frame = (rng.random((224, 224, 3)) * 255).astype(np.uint8)
+        jobs = []
+        if self.image_capable or hasattr(self, "oc_model"):
+            jobs.append(("image", lambda: self.embed_image(frame)))
+        if self.audio_capable or hasattr(self, "_clap"):
+            jobs.append(("audio", lambda: self.embed_audio_array(
+                (0.05 * rng.standard_normal(16000)).astype(np.float32), 16000)))
+        if self.video_capable:
+            jobs.append(("video", lambda: self.embed_video_frames([frame, frame])))
+        for name, fn in jobs:
+            t0 = time.perf_counter()
+            try:
+                fn()
+                out[name] = round(time.perf_counter() - t0, 2)
+            except Exception as e:
+                print(f"[Embedder] warm-up of the {name} tower failed: {e}")
+        return out
 
     def _g2_media(self, item: dict) -> np.ndarray:
         with torch.no_grad():
