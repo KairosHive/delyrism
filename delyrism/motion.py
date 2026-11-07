@@ -9,7 +9,8 @@ kinematic cues used in expressive-movement research (quantity of motion,
 impulsivity, path directness, normalised jerk, contraction index,
 periodicity; Camurri et al. 2003, Larboulette & Gibet 2015):
 
-    energy      still ↔ vigorous        mean effector speed
+    energy      still ↔ vigorous        speed of the two most active effectors
+    size        small ↔ broad           largest excursion of an arm or leg
     time        sustained ↔ sudden      peak acceleration against speed (Laban Time)
     weight      light ↔ strong          acceleration magnitude (Laban Weight)
     space       indirect ↔ direct       straightness of each stroke (Laban Space)
@@ -27,8 +28,11 @@ Units are body-relative: lengths in torso lengths (hands: wrist to middle
 knuckle), time in seconds, so a dancer far from the camera reads like one
 close by.  `to_text` keeps only the salient qualities (far from the middle
 of their range) and writes them as one layered description that names no
-body part: Laban's effort action or state, the qualities behind it, the
-movement in space, and its timing.  That text is what queries the space
+body part: the pace, Laban's effort action or state and the size of the
+gestures, the qualities behind them, the movement in space, and its
+timing.  The pace (absolute energy) picks the register of the words, so
+slow movement reads "gliding, smooth, serene" and only vigorous movement
+can read "explosive" or "torrential".  That text is what queries the space
 through its text tower.  The single levels (abstract, qualities, body)
 remain available for comparison.
 
@@ -205,6 +209,7 @@ def _sparc(speed: np.ndarray, fc: float = 6.0, amp_th: float = 0.05, pad: int = 
 
 
 HOLD = 0.17        # seconds below the pause speed that count as a held stop (a reversal is quicker)
+PAUSE = 0.4        # seconds of near-stillness that count as a held pause in the description
 
 
 def _effector(R: np.ndarray, min_path: float) -> Dict[str, float]:
@@ -317,7 +322,13 @@ def _body(P: np.ndarray, L: np.ndarray, seconds: float) -> Tuple[Dict[str, Quali
     V = _d(B)
     spd = _norm(V)
     s_t = _quiet(np.nanmean, spd[:, eff], axis=1)
-    energy_raw = _quiet(np.nanmean, s_t)
+    # energy of the two most active effectors: one arm circling slowly while
+    # the rest stands is slow movement, not stillness diluted five ways
+    eff_mean = np.array([_quiet(np.nanmean, spd[:, j]) for j in eff])
+    eff_mean = np.sort(eff_mean[np.isfinite(eff_mean)])[::-1]
+    energy_raw = (float("nan") if not len(eff_mean) else float(eff_mean[0]) if len(eff_mean) == 1
+                  else 0.65 * float(eff_mean[0]) + 0.35 * float(eff_mean[1]))
+    top_t = _quiet(np.nanmax, spd[:, eff], axis=1)                              # fastest effector per frame
     A = _norm(_d(V))
     # Time and Weight from the most active limb (a one-armed punch is strong
     # even when the rest of the body stands still)
@@ -366,7 +377,26 @@ def _body(P: np.ndarray, L: np.ndarray, seconds: float) -> Tuple[Dict[str, Quali
     k = max(3, int(0.3 * FPS))
     c0, c1 = _quiet(np.nanmean, centre[:k], axis=0), _quiet(np.nanmean, centre[-k:], axis=0)
     travel = float(_norm(c1 - c0)) / seconds if np.isfinite(c0).all() and np.isfinite(c1).all() else float("nan")
-    still = float(np.mean(s_t[np.isfinite(s_t)] < 0.12)) if np.isfinite(s_t).any() else float("nan")
+    # held pauses: runs of at least PAUSE seconds with every effector below
+    # 0.08 torso/s (the turn at the end of a slow sweep is quicker than that)
+    still = float("nan")
+    if np.isfinite(top_t).any():
+        low = np.append(np.isfinite(top_t) & (top_t < 0.08), False)
+        held, run = 0, 0
+        for x in low:
+            if x:
+                run += 1
+            else:
+                held += run if run >= PAUSE * FPS else 0
+                run = 0
+        still = held / float(len(top_t))
+    # size: the largest excursion of an arm or leg around its mean place, in torso lengths
+    exc = []
+    for j in arms + legs:
+        r = R[:, j][np.isfinite(R[:, j, 0])]
+        if len(r) > 10:
+            exc.append(float(_norm(np.percentile(r, 90, axis=0) - np.percentile(r, 10, axis=0))))
+    size = max(exc) if exc else float("nan")
 
     # turning: yaw of the shoulder line in MediaPipe's world coordinates (metres, hip-centred)
     W = L[:, :N_LANDMARKS, 4:7].astype(np.float64)
@@ -388,6 +418,7 @@ def _body(P: np.ndarray, L: np.ndarray, seconds: float) -> Tuple[Dict[str, Quali
         "space": _q("space", 1.0 - _ramp(curv, 0.4, 3.0, log=True), curv, "rad/torso", "indirect", "direct"),
         "flow": _q("flow", flow_v, sparc, "SPARC", "bound", "free"),
         "shape": _q("shape", _ramp(reach, 0.15, 1.6), reach, "torso", "contracted", "expansive"),
+        "size": _q("size", _ramp(size, 0.12, 1.6, log=True), size, "torso", "small", "broad"),
         "level": _q("level", level_v, height, "torso", "low", "high"),
         "symmetry": _q("symmetry", _ramp(symmetry, 0.25, 0.8), symmetry, "", "asymmetric", "symmetric"),
         "rhythm": _q("rhythm", _ramp(period_r, 0.2, 0.7), period_r, "autocorr", "irregular", "rhythmic"),
@@ -471,12 +502,18 @@ def _hands(P: np.ndarray, off: int) -> Dict[str, Quality]:
     return q
 
 
-def _is_still(energy: Optional[Quality]) -> bool:
+STILL_SIZE = 0.12  # torso lengths: tracker jitter at rest stays well below, a very slow sweep goes beyond
+
+
+def _is_still(energy: Optional[Quality], size: Optional[Quality] = None) -> bool:
     """Near stillness, judged on the fixed calibration even when the value
-    is session-relative (a quiet stretch of a lively session still moves)."""
+    is session-relative (a quiet stretch of a lively session still moves).
+    A low speed with a real excursion (`size`) is very slow movement."""
     if energy is None:
         return False
     v = energy.absolute if np.isfinite(energy.absolute) else energy.value
+    if size is not None and np.isfinite(size.raw) and size.raw >= STILL_SIZE:
+        return False
     return bool(np.isfinite(v) and v < 1 / 6)
 
 
@@ -489,17 +526,26 @@ class SessionNorm:
     every quality on its recent history: the session median maps to the
     middle (left unsaid), and distance from it is scaled by the session's
     spread.  The spread has a floor, so a dancer holding one movement does
-    not have tracker noise read as contrast.  Stillness is judged on the
-    absolute energy, and a still window adds only its energy to the history.
+    not have tracker noise read as contrast, and the re-centred value stays
+    within `reach` of the fixed calibration, so a slow movement can read as
+    relatively quick or firm but never as sudden or forceful.  Energy and
+    hand speed stay absolute: they set the register of the words.
+    Stillness is judged on the absolute energy, and a still window adds
+    only its energy to the history.
 
         norm = SessionNorm()                    # one per dancer / tracker
         describe(traj, 3.0, session=norm)       # every refresh
     """
 
-    def __init__(self, memory: float = 120.0, floor: float = 0.08, warmup: int = 5):
+    # intensity stays on the fixed calibration: a slow dancer who speeds up a
+    # little is still slow, whatever the session has seen before
+    ABSOLUTE = frozenset({"energy", "hand_speed"})
+
+    def __init__(self, memory: float = 120.0, floor: float = 0.12, warmup: int = 5, reach: float = 0.3):
         self.memory = float(memory)     # seconds of history
         self.floor = float(floor)       # smallest spread (0-1 units) counted as contrast
         self.warmup = int(warmup)       # readings before a quality is re-centred
+        self.reach = float(reach)       # furthest the session moves a value from its fixed calibration
         self._hist: Dict[str, List[Tuple[float, float]]] = {}
 
     def reset(self) -> None:
@@ -512,7 +558,7 @@ class SessionNorm:
     def apply(self, reading: MotionReading, t: float, relative: float = 1.0) -> MotionReading:
         """Re-centre `reading`'s qualities in place (`relative` 0 keeps the
         fixed calibration, 1 is fully session-relative) and record them."""
-        still = _is_still(_effort_q(reading).get("energy"))
+        still = _is_still(_effort_q(reading).get("energy"), reading.qualities.get("size"))
         for d in (reading.qualities, reading.hands):
             for k, q in list(d.items()):
                 if not np.isfinite(q.value) or (still and k not in ("energy", "hand_speed")):
@@ -523,11 +569,13 @@ class SessionNorm:
                 h.append((t, q.value))
                 while h[0][0] < t - self.memory:
                     h.pop(0)
-                if still or len(h) < self.warmup or relative <= 0:
+                if still or len(h) < self.warmup or relative <= 0 or k in self.ABSOLUTE:
+                    d[k] = Quality(q.key, q.value, q.raw, q.unit, q.low, q.high, absolute=q.value)
                     continue
                 H = np.array([v for _, v in h])
                 spread = max((np.percentile(H, 84) - np.percentile(H, 16)) / 2.0, self.floor)
                 rel = 0.5 + 0.5 * math.tanh((q.value - float(np.median(H))) / (1.5 * spread))
+                rel = float(np.clip(rel, q.value - self.reach, q.value + self.reach))
                 d[k] = Quality(q.key, float((1.0 - relative) * q.value + relative * rel), q.raw, q.unit,
                                q.low, q.high, absolute=q.value)
         return reading
@@ -586,6 +634,8 @@ _BANDS = {
                  "mirrored, perfectly symmetrical"),
     "rhythm":   ("irregular, unpredictable timing", "uneven timing", "loose timing",
                  "a hint of pulse", "rhythmic, pulsing", "strongly rhythmic, steady repeating pulse"),
+    "size":     ("tiny, minute gestures", "small, contained gestures", "modest gestures",
+                 "fairly broad gestures", "broad, ample gestures", "large, sweeping gestures"),
 }
 
 
@@ -617,7 +667,7 @@ def _sentence(s: str) -> str:
 def _body_text(q: Dict[str, Quality], tr: Dict[str, float]) -> List[str]:
     out: List[str] = []
     energy = q.get("energy")
-    if _is_still(energy):
+    if _is_still(energy, q.get("size")):
         lines = ["Near stillness, the body barely moving"]
         if tr.get("stillness", 0) > 0.8:
             lines[0] += ", held and quiet"
@@ -638,7 +688,7 @@ def _body_text(q: Dict[str, Quality], tr: Dict[str, float]) -> List[str]:
         out.append(_sentence(f"the flow is {flow}"))
 
     # 3 · Shape and level, with their trends
-    shape_parts = []
+    shape_parts = [s for s in (_salient(q.get("size")),) if s]
     shape = _salient(q.get("shape"))
     if shape:
         shape_parts.append(shape)
@@ -782,32 +832,40 @@ _Q_WORDS = {      # very low, low, high, very high
     "articulation": ("unified", "whole", "articulate", "intricate"),
     "openness": ("clenched", "closed", "open", "unfurled"),
     "together": ("scattered", "apart", "close", "joined"),
+    "size": ("tiny", "small", "broad", "sweeping"),
+}
+_Q_GENTLE = {     # the high poles of Time and Weight in the slow register
+    "time": ("lingering", "sustained", "quickening", "brisk"),
+    "weight": ("delicate", "light", "firm", "weighted"),
 }
 _Q_TRENDS = {"opening": ("closing", "opening"), "rising": ("sinking", "rising"),
              "accelerating": ("subsiding", "quickening"), "approach": ("retreating", "advancing"),
              "turning": ("", "turning"), "travel": ("", "travelling")}
 
 
-def _qword(q: Optional[Quality]) -> Optional[str]:
+def _qword(q: Optional[Quality], reg: int = 1) -> Optional[str]:
+    """One adjective for a quality that stands out; `reg` 0 softens the
+    high poles of Time and Weight (a slow movement is never "sudden")."""
     if q is None or q.key not in _Q_WORDS or not np.isfinite(q.value) or 0.4 <= q.value <= 0.6:
         return None
-    w = _Q_WORDS[q.key]
+    w = _Q_GENTLE[q.key] if reg == 0 and q.key in _Q_GENTLE else _Q_WORDS[q.key]
     v = q.value
     return w[0] if v < 1 / 6 else w[1] if v < 0.4 else w[3] if v > 5 / 6 else w[2]
 
 
 def _qualities_text(reading: MotionReading) -> str:
     eff = _effort_q(reading)
-    if _is_still(eff.get("energy")):
+    if _is_still(eff.get("energy"), reading.qualities.get("size")):
         return "Still, motionless, at rest."            # the other measures are tracker noise here
-    first = [w for w in (_qword(eff.get(k)) for k in ("energy", "time", "weight", "space", "flow")) if w]
-    second = [w for w in (_qword(reading.qualities.get(k)) for k in ("shape", "level", "symmetry")) if w]
+    reg = _register(reading)
+    first = [w for w in [_pace(reading)] + [_qword(eff.get(k), reg) for k in ("time", "weight", "space", "flow")] if w]
+    second = [w for w in (_qword(reading.qualities.get(k)) for k in ("size", "shape", "level", "symmetry")) if w]
     second += _trend_words(reading.trends, _Q_TRENDS)
     rh = reading.qualities.get("rhythm")
     bpm = reading.trends.get("tempo_bpm", float("nan"))
     if rh is not None and np.isfinite(rh.value) and rh.value > 0.6 and np.isfinite(bpm):
         second.append(f"pulsing at about {int(round(bpm / 5.0) * 5)} beats per minute")
-    elif _qword(rh):
+    elif _qword(rh) and (rh.value > 0.6 or reg > 0):       # slow movement too long to repeat is not erratic
         second.append(_qword(rh))
     second += [w for w in (_qword(reading.hands.get(k)) for k in ("articulation", "openness", "together")) if w]
     cv = reading.hands.get("converging")
@@ -821,71 +879,149 @@ def _qualities_text(reading: MotionReading) -> str:
 # factors together make an effort state (Near, Awake, Mobile, Stable, Dream,
 # Remote).  The words carry those qualities without naming a body part.
 
-_ACTIONS = {      # (time, weight, space) poles → the effort action's words
-    (1, 1, 1): "thrusting, decisive, explosive",            # punch
-    (1, 1, -1): "slashing, sweeping, tempestuous",          # slash
-    (1, -1, 1): "dabbing, crisp, sparkling",                # dab
-    (1, -1, -1): "flicking, flitting, playful",             # flick
-    (-1, 1, 1): "pressing, insistent, unyielding",          # press
-    (-1, 1, -1): "wringing, twisting, anguished",           # wring
-    (-1, -1, 1): "gliding, serene, effortless",             # glide
-    (-1, -1, -1): "floating, drifting, weightless",         # float
+# Every table has three registers, chosen by the absolute speed (see
+# _register): 0 slow, 1 moderate, 2 vigorous.  Laban's factors are relative
+# within a register, so a slow movement that is quicker or firmer than its
+# neighbours reads "flickering" or "weighted", never "explosive".
+
+_ACTIONS = {      # (time, weight, space) poles → the effort action's words, per register
+    (1, 1, 1): ("firm, deliberate, pointed", "thrusting, decisive, sharp",
+                "thrusting, decisive, explosive"),                                   # punch
+    (1, 1, -1): ("swaying, weighted, swinging", "slashing, sweeping, swinging",
+                 "slashing, sweeping, tempestuous"),                                 # slash
+    (1, -1, 1): ("tapping, precise, light", "dabbing, crisp, sparkling", "dabbing, crisp, sparkling"),   # dab
+    (1, -1, -1): ("flickering, fluttering, light", "flicking, flitting, playful",
+                  "flicking, flitting, playful"),                                    # flick
+    (-1, 1, 1): ("pressing, slow, deliberate", "pressing, insistent, steady",
+                 "pressing, insistent, unyielding"),                                 # press
+    (-1, 1, -1): ("twisting, kneading, slow", "wringing, twisting, effortful",
+                  "wringing, twisting, anguished"),                                  # wring
+    (-1, -1, 1): ("gliding, smooth, serene", "gliding, poised, effortless", "gliding, serene, effortless"),  # glide
+    (-1, -1, -1): ("floating, drifting, weightless", "floating, drifting, buoyant",
+                   "floating, drifting, weightless"),                                # float
 }
-_STATES = {       # (factor, factor) → {(pole, pole): words}
-    ("time", "weight"): {(1, 1): "pounding, percussive, earthy", (1, -1): "skittering, nimble, sparkling",
-                         (-1, 1): "ponderous, grinding, heavy", (-1, -1): "lulling, tender, gentle"},
-    ("time", "space"): {(1, 1): "alert, piercing, vigilant", (1, -1): "darting, startled, scattered",
-                        (-1, 1): "deliberate, focused, unwavering", (-1, -1): "meandering, contemplative, roaming"},
-    ("time", "flow"): {(1, 1): "impulsive, spilling, reckless", (1, -1): "jolting, nervous, abrupt",
-                       (-1, 1): "unfurling, streaming, continuous", (-1, -1): "cautious, careful, guarded"},
-    ("weight", "space"): {(1, 1): "firm, resolute, unshakable", (1, -1): "churning, turbulent, heaving",
-                          (-1, 1): "poised, precise, delicate", (-1, -1): "airy, wafting, wandering"},
-    ("weight", "flow"): {(1, 1): "surging, unleashed, torrential", (1, -1): "tense, straining, clenched",
-                         (-1, 1): "dreamy, buoyant, weightless", (-1, -1): "fragile, hesitant, tentative"},
-    ("space", "flow"): {(1, 1): "clear, streaming, unerring", (1, -1): "rigid, mechanical, exact",
-                        (-1, 1): "swirling, billowing, unfolding", (-1, -1): "knotted, tangled, convoluted"},
+_STATES = {       # (factor, factor) → {(pole, pole): words per register}
+    ("time", "weight"): {
+        (1, 1): ("punctuated, grounded, firm", "pounding, percussive, earthy", "pounding, percussive, earthy"),
+        (1, -1): ("fluttering, nimble, light", "skittering, nimble, sparkling", "skittering, nimble, sparkling"),
+        (-1, 1): ("slow, heavy, grounded", "ponderous, grinding, heavy", "ponderous, grinding, heavy"),
+        (-1, -1): ("lulling, tender, gentle", "lulling, tender, gentle", "lulling, tender, gentle")},
+    ("time", "space"): {
+        (1, 1): ("alert, attentive, precise", "alert, piercing, vigilant", "alert, piercing, vigilant"),
+        (1, -1): ("flickering, shifting, searching", "darting, startled, scattered", "darting, startled, scattered"),
+        (-1, 1): ("deliberate, focused, steady", "deliberate, focused, unwavering", "deliberate, focused, unwavering"),
+        (-1, -1): ("meandering, contemplative, roaming", "meandering, contemplative, roaming",
+                   "meandering, contemplative, roaming")},
+    ("time", "flow"): {
+        (1, 1): ("spontaneous, loose, playful", "impulsive, spilling, spontaneous", "impulsive, spilling, reckless"),
+        (1, -1): ("hesitant, halting, careful", "jolting, nervous, abrupt", "jolting, nervous, abrupt"),
+        (-1, 1): ("unfurling, streaming, continuous", "unfurling, streaming, continuous",
+                  "unfurling, streaming, continuous"),
+        (-1, -1): ("cautious, careful, guarded", "cautious, careful, guarded", "cautious, careful, guarded")},
+    ("weight", "space"): {
+        (1, 1): ("firm, rooted, steady", "firm, resolute, unshakable", "firm, resolute, unshakable"),
+        (1, -1): ("swaying, rolling, heavy", "churning, swaying, heaving", "churning, turbulent, heaving"),
+        (-1, 1): ("poised, precise, delicate", "poised, precise, delicate", "poised, precise, delicate"),
+        (-1, -1): ("airy, wafting, wandering", "airy, wafting, wandering", "airy, wafting, wandering")},
+    ("weight", "flow"): {
+        (1, 1): ("weighty, flowing, released", "surging, released, powerful", "surging, unleashed, torrential"),
+        (1, -1): ("tense, held, contained", "tense, straining, clenched", "tense, straining, clenched"),
+        (-1, 1): ("dreamy, buoyant, weightless", "dreamy, buoyant, weightless", "dreamy, buoyant, weightless"),
+        (-1, -1): ("fragile, hesitant, tentative", "fragile, hesitant, tentative", "fragile, hesitant, tentative")},
+    ("space", "flow"): {
+        (1, 1): ("clear, flowing, unerring", "clear, streaming, unerring", "clear, streaming, unerring"),
+        (1, -1): ("careful, exact, contained", "rigid, mechanical, exact", "rigid, mechanical, exact"),
+        (-1, 1): ("swirling, curling, unfolding", "swirling, billowing, unfolding", "swirling, billowing, unfolding"),
+        (-1, -1): ("knotted, tangled, winding", "knotted, tangled, convoluted", "knotted, tangled, convoluted")},
 }
-_SINGLE = {"time": ("unhurried, lingering", "sudden, urgent"), "weight": ("light, delicate", "forceful, heavy"),
-           "space": ("roundabout, wandering", "direct, focused"), "flow": ("held, restrained", "free, released")}
-_FLOW_MOD = ("contained, restrained", "released, pouring")
+_SINGLE = {       # factor → (low pole, high pole) per register
+    "time": (("unhurried, lingering", "quickening, alert"), ("unhurried, lingering", "quick, brisk"),
+             ("unhurried, lingering", "sudden, urgent")),
+    "weight": (("light, delicate", "weighted, firm"), ("light, delicate", "firm, solid"),
+               ("light, delicate", "forceful, heavy")),
+    "space": (("roundabout, wandering", "direct, focused"),) * 3,
+    "flow": (("held, careful", "free, flowing"), ("held, restrained", "free, released"),
+             ("held, restrained", "free, released")),
+}
+_FLOW_MOD = (("contained, careful", "flowing, continuous"), ("contained, restrained", "free, flowing"),
+             ("contained, restrained", "released, pouring"))
+# the pace itself, from the absolute energy (still is handled before)
+_PACE = ((0.28, "very slow, almost suspended"), (0.45, "slow, unhurried"), (0.62, "calm, moderate"),
+         (0.78, "lively, animated"), (0.92, "vigorous, energetic"), (2.0, "intense, vigorous"))
+REGISTERS = (0.45, 0.78)   # absolute energy where the words turn moderate, then vigorous
+_SIZE = ("tiny, minute", "small, contained", "", "", "broad, ample", "large, sweeping")
+
+
+def _abs(q: Optional[Quality]) -> float:
+    """The fixed-calibration value of a quality (its session-free reading)."""
+    if q is None:
+        return float("nan")
+    return q.absolute if np.isfinite(q.absolute) else q.value
+
+
+def _register(reading: MotionReading) -> int:
+    """0 slow, 1 moderate, 2 vigorous, from the absolute energy."""
+    e = _abs(_effort_q(reading).get("energy"))
+    if not np.isfinite(e):
+        return 1
+    return 0 if e < REGISTERS[0] else 1 if e < REGISTERS[1] else 2
+
+
+def _pace(reading: MotionReading) -> Optional[str]:
+    e = _abs(_effort_q(reading).get("energy"))
+    if not np.isfinite(e):
+        return None
+    return next(w for th, w in _PACE if e < th)
+
+
+def _size(reading: MotionReading) -> Optional[str]:
+    q = reading.qualities.get("size")
+    if q is None or not np.isfinite(q.value) or 0.4 <= q.value <= 0.6:
+        return None
+    w = _SIZE[_band(q.value)]
+    return f"{w} gestures" if w else None
 _A_TRENDS = {"opening": ("enclosing", "unfolding"), "rising": ("descending", "ascending"),
              "accelerating": ("subsiding", "gathering momentum"), "approach": ("withdrawing", "advancing"),
              "turning": ("", "spiralling"), "travel": ("", "journeying through space")}
 
 
-def _effort_words(reading: MotionReading) -> List[str]:
-    """The Laban effort action (three factors), state (two) or single
-    factor that stands out, with flow and intensity: "thrusting, decisive,
-    explosive", "dreamy, buoyant, weightless", "sudden, urgent"."""
+def _effort_parts(reading: MotionReading) -> Tuple[List[str], set]:
+    """The pace, then the Laban effort action (three factors), state (two)
+    or single factor that stands out, worded for the pace's register, then
+    the size of the gestures ("slow, unhurried, gliding, smooth, serene,
+    broad, ample gestures"), with the factors those words already carry."""
     eff = _effort_q(reading)
-    energy = eff.get("energy")
+    reg = _register(reading)
     poles = {f: _pole(eff.get(f)) for f in ("time", "weight", "space", "flow")}
     on = [f for f in ("time", "weight", "space", "flow") if poles[f]]
-    words: List[str] = []
+    words: List[str] = [w for w in (_pace(reading),) if w]
+    used: set = set()
     if poles["time"] and poles["weight"] and poles["space"]:
-        words.append(_ACTIONS[(poles["time"], poles["weight"], poles["space"])])
-        if poles["flow"]:
-            words.append(_FLOW_MOD[poles["flow"] > 0])
+        words.append(_ACTIONS[(poles["time"], poles["weight"], poles["space"])][reg])
+        used |= {"time", "weight", "space"}
     elif len(on) >= 2:
         pair = max(_STATES, key=lambda p: (poles[p[0]] != 0 and poles[p[1]] != 0,
                                            _strength(eff.get(p[0])) + _strength(eff.get(p[1]))))
-        words.append(_STATES[pair][(poles[pair[0]], poles[pair[1]])])
-        if "flow" not in pair and poles["flow"]:
-            words.append(_FLOW_MOD[poles["flow"] > 0])
+        words.append(_STATES[pair][(poles[pair[0]], poles[pair[1]])][reg])
+        used |= set(pair)
     elif len(on) == 1:
-        words.append(_SINGLE[on[0]][poles[on[0]] > 0])
-    elif energy is not None and np.isfinite(energy.value):
-        words.append("hushed, subdued" if energy.value < 0.4 else "animated, alive" if energy.value > 0.6 else "even, measured")
-    if energy is not None and np.isfinite(energy.value):
-        if energy.value > 5 / 6:
-            words.insert(0, "intense")
-        elif energy.value < 1 / 3 and words and words[0] != "hushed, subdued":
-            words.insert(0, "hushed")
-    return words
+        words.append(_SINGLE[on[0]][reg][poles[on[0]] > 0])
+        used.add(on[0])
+    if poles["flow"] and "flow" not in used and len(on) > 1:
+        words.append(_FLOW_MOD[reg][poles["flow"] > 0])
+        used.add("flow")
+    size = _size(reading)
+    if size:
+        words.append(size)
+    return words, used
+
+
+def _effort_words(reading: MotionReading) -> List[str]:
+    return _effort_parts(reading)[0]
 
 
 def _still(reading: MotionReading) -> bool:
-    return _is_still(_effort_q(reading).get("energy"))
+    return _is_still(_effort_q(reading).get("energy"), reading.qualities.get("size"))
 
 
 def _abstract_text(reading: MotionReading) -> str:
@@ -915,7 +1051,7 @@ def _abstract_text(reading: MotionReading) -> str:
     if rh is not None and np.isfinite(rh.value) and rh.value > 0.6:
         time_words.append("a slow, steady pulse" if not np.isfinite(bpm) or bpm < 70
                           else "a steady pulse" if bpm < 110 else "a racing pulse")
-    elif rh is not None and np.isfinite(rh.value) and rh.value < 0.25:
+    elif rh is not None and np.isfinite(rh.value) and rh.value < 0.25 and _register(reading) > 0:
         time_words.append("erratic, unpredictable")
     sym = reading.qualities.get("symmetry")
     if _pole(sym):
@@ -942,13 +1078,15 @@ def _full_text(reading: MotionReading) -> str:
     if _still(reading):
         return "Stillness, suspended, a held breath. Quiet, at rest."
     eff = _effort_q(reading)
+    reg = _register(reading)
 
-    # 1 · effort action or state ("Thrusting, decisive, explosive.")
-    s1 = _effort_words(reading)
+    # 1 · pace, effort action or state, size ("Slow, unhurried, gliding, smooth, serene, broad, ample gestures.")
+    s1, used = _effort_parts(reading)
     said = {w.strip() for phrase in s1 for w in phrase.split(",")}
 
-    # 2 · the qualities behind it, as plain adjectives not already said
-    s2 = [w for w in (_qword(eff.get(k)) for k in ("energy", "time", "weight", "space", "flow")) if w and w not in said]
+    # 2 · the qualities the effort words left unsaid, as plain adjectives
+    s2 = [w for w in (_qword(eff.get(k), reg) for k in ("time", "weight", "space", "flow") if k not in used)
+          if w and w not in said]
 
     # 3 · the movement in space, then fine detail
     s3 = [_F_SHAPE[k][_pole(reading.qualities.get(k)) > 0] for k in ("shape", "level") if _pole(reading.qualities.get(k))]
@@ -971,7 +1109,7 @@ def _full_text(reading: MotionReading) -> str:
     bpm = reading.trends.get("tempo_bpm", float("nan"))
     if rh is not None and np.isfinite(rh.value) and rh.value > 0.6:
         s4.append(f"pulsing at about {int(round(bpm / 5.0) * 5)} beats per minute" if np.isfinite(bpm) else "pulsing, cyclical")
-    elif rh is not None and np.isfinite(rh.value) and rh.value < 0.25:
+    elif rh is not None and np.isfinite(rh.value) and rh.value < 0.25 and reg > 0:
         s4.append("erratic, unpredictable timing")
     acc = reading.trends.get("accelerating", float("nan"))
     if np.isfinite(acc) and abs(acc) > 0.35:
@@ -1015,10 +1153,12 @@ def prototype_texts(level: str = "full") -> List[str]:
     embedding is what all movement descriptions share; the live query
     subtracts it so what is distinctive in each description carries more."""
     texts = []
-    for t, w, s, f in itertools.product((0.1, 0.9), repeat=4):
-        for shape, lvl in ((0.15, 0.2), (0.85, 0.85)):
+    for i, (t, w, s, f) in enumerate(itertools.product((0.1, 0.9), repeat=4)):
+        for k, energy in enumerate((0.35, 0.55, 0.8)):          # one per register
+            shape, lvl, size = ((0.15, 0.2, 0.2), (0.85, 0.85, 0.8))[(i + k) % 2]
             r = MotionReading(tracker="body", seconds=3.0, coverage=1.0)
-            vals = dict(energy=0.6, time=t, weight=w, space=s, flow=f, shape=shape, level=lvl, symmetry=0.5, rhythm=0.5)
+            vals = dict(energy=energy, time=t, weight=w, space=s, flow=f, shape=shape, level=lvl, size=size,
+                        symmetry=0.5, rhythm=0.5)
             r.qualities = {k: _q(k, v, float("nan"), "", "", "") for k, v in vals.items()}
             texts.append(to_text(r, level))
     return sorted(set(t for t in texts if t))
