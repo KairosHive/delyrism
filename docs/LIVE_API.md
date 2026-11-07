@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.3)
+# Delyrism live API (package `delyrism`, v0.4)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -77,6 +77,7 @@ with the usual messages.
   "audio_smoothing": null, "rel_smoothing": null,
   "motion": {"auto": true, "refresh": 3.0, "window": 3.0, "level": "full", "contrast": 0.7, "relative": 1.0},
   "transcript": {"tau": 1.5, "hz": 20},  // latent smoothing of spoken-text queries (below)
+  "lakota": false,                       // Lakota background matching (/delyrism/lakota* OSC, sim "lakota"); off by default
   "osc": {"enabled": true, "host": "127.0.0.1", "port": 7000, "hz": 60},
   "speech": {"enabled": true, "url": "http://127.0.0.1:8010", "media": true, "media_kinds": ["motion"],
              "delay": 1.0, "min_gap": 4.0, "mood": true}
@@ -187,7 +188,7 @@ columnar JSON; ~2.6 KB for a 16-node graph, ~26/s at `hz: 30`.
  "edges": {"src": [0, …], "dst": [3, …],                 // row indices into nodes
            "weight": [0.8, …], "delta": [0.12, …], "sign": [1, …],   // |Δ| 0…1, signed Δ cosine, +1/−1
            "overlap": [0.3, …], "fade": [1.0, …], "alive": [true, …]},
- "lakota": {"names": ["BAG", …], "activation": [0.1, …]}}   // the Lakota background distribution
+ "lakota": {"names": ["BAG", …], "activation": [0.1, …]}}   // the Lakota background distribution; null unless profile.lakota
 ```
 
 Row order is stable between frames; it changes only when a faded row is

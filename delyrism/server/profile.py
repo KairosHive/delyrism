@@ -88,6 +88,10 @@ class LiveProfile(BaseModel):
     rel_smoothing: Optional[float] = None
     motion: MotionSettings = Field(default_factory=MotionSettings)
     transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
+    # Lakota background (lakota.py): match the activated words to the ten Lakota
+    # symbols by meaning → /delyrism/lakota* OSC + the "lakota" block of sim
+    # frames.  Off by default (an embedding pass per space and per query).
+    lakota: bool = False
     # ---- server-wide outputs, applied when the profile is set ----
     osc: Optional[OscSettings] = None
     speech: Optional[SpeechSettings] = None

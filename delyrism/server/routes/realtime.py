@@ -653,7 +653,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     sim = LiveSim()
     if prof.shape:
         sim.set_shape(dict(prof.shape))
-    sim.lakota_names = list(lakota.NAMES)       # uniform background until the first graph
+    use_lakota = bool(prof.lakota)              # profile.lakota: the Lakota background matching
+    sim.lakota_names = list(lakota.NAMES) if use_lakota else []   # uniform background until the first graph
     osc_token = object()
     osc.register(osc_token, lambda: {
         "layout_source": "browser" if sim.client_fresh(time.perf_counter()) else "server-sim",
@@ -740,7 +741,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     if speech.cfg.enabled and speech.cfg.mood:              # embed the mood anchors now, not at the first word
         asyncio.create_task(asyncio.to_thread(speech.mood_matrix, space))
-    asyncio.create_task(asyncio.to_thread(_lakota_safe, lakota.affinity, space))   # Lakota prototypes, once per space
+    if use_lakota:
+        asyncio.create_task(asyncio.to_thread(_lakota_safe, lakota.affinity, space))   # Lakota prototypes, once per space
 
     await ws.send_json({"type": "ready", "params": state["params"], "shape": dict(sim.shape),
                         "pose_opts": dict(state["pose_opts"]), "symbols": list(space.symbols),
@@ -779,6 +781,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         return _lakota_safe(run)
 
     async def _lakota_update(nodes: bool) -> None:
+        if not use_lakota:
+            return
         res = await asyncio.to_thread(_lakota_shares, nodes)
         if res is not None:
             sim.set_lakota(lakota.NAMES, res[0], res[1])
