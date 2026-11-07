@@ -127,6 +127,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "query", "text": "…"}` | text query → relevance; speech after `delay` |
 | `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
 | `{"type": "stt", "keep"?: 30, "language"?: "en", "reset"?: true}` | speech mode: seconds of words kept in the query, the spoken language (omit to detect), forget what was heard |
+| `{"type": "media_center", "on"?: true, "memory"?: 120, "warmup"?: 5, "reset"?: true}` | sound, camera and pose queries are scored after subtracting the mean of the session's recent queries of the same kind (on by default, `memory` s, from the `warmup`-th query). Every sound shares one direction that puts a few words at the top of every query; centering removes it (on 60 nature recordings with Gemini Embedding 2 the top word "storm" fell from 40 to 10 wins). `reset` forgets the history |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
@@ -170,7 +171,7 @@ description arrives as a `motion` message and becomes the query
 | message | when | fields |
 |---|---|---|
 | `graph` | after each context change | `nodes: [{id, symbol, color, pull, …}]` (descriptors), `edges: [{source, target, delta, …}]` |
-| `relevance` | after each query / graph change, and `hz`/s while a spoken query glides | `relevance: {descriptor: 0…1}`, `active`, `query` (the text, the transcript or the movement words), `kind` ("text" · "speech" · "motion" · …) |
+| `relevance` | after each query / graph change, and `hz`/s while a spoken query glides | `relevance: {descriptor: 0…1}`, `active`, `query` (the text, the transcript or the movement words), `kind` ("text" · "speech" · "motion" · …), `centered` (the media query was centred on the session), `center_n` (queries of this kind in the session mean) |
 | `motion` | each movement description | `text` (the words, "" when nothing moved or nobody is in frame), `level`, the qualities |
 | `pose` | per tracked batch | `jpeg` (base64 drawing of the dancer with trails), `present` |
 | `heard` | each transcribed speech chunk | `text` (this chunk's words), `transcript` (the rolling words that are the query) |

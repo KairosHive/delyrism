@@ -350,6 +350,29 @@ def _live_graph(space_id: str, space, context: str, params: Dict[str, Any]) -> D
     return {"nodes": nodes, "edges": edges, "idx": idx, "D1": D1}
 
 
+# ---- session centering of media queries --------------------------------------
+# Audio (and image / video) vectors share one direction that text vectors
+# do not, so a few words sit near every sound and win every query ("storm" was
+# the top word for 40 of 60 nature recordings with Gemini Embedding 2).
+# Subtracting the mean of the session's recent media vectors from the query
+# removes that per-word offset: on those 60 recordings Gemini's "storm" went
+# from 40 to 10 wins and its Four Elements accuracy from 34 % to 50 %.  The
+# descriptor offset (global mode) leaves that bias in place.
+
+CENTER_KINDS = ("audio", "image", "video", "av", "pose")
+
+
+def _session_center(v: np.ndarray, hist: list, now: float, memory: float, warmup: int):
+    """(v minus the mean of the vectors in `hist` from the last `memory` s,
+    re-normalised; whether it was centred).  Uncentred until `warmup` vectors."""
+    recent = [x for t, x in hist if now - t <= memory]
+    if len(recent) < warmup:
+        return v, False
+    c = np.asarray(v, dtype=np.float32) - np.mean(recent, axis=0)
+    n = float(np.linalg.norm(c))
+    return (c / n if n > 1e-9 else v), n > 1e-9
+
+
 def _relevance_vec(graph: Dict[str, Any], vq: Optional[np.ndarray], D1: Optional[np.ndarray] = None) -> Dict[str, float]:
     """cosine(D1_i, v_query) over the graph's nodes, min-max normalised.
     `D1` defaults to the graph's own shifted matrix; PE-AV queries pass the
@@ -657,6 +680,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     pose_wake = asyncio.Event()
     glide_wake = asyncio.Event()
     stt_wake = asyncio.Event()
+    center: Dict[str, Any] = {"on": True, "memory": 120.0, "warmup": 5, "hist": {}, "active": False}
     heard: Dict[str, Any] = {"queue": [], "lines": [], "keep": 30.0, "language": None}
     emb = space.embedder
     # server-side twin of the browser's spring layout → OSC (see live_sim.py)
@@ -764,14 +788,21 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
         return {"relevance": rel, "active": state["vq"] is not None,
-                "query": state["query_text"], "kind": state["query_kind"]}
+                "query": state["query_text"], "kind": state["query_kind"],
+                "centered": bool(center["active"]),
+                "center_n": len(center["hist"].get(state["query_kind"], []))}
 
     def _score() -> Dict[str, float]:
         """Relevance of the active query inside the right head, then the
         post-embedding EMA on the activations (live media kinds only)."""
         head = _head_for_kind(space, state["query_kind"])
         D1 = _shifted_for_head(space_id, space, graph, state["context"], state["params"], head)
-        rel = _relevance_vec(graph, state["vq"], D1)
+        vq, center["active"] = state["vq"], False
+        kind = state["query_kind"]
+        if vq is not None and center["on"] and kind in CENTER_KINDS:
+            vq, center["active"] = _session_center(vq, center["hist"].get(kind, []), time.perf_counter(),
+                                                   center["memory"], center["warmup"])
+        rel = _relevance_vec(graph, vq, D1)
         a = state["rel_smoothing"]
         prev = state["rel_prev"]
         if rel and state["query_kind"] not in ("text", "speech") and a > 0 and prev:
@@ -935,6 +966,17 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 continue
             elif t == "audio_smoothing":
                 state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
+            elif t == "media_center":
+                # {"on": bool, "memory": s, "warmup": n, "reset": bool}
+                if "on" in m:
+                    center["on"] = bool(m["on"])
+                if m.get("memory") is not None:
+                    center["memory"] = float(np.clip(float(m["memory"]), 10.0, 900.0))
+                if m.get("warmup") is not None:
+                    center["warmup"] = int(np.clip(int(m["warmup"]), 2, 50))
+                if m.get("reset"):
+                    center["hist"].clear()
+                state["query_dirty"] = True
             elif t == "rel_smoothing":
                 state["rel_smoothing"] = float(np.clip(float(m.get("value", 0.0)), 0.0, 0.97))
             elif t == "pose_tick":
@@ -1029,6 +1071,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         else:
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
+        if kind in CENTER_KINDS:
+            now = time.perf_counter()
+            h = center["hist"].setdefault(kind, [])
+            h.append((now, np.asarray(v, dtype=np.float32)))
+            h[:] = [(t, x) for t, x in h if now - t <= center["memory"]]
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
         # each movement description already sums up a whole window, so it

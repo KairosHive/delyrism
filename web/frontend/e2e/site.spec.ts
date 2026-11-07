@@ -120,5 +120,10 @@ test("an audio-capable space offers the microphone in Live", async ({ page }) =>
   await page.getByRole("button", { name: /^(Build|Rebuild) space$/ }).click();
   await expect(page.getByRole("button", { name: "Rebuild space" })).toBeVisible();
   await openTab(page, "Live");
-  await expect(page.getByRole("button", { name: "Gemini · mic" })).toBeVisible();
+  await page.getByRole("button", { name: "Gemini · mic" }).click();
+  await expect(page.getByText("centre on this session")).toBeVisible();
+  await page.getByRole("button", { name: "● listen" }).click();
+  // Chromium's fake microphone beeps: after five windows the query is centred on the session
+  await expect(page.getByText(/centred on \d+ queries|nothing varies yet/)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "■ stop" }).click();
 });

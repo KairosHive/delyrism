@@ -141,3 +141,37 @@ def test_mic_queries_an_audio_space(client, symbols):
         ws.send_bytes(mic_window(150))
         rel = recv_until(ws, "relevance", where=lambda m: m.get("kind") == "audio" and m.get("active"))
         assert rel["relevance"]
+
+
+def test_session_center_removes_the_shared_direction():
+    """The per-word bias of media queries: every sound shares one direction."""
+    from delyrism.server.routes.realtime import _session_center
+    rng = np.random.default_rng(0)
+    shared = rng.normal(size=32); shared /= np.linalg.norm(shared)
+    sounds = [shared * 3 + rng.normal(size=32) for _ in range(8)]
+    hist = [(float(i), v / np.linalg.norm(v)) for i, v in enumerate(sounds)]
+    v, on = _session_center(hist[-1][1], hist, now=8.0, memory=60.0, warmup=5)
+    assert on
+    assert abs(float(v @ shared)) < abs(float(hist[-1][1] @ shared)) / 2
+    _, on = _session_center(hist[-1][1], hist[:3], now=8.0, memory=60.0, warmup=5)
+    assert not on                                     # still warming up
+    _, on = _session_center(hist[-1][1], hist, now=500.0, memory=60.0, warmup=5)
+    assert not on                                     # too old to count
+
+
+def test_mic_queries_are_centred_after_warmup(client, symbols):
+    body = {"symbols": symbols, "embedder": {"backend": "gemini-embedding-2"}}
+    sid = client.post("/spaces", json=body).json()["space_id"]
+    with client.websocket_connect(f"/realtime/graph/{sid}") as ws:
+        recv_until(ws, "ready")
+        ws.send_json({"type": "audio_smoothing", "value": 0.0})
+        ws.send_json({"type": "context", "text": CONTEXT})
+        recv_until(ws, "graph")
+        for i, f in enumerate([120, 900, 3000, 150, 1200, 4000]):
+            ws.send_bytes(mic_window(f))
+            rel = recv_until(ws, "relevance", where=lambda m: m.get("kind") == "audio" and m.get("center_n") == i + 1)
+        assert rel["centered"] is True
+        ws.send_json({"type": "media_center", "on": False})
+        ws.send_bytes(mic_window(200))
+        rel = recv_until(ws, "relevance", where=lambda m: m.get("kind") == "audio" and m.get("center_n") == 7)
+        assert rel["centered"] is False

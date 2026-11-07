@@ -125,6 +125,10 @@ interface LiveState {
   sendInterval: number;          // ms between embeddings
   audioSmoothing: number;        // server-side EMA on successive media vectors (before scoring)
   relSmoothing: number;          // server-side EMA on the relevance activations (after scoring)
+  mediaCenter: boolean;          // centre sound / camera queries on the session's mean (removes per-word bias)
+  centerMemory: number;          // seconds of past queries in that mean
+  centered: boolean;             // the last relevance was centred (warm-up done)
+  centerN: number;               // queries of the current kind in the mean
   camVideo: HTMLVideoElement | null;
   poseFps: number;               // camera frames tracked per second in pose / movement mode
   poseOpts: PoseOpts;
@@ -167,6 +171,9 @@ interface LiveState {
   stopLive: () => void;
   setAudioSmoothing: (v: number) => void;
   setRelSmoothing: (v: number) => void;
+  setMediaCenter: (on: boolean) => void;
+  setCenterMemory: (s: number) => void;
+  resetCenter: () => void;
   setSendInterval: (v: number) => void;
   setMotionRefresh: (v: number) => void;
   setFastShutter: (v: boolean) => void;
@@ -478,6 +485,10 @@ export const useLive = create<LiveState>((set, get) => ({
   sendInterval: 600,
   audioSmoothing: 0.5,
   relSmoothing: 0.6,
+  mediaCenter: true,
+  centerMemory: 120,
+  centered: false,
+  centerN: 0,
   camVideo: null,
   poseFps: 20,
   poseOpts: { tracker: "body", trace: 1.0, fit: "camera", joints: "extremities", smooth: 0.5 },
@@ -585,6 +596,9 @@ export const useLive = create<LiveState>((set, get) => ({
     if (cam && tracks(get().queryMode)) void cam.fastShutter(v);
   },
   setRelSmoothing: (v) => { set({ relSmoothing: v }); get()._send?.({ type: "rel_smoothing", value: v }); },
+  setMediaCenter: (on) => { set({ mediaCenter: on }); get()._send?.({ type: "media_center", on }); },
+  setCenterMemory: (s) => { set({ centerMemory: s }); get()._send?.({ type: "media_center", memory: s }); },
+  resetCenter: () => { set({ centered: false, centerN: 0 }); get()._send?.({ type: "media_center", reset: true }); },
   setAudioSmoothing: (v) => { set({ audioSmoothing: v }); get()._send?.({ type: "audio_smoothing", value: v }); },
   setParams: (patch) => {
     const cur = get().params;
@@ -671,6 +685,7 @@ export function useLiveSocket() {
         if (st.queryMode === "text" && st.query.trim()) send({ type: "query", text: st.query });
         if (st.audioSmoothing !== 0.5) send({ type: "audio_smoothing", value: st.audioSmoothing });
         if (st.relSmoothing > 0) send({ type: "rel_smoothing", value: st.relSmoothing });
+        if (!st.mediaCenter || st.centerMemory !== 120) send({ type: "media_center", on: st.mediaCenter, memory: st.centerMemory });
         send({ type: "pose_params", ...st.poseOpts });
         send({ type: "shape", shape: shapeOf(st) });
         useLive.setState((s) => ({ params: { ...(s.params ?? ({} as LiveParams)), ...seeded } as LiveParams }));
@@ -699,6 +714,8 @@ export function useLiveSocket() {
             relevanceSeq: s.relevanceSeq + 1,
             queryActive: !!msg.active,
             queryKind: asKind(msg.kind),
+            centered: !!msg.centered,
+            centerN: Number(msg.center_n ?? 0),
             ...(msg.kind === "motion" && msg.active ? { motionApplied: { text: String(msg.query ?? ""), at: performance.now() } } : {}),
           }));
         } else if (msg.type === "heard") {

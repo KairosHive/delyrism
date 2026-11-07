@@ -82,7 +82,8 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   const { query, setQuery, queryMode, setQueryMode, live, startLive, stopLive, liveError, audioLevel, queryKind,
           audioCapable, imageCapable, videoCapable, avCapable, poseCapable, sttCapable, transcript, speechChunk, speechKeep,
           audioWindow, videoWindow, videoFps, sendInterval, setSendInterval, motionRefresh,
-          audioSmoothing, setAudioSmoothing, relSmoothing, setRelSmoothing, set, camVideo } = useLive(useShallow((s) => ({
+          audioSmoothing, setAudioSmoothing, relSmoothing, setRelSmoothing, set, camVideo,
+          mediaCenter, setMediaCenter, centerMemory, setCenterMemory, resetCenter, centered, centerN } = useLive(useShallow((s) => ({
     query: s.query, setQuery: s.setQuery, queryMode: s.queryMode, setQueryMode: s.setQueryMode, live: s.live,
     startLive: s.startLive, stopLive: s.stopLive, liveError: s.liveError, audioLevel: s.audioLevel, queryKind: s.queryKind,
     audioCapable: s.audioCapable, imageCapable: s.imageCapable, videoCapable: s.videoCapable, avCapable: s.avCapable,
@@ -91,6 +92,8 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
     sendInterval: s.sendInterval, setSendInterval: s.setSendInterval, motionRefresh: s.motionRefresh,
     audioSmoothing: s.audioSmoothing, setAudioSmoothing: s.setAudioSmoothing, relSmoothing: s.relSmoothing, setRelSmoothing: s.setRelSmoothing,
     set: s.set, camVideo: s.camVideo,
+    mediaCenter: s.mediaCenter, setMediaCenter: s.setMediaCenter, centerMemory: s.centerMemory, setCenterMemory: s.setCenterMemory,
+    resetCenter: s.resetCenter, centered: s.centered, centerN: s.centerN,
   })));
   const backend = useSidebar((s) => s.embedderBackend);
   const can: Record<QueryMode, boolean> = {
@@ -112,6 +115,8 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP"
     : backend === "gemini-embedding-2" ? "Gemini" : "";
   const usesMic = queryMode === "audio" || queryMode === "av" || queryMode === "speech";
+  // media queries (sound, frames, the drawn dancer) are centred on the session's mean server-side
+  const centerable = queryMode === "audio" || queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose";
   const usesCam = queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose" || queryMode === "motion";
   const poseClip = queryMode === "pose" && videoCapable;
   const level = Math.min(1, audioLevel * 6);
@@ -194,6 +199,18 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
               {transcript || <span className="text-ink-500">{live ? "listening…" : "press listen and speak"}</span>}
             </div>
           )}
+          {centerable && (
+            <div className="flex flex-wrap items-center gap-3 text-[11px] text-ink-400">
+              <label className="flex cursor-pointer items-center gap-1.5" title="Every sound shares one direction that pulls a few words to the top of every query. Subtracting the mean of this session's recent queries removes that bias, so the words follow what changes.">
+                <input type="checkbox" checked={mediaCenter} onChange={(e) => setMediaCenter(e.target.checked)} />
+                centre on this session
+              </label>
+              <span className="font-mono text-ink-500">
+                {!mediaCenter ? "raw" : centered ? `centred on ${centerN} queries` : centerN >= 5 ? "nothing varies yet" : `warming up · ${centerN} / 5`}
+              </span>
+              {mediaCenter && <button className="text-accent-300 hover:text-accent-200" onClick={resetCenter}>↺ forget</button>}
+            </div>
+          )}
           {queryMode === "pose" && <PosePanel />}
           {queryMode === "motion" && <MotionPanel />}
           {queryMode === "pose" && !can.pose && (
@@ -220,6 +237,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
             {queryMode === "image" && <Slider label="capture" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps`} onChange={(v) => set("videoFps", v)} help="How often a camera frame is grabbed." />}
             {queryMode !== "motion" && <Slider label="rate" value={sendInterval} min={150} max={2000} step={50} format={(v) => `${v} ms`} onChange={setSendInterval} help="How often a window is sent for embedding (latest wins if the GPU lags)." />}
             {queryMode !== "motion" && <Slider label="vector smoothing" value={audioSmoothing} min={0} max={0.95} step={0.05} onChange={setAudioSmoothing} help="Server-side blend with the previous media vector, before scoring." />}
+            {centerable && <Slider label="centre memory" value={centerMemory} min={10} max={600} step={10} format={(v) => `${v} s`} onChange={setCenterMemory} help="Seconds of past queries averaged into the session's mean sound (or frame)." />}
             <Slider label="activation smoothing" value={relSmoothing} min={0} max={0.97} step={0.01} onChange={setRelSmoothing} help="Server-side blend of the per-node relevance with its previous value, after embedding — calms the springs without blurring the embedding." />
           </div>
         </div>
