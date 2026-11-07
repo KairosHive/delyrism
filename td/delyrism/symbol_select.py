@@ -3,9 +3,11 @@
 # Activation of each symbol = Σ over its nodes in the live graph of
 #     no query : node size  (Σ|Δ|, the browser's node radius)
 #     query    : node relevance (the browser's node brightness)
-# (nodes fading out don't count), eased with Symbollag.  The top half of the
-# activated symbols (rounded up, ≥ 1) form the mosaic, each with a share
-# proportional to its activation among them.  Symbolpin forces one symbol.
+# (nodes fading out don't count), eased with Symbollag.  Symbol Cutoff c
+# drops the bottom c of the activated symbols: the top ceil((1 − c)·n), at
+# least one, form the mosaic (50 % = top half, 100 % = only the top symbol,
+# 0 % = all), each with a share proportional to its activation among them.
+# Symbolpin forces one symbol.
 #
 # The selection (symbols + shares, shares rounded to 5 %) is published in this
 # operator's storage as 'mosaic' = {cur, prev, mix}; tiles_layout.py composes
@@ -78,14 +80,15 @@ def onCook(scriptOp):
 		shares = [1.0] * len(keep)
 	else:
 		active = [k for k in np.argsort(-sm) if sm[k] > 1e-6]
-		keep = active[: max(1, math.ceil(len(active) / 2))] if active else []
+		cut = min(1.0, max(0.0, float(P.Symbolcutoff) / 100.0))
+		keep = active[: max(1, math.ceil(len(active) * (1.0 - cut) - 1e-9))] if active else []
 		tot = float(sum(sm[k] for k in keep)) or 1.0
 		shares = [float(sm[k]) / tot for k in keep]
 	want = None
 	if keep:
 		q = [max(1, int(round(x * 20))) for x in shares]          # shares in 5 % steps
 		qs = [x / sum(q) for x in q]
-		want = dict(symbols=[int(k) for k in keep], shares=qs,
+		want = dict(symbols=[int(k) for k in keep], shares=qs, names=[rows[k]['name'] for k in keep],
 					label=' · '.join(f"{rows[k]['name']} {round(100 * x)}%" for k, x in zip(keep, qs)),
 					sig=(tuple(int(k) for k in keep), tuple(q)))
 

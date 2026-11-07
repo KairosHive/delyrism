@@ -2,7 +2,7 @@
 //
 // One point per figure (from tiles_layout.py via choptoPOP): P = position in
 // pixels from the bottom-left, Sy = size in pixels, Layer = 0 current mosaic /
-// 1 the one fading out.  Writes P (drifted) and Color (premultiplied).
+// 1 the one fading out.  Writes P (drifted) and Color (straight alpha; geo_tiles premultiplies).
 //
 // Never cut a figure: the distance-to-graph field (glsl_carve, fraction of the
 // screen height) is read at 9 points spread over the figure's footprint; the
@@ -16,6 +16,8 @@
 //   uRes  (width px, height px, current-mosaic weight, previous-mosaic weight)
 //   uFade (padding as fraction of the height, fade curve, 0, 0)
 //   uCol  (r, g, b, 0)
+//   uPer  repeat period of the pattern: p1 (x, y), p2 (x, y) in px — the drift
+//         is wrapped in these lattice coordinates so the pattern never runs out
 
 void main()
 {
@@ -24,7 +26,10 @@ void main()
 		return;
 	vec3 p = TDIn_P();
 	vec2 res = uRes.xy;
-	vec2 px = p.xy + mod(uTile.zw, vec2(max(1.0, uTile.x)));
+	mat2 per = mat2(uPer.xy, uPer.zw);
+	if (abs(determinant(per)) < 1.0)
+		per = mat2(vec2(max(1.0, uTile.x), 0.0), vec2(0.0, max(1.0, uTile.x)));
+	vec2 px = p.xy + per * fract(inverse(per) * uTile.zw);
 	float s = abs(TDIn_Sy());
 
 	float d = 1e9;
@@ -45,5 +50,5 @@ void main()
 	float alpha = clamp(vis * w * uTile.y, 0.0, 1.0);
 
 	P[id] = vec3(px, 0.0);
-	Color[id] = vec4(uCol.rgb * alpha, alpha);              // premultiplied
+	Color[id] = vec4(uCol.rgb, alpha);              // TD premultiplies in the shader (instancecolorpremult)
 }

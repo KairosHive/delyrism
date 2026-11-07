@@ -157,8 +157,11 @@ def _ray_phis(info: Dict, theta: float) -> List[float]:
 
 
 def compose(infos: Dict[int, Dict], symbols: Sequence[int], shares: Sequence[float],
-            seed: int = 0, density: float = 0.16) -> Dict:
-    """→ {items: [(symbol, x, y, scale, rot_deg, mirrored)], achieved: {symbol: share}}"""
+            seed: int = 0, density: float = 0.16, maxsize: float = 0.125) -> Dict:
+    """→ {items: [(symbol, x, y, scale, rot_deg, mirrored)], achieved: {symbol: share}}
+
+    maxsize caps every figure's scale (fraction of the tile side); the
+    structure (arm spacing, rosette radii) keeps its unscaled proportions."""
     rng = np.random.default_rng(seed)
     cv = _Canvas(infos)
     target = {k: float(w) for k, w in zip(symbols, shares)}
@@ -170,6 +173,7 @@ def compose(infos: Dict[int, Dict], symbols: Sequence[int], shares: Sequence[flo
         return sorted(cands, key=lambda k: -key[k])
 
     def put(k: int, x: float, y: float, s: float, M: np.ndarray) -> bool:
+        s = min(s, maxsize)
         n = cv.place(k, x, y, s, M)
         if n:
             ink[k] += n * s * s * infos[k]["fill"]

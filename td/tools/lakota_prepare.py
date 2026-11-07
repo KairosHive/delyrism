@@ -265,5 +265,44 @@ def main() -> None:
     sheet.save(os.path.join(ROOT, "preview_tilings.png"))
 
 
+# ------------------------------------------------------------------ mosaics
+MOSAIC_MAX = 10         # any cutoff of the activated symbols (never both EARTH drawings → at most 10)
+BAYER4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+
+
+def mosaics() -> None:
+    """Common lattice for every set of up to MOSAIC_MAX symbols (never both EARTH drawings).
+
+    The dilated masks of the set are overlaid at the canvas centre (the
+    envelope); the densest upright lattice of the envelope lets any symbol of
+    the set occupy any cell without touching a neighbour.  Written to
+    mosaics.tsv keyed by the sorted image names joined with '+'."""
+    from itertools import combinations
+    names = [name for _, name in SYMBOLS]
+    dil = {}
+    for name in names:
+        canvas = to_canvas(clean(os.path.join(RAW, f"{name}.png")), SEARCH)
+        r = max(1, int(round(GAP * SEARCH / 2)))
+        dil[name] = ndimage.binary_dilation(canvas > 0.5, iterations=r)
+    rows, t0 = [], __import__("time").time()
+    for k in range(1, MOSAIC_MAX + 1):
+        for combo in combinations(sorted(names), k):
+            if "earth_square" in combo and "earth_triangle" in combo:
+                continue
+            env = np.zeros_like(next(iter(dil.values())))
+            for name in combo:
+                env |= dil[name]
+            res = best_lattice(forbidden(env, env), float(env.sum()), 1, SEARCH)
+            rows.append(("+".join(combo), res["a"] / SEARCH, 0.0, res["s"] / SEARCH, -res["b"] / SEARCH))
+        print(f"  sets of {k}: done ({len(rows)} total, {__import__('time').time() - t0:.0f}s)", flush=True)
+    with open(os.path.join(ROOT, "mosaics.tsv"), "w") as f:
+        f.write("key\tv1x\tv1y\tv2x\tv2y\n")
+        for key, *v in rows:
+            f.write(key + "\t" + "\t".join(f"{x:.6f}" for x in v) + "\n")
+    print(f"wrote {len(rows)} mosaic lattices", flush=True)
+
+
 if __name__ == "__main__":
+    if "--mosaics" in sys.argv:
+        sys.exit(mosaics())
     sys.exit(main())
