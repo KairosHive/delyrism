@@ -21,6 +21,23 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000 npm --prefix web/frontend run dev
 # open http://localhost:3000
 ```
 
+### Local realtime stack (Windows · NVIDIA GPU · TouchDesigner)
+
+The `realtime` branch streams the live Δ-graph over OSC into a TouchDesigner
+patch (`td/delyrism_particles.toe`: GPU particles, the Lakota symbol mosaic,
+a spoken voice with live effects).  Everything is set up from this repo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup.ps1   # uv envs (.venv, .venv-tts), Node, npm, TD agent skills
+powershell -ExecutionPolicy Bypass -File scripts/run.ps1     # backend :8000 · frontend :3000 · TTS :8010 · TouchDesigner
+```
+
+Only TouchDesigner 2025.x is installed by hand.  Models (Hugging Face
+embedders, Chatterbox-Turbo, MediaPipe) download on first use; the voice
+references are in `web/tts/voices/` (regenerate with `web/tts/make_voices.py`),
+the symbol assets in `td/assets/lakota/`.  TDMCP (TouchDesigner ↔ agent bridge)
+is embedded in the patch; `.mcp.json` points Claude Code at it.
+
 For Cloudflare-backed embedders + LLMs, set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. Or pick the local `sentence-transformer` backend in the sidebar for fully-offline use. Railway deployment: [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md).
 
 ## What it does

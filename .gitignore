@@ -34,3 +34,7 @@ td/*.[0-9]*.toe
 td/Backup/
 .venv-tts/
 td/runtime/
+
+# Local agent tooling: TDMCPSkills are fetched by scripts/setup.ps1; local Claude settings
+.claude/skills/td-*/
+.claude/settings.local.json

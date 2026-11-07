@@ -1,0 +1,4 @@
+# uv overrides for the local realtime stack (.venv, see scripts/setup.ps1).
+# requirements.txt keeps sentence-transformers < 3 for the Railway / Streamlit
+# build; the local stack runs transformers ≥ 5.22 (PE-AV), which needs ≥ 5.
+sentence-transformers>=5
