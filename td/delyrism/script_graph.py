@@ -16,6 +16,18 @@ GROUPS = {
 	                   ('alive', 'alive'), ('fade', 'fade'), ('src', 'src'), ('dst', 'dst')]),
 }
 FRAME = ['seq', 'time', 'nnodes', 'nedges', 'graphseq', 'queryactive', 'awake']
+
+# Particle palette: symbol i (/delyrism/node/sym) takes colour i mod 10, in
+# place of the web app's palette (/delyrism/node/r|g|b).  Controls › Look ›
+# "TD Palette" switches back to the web colours.
+PALETTE_HEX = ['#D8961F', '#C56A3D', '#4D88D3', '#629843', '#1397AE',
+               '#BC6A7F', '#C850B5', '#7B70F4', '#AB2966', '#FFBDE7']
+PALETTE = np.array([[int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5)] for h in PALETTE_HEX], dtype=np.float32)
+
+
+def _use_palette():
+	c = op.Controls if hasattr(op, 'Controls') else None
+	return not (c is not None and hasattr(c.par, 'Tdpalette') and not c.par.Tdpalette.eval())
 BOUNDS = ['xmin', 'ymin', 'xmax', 'ymax']
 
 
@@ -30,11 +42,17 @@ def onCook(scriptOp):
 	n = len(frame.get(f'{prefix}/{attrs[0][0]}', ()))
 	# a CHOP needs at least one sample: an empty graph is one invisible (fade 0) row
 	scriptOp.numSamples = max(1, n)
+	cols = {}
 	for src, name in attrs:
 		vals = np.zeros(max(1, n), dtype=np.float32)
 		a = frame.get(f'{prefix}/{src}', ())
 		if n and len(a) == n:
 			vals[:] = a
+		cols[name] = vals
+	if group == 'nodes' and _use_palette():
+		rgb = PALETTE[np.mod(cols['sym'].astype(np.int64), len(PALETTE))]
+		cols['r'], cols['g'], cols['b'] = rgb[:, 0].copy(), rgb[:, 1].copy(), rgb[:, 2].copy()
+	for name, vals in cols.items():
 		scriptOp.appendChan(name).vals = vals
 
 
