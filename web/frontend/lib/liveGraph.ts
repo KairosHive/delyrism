@@ -223,7 +223,7 @@ export const useLive = create<LiveState>((set, get) => ({
   contraction: 0.7,
   damping: 8,
   stiffness: 40,
-  repulsion: 40000,
+  repulsion: 60000,
   unlinked: 6000,
   threshold: 0.55,
 
@@ -302,12 +302,18 @@ export const useLive = create<LiveState>((set, get) => ({
   set: (k, v) => set({ [k]: v } as any),
 }));
 
+/** The Live tab's own default for the number of strongest Δ edges (the
+ *  Explorer keeps its own sidebar value). */
+export const LIVE_TOP_ABS_EDGES = 15;
+
 /** Δ-graph params mirrored from the Explorer sidebar, so the live graph
- *  starts out identical to the one in the Explorer tab. */
+ *  starts out like the one in the Explorer tab — except the edge count, which
+ *  is the Live default (or whatever was set with the Live slider, so a
+ *  reconnect doesn't reset it). */
 export function explorerDeltaParams(): Partial<LiveParams> {
   const s = useSidebar.getState();
   return {
-    top_abs_edges: s.topAbsEdges,
+    top_abs_edges: useLive.getState().params?.top_abs_edges ?? LIVE_TOP_ABS_EDGES,
     min_abs_delta: s.minAbsDelta,
     within_symbol: s.withinSymbolEdges,
     connected_only: s.connectedOnly,

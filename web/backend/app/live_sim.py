@@ -38,8 +38,9 @@ import numpy as np
 
 # LiveDeltaGraph.tsx
 BASE_DIST = 80.0
-SHORT_DIST = 34.0
+SHORT_DIST = 60.0     # minimum spring length: related nodes stay close, never on top of each other
 # springSim.ts
+RADIAL_INNER, RADIAL_OUTER = 70.0, 280.0
 SUBSTEP_HZ = 240.0
 SLEEP_ENERGY = 0.25   # mean v² (px²/s²) below which the sim counts as quiet
 SLEEP_AFTER = 0.5     # seconds of quiet before it sleeps
@@ -49,9 +50,9 @@ FADE_OUT = 0.9
 
 SHAPE_DEFAULTS: Dict[str, float] = dict(
     # liveGraph.ts store defaults
-    focus=1.6, contraction=0.7, damping=8.0, stiffness=40.0, repulsion=40000.0, unlinked=6000.0,
+    focus=1.6, contraction=0.7, damping=8.0, stiffness=40.0, repulsion=60000.0, unlinked=6000.0,
     # springSim.ts params not exposed in the UI
-    center=2.0, radial=6.0,
+    center=2.0, radial=6.0, minsep=44.0, collide=160.0,
 )
 
 
@@ -402,6 +403,8 @@ class LiveSim:
                 F = p["repulsion"] / (D2 + 400.0) / Dd
                 if p["unlinked"] > 0:
                     F = F + not_adj * (p["unlinked"] / (D2 + 2500.0))
+                # collision: firm push below the minimum separation
+                F = F + np.where(Dd < p["minsep"], p["collide"] * (p["minsep"] - Dd) / Dd, 0.0)
                 np.fill_diagonal(F, 0.0)
                 ax[A] -= (F * DX).sum(axis=1)
                 ay[A] -= (F * DY).sum(axis=1)
@@ -411,7 +414,7 @@ class LiveSim:
             if self.query_active:
                 r = np.hypot(self.x[A], self.y[A])
                 r = np.where(r == 0, 1e-6, r)
-                target = 40.0 + (1.0 - self.rel[A]) * 240.0
+                target = RADIAL_INNER + (1.0 - self.rel[A]) * (RADIAL_OUTER - RADIAL_INNER)
                 f = p["radial"] * (target - r) / r
                 ax[A] += f * self.x[A]
                 ay[A] += f * self.y[A]

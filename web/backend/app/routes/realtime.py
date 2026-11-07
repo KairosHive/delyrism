@@ -264,7 +264,21 @@ from delyrism.pose import (  # noqa: E402
     PoseStream, PoseStyle, encode_mp4, iter_frames, render_clip, render_frame,
 )
 from ..live_sim import LiveSim  # noqa: E402
-from ..osc_bridge import bridge as osc, frame_messages  # noqa: E402
+from ..osc_bridge import bridge as osc, frame_messages, mixed  # noqa: E402
+from .. import speech  # noqa: E402
+
+
+# ---- spoken word (TTS → TouchDesigner) — see app/speech.py ------------------
+
+@router.get("/speech")
+def speech_status() -> Dict[str, Any]:
+    return speech.cfg.status()
+
+
+@router.post("/speech")
+def speech_configure(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Patch the voice: {enabled, delay, url, repeat}."""
+    return speech.cfg.configure(**cfg)
 
 
 # ---- OSC output (TouchDesigner) — format documented in app/osc_bridge.py ----
@@ -282,7 +296,7 @@ def osc_configure(cfg: Dict[str, Any]) -> Dict[str, Any]:
 _GRAPH_DEFAULTS: Dict[str, Any] = dict(
     strategy="gate", beta=1.2, gate="relu", tau=0.3, within_symbol_softmax=True,
     gamma=0.5, prompt_template="{sent}, {desc}", pool_type="avg", pool_w=0.7,
-    membership_alpha=0.0, top_abs_edges=30, min_abs_delta=0.01, within_symbol=False,
+    membership_alpha=0.0, top_abs_edges=15, min_abs_delta=0.01, within_symbol=False,
     connected_only=True, sign_filter="up", sym_filter=None,
 )
 _SHIFT_KEYS = ("strategy", "beta", "gate", "tau", "within_symbol_softmax", "gamma",
@@ -557,6 +571,40 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "layout_source": "browser" if sim.client_fresh(time.perf_counter()) else "server-sim",
         "browser_fps": round(sim.client_fps, 1), "awake": sim.awake, "nodes": len(sim.ids),
         "context": state["context"][:60]})
+    speak: Dict[str, Any] = {"task": None, "last": None}
+
+    async def speak_later() -> None:
+        """Debounced voice: `speech.cfg.delay` s after the last text-query edit,
+        speak the word with the highest query relevance (if it changed)."""
+        try:
+            await asyncio.sleep(speech.cfg.delay)
+            for _ in range(60):           # let the query embedding + relevance settle
+                if not state["query_dirty"] and not state["graph_dirty"]:
+                    break
+                await asyncio.sleep(0.05)
+            if not speech.cfg.enabled or state["query_kind"] != "text" or state["vq"] is None:
+                return
+            rel = state.get("rel_prev") or {}
+            if not rel:
+                return
+            word = max(rel, key=rel.get)
+            if word == speak["last"] and not speech.cfg.repeat:
+                return
+            res = await asyncio.to_thread(speech.synthesize, word)
+            if not res:
+                return
+            speak["last"] = word
+            if osc.is_owner(osc_token):
+                osc.send([mixed("/delyrism/speak", word, res["path"], float(res["duration"]))])
+            await ws.send_json({"type": "spoken", "word": word, "duration": res["duration"]})
+        except asyncio.CancelledError:
+            pass
+
+    def schedule_speak() -> None:
+        if speak["task"] is not None:
+            speak["task"].cancel()
+        speak["task"] = asyncio.create_task(speak_later())
+
     await ws.send_json({"type": "ready", "params": state["params"],
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
                         "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
@@ -630,7 +678,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["rel_prev"] = None
                 state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
                 state["query_dirty"] = True
+                schedule_speak()          # restarts the 1 s timer on every edit
             elif t == "query_clear":
+                if speak["task"] is not None:
+                    speak["task"].cancel()
+                speak["last"] = None
                 state["vq"] = None
                 state["pending"] = None
                 state["rel_prev"] = None
@@ -785,6 +837,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     finally:
         for t in tasks:
             t.cancel()
+        if speak["task"] is not None:
+            speak["task"].cancel()
         osc.unregister(osc_token)
         if state["pose"] is not None:
             await asyncio.to_thread(state["pose"].close)

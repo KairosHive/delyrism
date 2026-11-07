@@ -6,6 +6,9 @@
 # We collect the messages of the frame in progress and only publish them on
 # /delyrism/end, so the CHOPs never see a half-received frame.
 #
+# /delyrism/speak (a separate event: the query's top word, synthesised by the
+# TTS service) loads the WAV into audiofilein_speak and plays it.
+#
 # Published to the parent COMP's storage as 'frame' (dict: 'node/x' → tuple
 # of args, …), then the script CHOPs are cooked.  Labels / symbols /
 # context / query arrive about once a second and on every node-order change;
@@ -18,6 +21,9 @@ def onReceiveOSC(dat, rowIndex, message, byteData, timeStamp, address, args, pee
 	if not address.startswith(_ADDR):
 		return
 	key = address[len(_ADDR):]
+	if key == 'speak':                 # event, not part of a frame bundle
+		_speak(args)
+		return
 	pending = dat.storage.setdefault('pending', {})
 	if key == 'frame':
 		pending.clear()
@@ -35,6 +41,22 @@ def onReceiveOSC(dat, rowIndex, message, byteData, timeStamp, address, args, pee
 			o.cook(force=True)
 	if 'node/label' in frame:
 		_write_labels(frame)
+
+
+def _speak(args):
+	"""/delyrism/speak s word s wav-path f seconds — play the synthesised word
+	(audiofilein_speak → audiodevout_speak, volume / mute on op.Controls)."""
+	if len(args) < 2:
+		return
+	word, path = str(args[0]), str(args[1])
+	a = op('audiofilein_speak')
+	if a is not None:
+		a.par.file = path
+		a.par.cuepulse.pulse()
+	try:
+		op.Controls.par.Lastspoken = word
+	except Exception:
+		pass
 
 
 def _write_labels(frame):

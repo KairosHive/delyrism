@@ -38,12 +38,17 @@ export interface SimParams {
   center: number;          // central spring toward the origin (1/s²)
   radial: number;          // query radial spring strength (1/s²)
   radialOn: boolean;       // whether the radial target follows relevance
+  minSep: number;          // collision: pairs closer than this (px) are pushed apart …
+  collide: number;         // … by collide · (minSep − d)  (1/s²) — keeps related nodes from overlapping
 }
+
+/** Query radial target: relevant nodes settle on an inner ring, unrelated ones further out. */
+export const RADIAL_INNER = 70, RADIAL_OUTER = 280;
 
 export class SpringSim {
   nodes: SimNode[] = [];
   links: SimLink[] = [];
-  params: SimParams = { stiffness: 40, damping: 8, repulsion: 9000, unlinked: 6000, center: 2, radial: 6, radialOn: false };
+  params: SimParams = { stiffness: 40, damping: 8, repulsion: 9000, unlinked: 6000, center: 2, radial: 6, radialOn: false, minSep: 44, collide: 160 };
   awake = true;
   private sleepTimer = 0;
   private adjLinks: SimLink[] | null = null;   // links array the adjacency was built from
@@ -106,6 +111,7 @@ export class SpringSim {
           const d = Math.sqrt(d2);
           let f = q / (d2 + 400) / d;                    // softened 1/r² (no blow-up at contact)
           if (adj && !adj[i * n + j]) f += qu / (d2 + 2500);   // unlinked: softened 1/r, acts further out
+          if (d < p.minSep) f += p.collide * (p.minSep - d) / d; // collision: firm push below minSep
           ax[i] -= f * dx; ay[i] -= f * dy;
           ax[j] += f * dx; ay[j] += f * dy;
         }
@@ -116,7 +122,7 @@ export class SpringSim {
         ax[i] -= p.center * N.x; ay[i] -= p.center * N.y;
         if (p.radialOn) {
           const r = Math.hypot(N.x, N.y) || 1e-6;
-          const target = 40 + (1 - N.rel) * 240;
+          const target = RADIAL_INNER + (1 - N.rel) * (RADIAL_OUTER - RADIAL_INNER);
           const f = p.radial * (target - r) / r;
           ax[i] += f * N.x; ay[i] += f * N.y;
         }

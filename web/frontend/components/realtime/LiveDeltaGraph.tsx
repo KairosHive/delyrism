@@ -13,7 +13,7 @@ import { SymbolLegend } from "@/components/explorer/SymbolLegend";
  * the springs' rest lengths directly:
  *
  *   overlap(e) = sqrt(rel(u) · rel(v))          rel = sharpened query relevance
- *   rest(e)    = lerp(long, short, overlap)     short ≈ 34 px, long grows with contraction
+ *   rest(e)    = lerp(long, short, overlap)     short = 60 px, long grows with contraction
  *
  * and a radial spring pulls relevant nodes inward.  Node objects persist
  * across graph updates so context edits morph the layout instead of
@@ -24,7 +24,7 @@ type VNode = SimNode & { label: string; color: string; symbol: string; weight: n
 type VLink = SimLink & { value: number; sign: "up" | "down"; delta: number; overlap: number };
 
 const BASE_DIST = 80;
-const SHORT_DIST = 34;
+const SHORT_DIST = 60;   // minimum spring length: related nodes stay close, never on top of each other
 
 export function LiveDeltaGraph() {
   const [wrapRef, w] = useMeasure();

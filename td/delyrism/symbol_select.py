@@ -1,8 +1,10 @@
 # Script CHOP: which Lakota symbol tiles the background.
 #
-# Activation of each symbol from the live graph:
-#     Σ over its nodes  (Actsizefloor + size) · fade · (query ? Actqueryfloor + (1−Actqueryfloor)·rel : 1)
-# eased with Symbollag.  The top symbol wins, but only switches when it beats the
+# Score of each symbol = its best node in the live graph:
+#     no query : the largest node        max size  (Σ|Δ|, the browser's node radius)
+#     query    : the brightest node      max rel   (the browser's node opacity under a query)
+# Nodes fading out of the graph don't count.  Scores are eased with Symbollag.
+# The top symbol wins, but only switches when it beats the
 # current one by Symbolmargin and the current one has been up for Symbolhold
 # seconds; switches crossfade over Symbolfade.  Symbolpin forces one symbol.
 #
@@ -57,16 +59,15 @@ def onCook(scriptOp):
 	act = np.zeros(K)
 	if n and K:
 		g = lambda c, d=0.0: N[c].numpyArray()[:n] if N.chan(c) else np.full(n, d)  # noqa: E731
-		sym, size, fade, rel = g('sym', -1), g('size'), g('fade'), g('rel')
-		qf = float(P.Actqueryfloor)
-		w = (float(P.Actsizefloor) + size) * fade
-		if qa:
-			w = w * (qf + (1.0 - qf) * rel)
+		sym, size, rel, alive = g('sym', -1), g('size'), g('rel'), g('alive', 1)
+		score = rel if qa else size
 		for i in range(n):
+			if alive[i] < 0.5:
+				continue
 			s = int(sym[i])
 			k = idx_of.get(names[s]) if 0 <= s < len(names) else None
 			if k is not None:
-				act[k] += w[i]
+				act[k] = max(act[k], float(score[i]))
 
 	prev_act = _s['act']
 	if prev_act is None or len(prev_act) != K:
