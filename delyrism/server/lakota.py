@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-_PATH = Path(__file__).resolve().parents[3] / "delyrism" / "structures" / "lakota.json"
+_PATH = Path(__file__).resolve().parents[1] / "structures" / "lakota.json"     # ships with the package
 LAKOTA: Dict[str, List[str]] = json.loads(_PATH.read_text(encoding="utf-8"))
 NAMES: List[str] = list(LAKOTA)
 _UPPER = {n.upper(): k for k, n in enumerate(NAMES)}

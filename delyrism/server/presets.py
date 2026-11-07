@@ -4,8 +4,8 @@ import json
 import os
 from typing import Dict, List
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-_PRESETS_DIR = os.path.join(_REPO_ROOT, "delyrism", "structures")
+# the symbol structures ship inside the package (delyrism/structures/)
+_PRESETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "structures")
 
 
 def list_presets() -> List[str]:

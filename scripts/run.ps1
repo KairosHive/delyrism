@@ -29,7 +29,7 @@ function Launch($title, $cmd) {
     Start-Process powershell -ArgumentList '-NoExit', '-Command', $full
 }
 
-Launch 'backend' '& .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000 --app-dir web/backend'
+Launch 'backend' '& .\.venv\Scripts\python.exe -m delyrism.server --port 8000'
 if (-not $NoFrontend) {
     Launch 'frontend' "`$env:Path = '$root\.venv\Scripts;' + `$env:Path; `$env:NEXT_PUBLIC_API_BASE = 'http://localhost:8000'; npm --prefix web/frontend run dev"
 }

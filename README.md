@@ -13,12 +13,26 @@ A FastAPI + Next.js stack. Slider tweaks are instant; backend memoises embedding
 ```bash
 conda create -n delyrism python=3.10 -y && conda activate delyrism
 pip install -r requirements.txt -r web/backend/requirements.txt
+pip install -e ".[server,live,vectorize,topology,media]"
 cd web/frontend && npm install && cd ../..
 
 # two terminals
-uvicorn app.main:app --reload --port 8000 --app-dir web/backend
+python -m delyrism.server --port 8000
 NEXT_PUBLIC_API_BASE=http://localhost:8000 npm --prefix web/frontend run dev
 # open http://localhost:3000
+```
+
+### As a package
+
+`delyrism` is pip-installable (`pyproject.toml`): the engine, the FastAPI
+backend as `delyrism.server` (`python -m delyrism.server`, or the
+`delyrism-server` command) and `symbol_vectorizer`.  An installation embeds
+live delyrism by starting the server with a live profile and building its
+space in one call — see [docs/LIVE_API.md](docs/LIVE_API.md).
+
+```bash
+uv pip install "delyrism[server,live,vectorize] @ git+https://github.com/KairosHive/delyrism@realtime"
+python -m delyrism.server --port 8000 --profile live_profile.json --warmup
 ```
 
 ### Local realtime stack (Windows · NVIDIA GPU · TouchDesigner)

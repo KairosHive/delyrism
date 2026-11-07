@@ -265,9 +265,10 @@ from delyrism.pose import (  # noqa: E402
     PoseStream, PoseStyle, encode_mp4, iter_frames, render_clip, render_frame,
 )
 from ..live_sim import LiveSim  # noqa: E402
-from ..osc_bridge import bridge as osc, frame_messages, mixed  # noqa: E402
+from ..osc_bridge import bridge as osc, frame_messages, mixed, sim_frame  # noqa: E402
 from .. import speech  # noqa: E402
 from .. import lakota  # noqa: E402
+from .. import profile as live_profile  # noqa: E402
 
 
 # ---- spoken word (TTS → TouchDesigner) — see app/speech.py ------------------
@@ -621,20 +622,23 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         await ws.close(code=4404)
         return
 
+    prof = live_profile.current()
     state: Dict[str, Any] = {
-        "context": "", "params": dict(_GRAPH_DEFAULTS),
+        "context": "", "params": {**_GRAPH_DEFAULTS, **{k: v for k, v in prof.graph.items() if k in _GRAPH_DEFAULTS}},
         "query_text": "", "query_kind": "text",     # text | audio | image | video | av
         "vq": None,                                 # active query vector
         "pending": None,                            # latest (kind, payload) not yet embedded
-        "audio_smoothing": 0.5,                     # EMA on successive media vectors (before scoring)
-        "rel_smoothing": 0.0,                       # EMA on the relevance activations (after scoring)
+        "audio_smoothing": 0.5 if prof.audio_smoothing is None else float(prof.audio_smoothing),   # EMA on successive media vectors (before scoring)
+        "rel_smoothing": 0.0 if prof.rel_smoothing is None else float(prof.rel_smoothing),         # EMA on the relevance activations (after scoring)
         "rel_prev": None,                           # previous smoothed relevance (per node id)
         "graph_dirty": False, "query_dirty": False,
         "pose": None,                               # PoseStream, made on the first pose frame
         "pose_frame": None,                         # latest camera jpeg not yet tracked
         "pose_lm": [],                              # browser landmark frames not yet appended (all kept)
         "pose_drawn": 0.0,                          # last preview time (one per tracked batch, ≤ 75 per second)
-        "pose_opts": dict(_POSE_DEFAULTS),
+        "pose_opts": {**_POSE_DEFAULTS, **{k: v for k, v in prof.pose.items() if k in _POSE_DEFAULTS}},
+        "lm_t": 0.0,                                # perf_counter of the last landmark frame
+        "sim_hz": 0.0,                              # JSON stream of the layout to this client (0 = off)
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
     wake = asyncio.Event()
@@ -642,6 +646,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     emb = space.embedder
     # server-side twin of the browser's spring layout → OSC (see live_sim.py)
     sim = LiveSim()
+    if prof.shape:
+        sim.set_shape(dict(prof.shape))
     sim.lakota_names = list(lakota.NAMES)       # uniform background until the first graph
     osc_token = object()
     osc.register(osc_token, lambda: {
@@ -730,7 +736,9 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         asyncio.create_task(asyncio.to_thread(speech.mood_matrix, space))
     asyncio.create_task(asyncio.to_thread(_lakota_safe, lakota.affinity, space))   # Lakota prototypes, once per space
 
-    await ws.send_json({"type": "ready", "params": state["params"],
+    await ws.send_json({"type": "ready", "params": state["params"], "shape": dict(sim.shape),
+                        "pose_opts": dict(state["pose_opts"]), "symbols": list(space.symbols),
+                        "motion": prof.motion.model_dump(),
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
                         "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
                         "video_capable": bool(getattr(emb, "video_capable", False)),
@@ -789,6 +797,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     pose_wake.set()
                     continue
                 if buf and buf[0] == _LANDMARK_KIND and len(buf) >= 21:
+                    state["lm_t"] = time.perf_counter()
                     state["pose_lm"].append(_parse_landmarks(bytes(buf[1:])))
                     del state["pose_lm"][:-120]            # never more than ~4 s behind
                     pose_wake.set()
@@ -807,6 +816,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             except json.JSONDecodeError:
                 continue
             t = m.get("type")
+            if t == "sim":
+                # subscribe to the server's layout as JSON frames (the preview of
+                # what TouchDesigner draws); hz 0 = off.  Not an input either.
+                state["sim_hz"] = float(np.clip(float(m.get("hz") or 0.0), 0.0, 60.0))
+                continue
             if t == "layout":
                 # the browser's own node positions — what the user actually sees.
                 # Not an input, so it does not claim the OSC output.
@@ -1023,8 +1037,24 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         t_start = last = time.perf_counter()
         last_send = last_labels = 0.0
         seen = (-1, -1)                       # (order_version, owner_epoch) at last label send
+        last_sim = last_motion = 0.0
+        sim_seq = 0
+        mot = prof.motion
         while True:
             now = time.perf_counter()
+            # server-side movement cadence (profile.motion.auto): describe the
+            # last window every `refresh` s while landmarks are streaming
+            if (mot.auto and state["pose"] is not None and now - state["lm_t"] < 1.0
+                    and now - last_motion >= mot.refresh):
+                last_motion = now
+                state["pending"] = ("motion", (float(mot.window), mot.level, float(mot.contrast), float(mot.relative)))
+                state["query_dirty"] = True
+                wake.set()
+            if state["sim_hz"] > 0 and now - last_sim >= 1.0 / state["sim_hz"]:
+                if sim.awake or sim.fading or now - last_sim >= 0.25:
+                    last_sim = now
+                    await ws.send_json(sim_frame(sim, sim_seq, now - t_start, osc.scale))
+                    sim_seq += 1
             # while the browser streams its layout, mirror it (physics paused,
             # fades still run); once it goes quiet, continue from its last state
             sim.step(now - last, physics=not sim.client_fresh(now))

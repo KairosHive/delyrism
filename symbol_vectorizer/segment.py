@@ -54,8 +54,14 @@ class Segmentation:
     notes: List[str] = field(default_factory=list)
 
 
-def load_rgb(path: str, work_size: int) -> Tuple[np.ndarray, float, Tuple[int, int]]:
-    img = ImageOps.exif_transpose(Image.open(path))
+def load_rgb(path, work_size: int) -> Tuple[np.ndarray, float, Tuple[int, int]]:
+    """`path`: an image file, a PIL image, or an RGB / RGBA uint8 array (H, W, 3|4)."""
+    if isinstance(path, np.ndarray):
+        img = Image.fromarray(path.astype(np.uint8) if path.dtype != np.uint8 else path)
+    elif isinstance(path, Image.Image):
+        img = path
+    else:
+        img = ImageOps.exif_transpose(Image.open(path))
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")
         bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
@@ -102,7 +108,8 @@ def stroke_width(mask: np.ndarray) -> float:
     return float(2 * np.median(v)) if v.size else 1.0
 
 
-def segment(path: str, p: Optional[SegmentParams] = None) -> Segmentation:
+def segment(path, p: Optional[SegmentParams] = None) -> Segmentation:
+    """`path`: an image file, a PIL image, or an RGB uint8 array."""
     p = p or SegmentParams()
     notes: List[str] = []
     img, scale, src_size = load_rgb(path, p.work_size)
@@ -118,7 +125,8 @@ def segment(path: str, p: Optional[SegmentParams] = None) -> Segmentation:
     ink = cv2.morphologyEx(ink.astype(np.uint8), cv2.MORPH_CLOSE,
                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))) > 0
     if ink.sum() == 0:
-        raise ValueError(f"{path}: no ink found (try lowering --chroma-hi / --dark-hi)")
+        src = path if isinstance(path, (str, bytes)) or hasattr(path, "__fspath__") else "image"
+        raise ValueError(f"{src}: no ink found (try lowering --chroma-hi / --dark-hi)")
 
     # components: drop border-touching ones (photo edges, table shadows) and specks
     pw = stroke_width(ink)

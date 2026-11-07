@@ -14,18 +14,12 @@ workers since the engine holds large numpy state.
 from __future__ import annotations
 import hashlib
 import json
-import sys
 import os
 import threading
 from functools import lru_cache
 from typing import Any, Dict, Optional, Tuple
 
-# Make the existing `delyrism/` package importable.
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-
-from delyrism import SymbolSpace, TextEmbedder  # noqa: E402
+from delyrism import SymbolSpace, TextEmbedder
 
 
 # The engine knows only these primitive backend ids:

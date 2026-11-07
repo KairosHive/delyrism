@@ -168,11 +168,37 @@ def _render_preview(seg, layers, strokes, fill_shapes, size: int = 360) -> np.nd
 
 def vectorize_image(path: str, out_dir: str, params: Optional[Params] = None,
                     name: Optional[str] = None) -> Dict:
-    """Vectorize one drawing; returns its JSON record."""
+    """Vectorize one drawing into `out_dir/<name>/`; returns its JSON record."""
+    name = name or os.path.splitext(os.path.basename(path))[0]
+    res = vectorize_array(path, params, name, source=os.path.abspath(path))
+    d = os.path.join(out_dir, name)
+    os.makedirs(d, exist_ok=True)
+    record, files = res["record"], res["record"]["files"]
+    with open(os.path.join(d, files["svg"]), "w", encoding="utf-8") as f:
+        f.write(res["svg"])
+    with open(os.path.join(d, files["lines_svg"]), "w", encoding="utf-8") as f:
+        f.write(res["lines_svg"])
+    with open(os.path.join(d, files["png"]), "wb") as f:
+        f.write(res["png"])
+    with open(os.path.join(d, f"{name}.json"), "w", encoding="utf-8") as f:
+        json.dump(record, f, separators=(",", ":"))
+    record["_preview"] = res["preview"]
+    return record
+
+
+def vectorize_array(image, params: Optional[Params] = None, name: str = "symbol",
+                    source: Optional[str] = None) -> Dict:
+    """Vectorize one drawing in memory — nothing is written.
+
+    `image`: an RGB / RGBA uint8 array (H, W, 3|4), a PIL image or a file path.
+    Returns {"svg": str (filled outlines), "lines_svg": str (centre-line
+    strokes), "png": bytes (the cropped drawing, transparent background),
+    "record": dict (geometry, palette, stats — what <name>.json holds),
+    "preview": RGB uint8 array (the three-panel check image)}.
+    Raises ValueError when no ink is found."""
     params = params or Params()
     tp = params.trace
-    name = name or os.path.splitext(os.path.basename(path))[0]
-    seg = segment(path, params.segment)
+    seg = segment(image, params.segment)
     layers = _layers(seg, tp)
     strokes, fills = centerlines(seg.labels, len(seg.palette), seg.pen_width, tp.fill_factor)
     fill_shapes = []
@@ -181,14 +207,10 @@ def vectorize_image(path: str, out_dir: str, params: Optional[Params] = None,
         if m.any():
             fill_shapes.append((c, outline_shapes(m, tp.fit_error, tp.outline_sigma)))
 
-    d = os.path.join(out_dir, name)
-    os.makedirs(d, exist_ok=True)
     files = {"svg": f"{name}.svg", "lines_svg": f"{name}_lines.svg", "png": f"{name}.png"}
-    with open(os.path.join(d, files["svg"]), "w", encoding="utf-8") as f:
-        f.write(_outline_svg(seg, layers, name))
-    with open(os.path.join(d, files["lines_svg"]), "w", encoding="utf-8") as f:
-        f.write(_lines_svg(seg, strokes, fill_shapes, tp, name))
-    cv2.imwrite(os.path.join(d, files["png"]), cv2.cvtColor(_rgba(seg), cv2.COLOR_RGBA2BGRA))
+    svg = _outline_svg(seg, layers, name)
+    lines_svg = _lines_svg(seg, strokes, fill_shapes, tp, name)
+    ok, png = cv2.imencode(".png", cv2.cvtColor(_rgba(seg), cv2.COLOR_RGBA2BGRA))
 
     fr = _Frame(seg.ink)
     r = tp.json_decimals
@@ -211,7 +233,7 @@ def vectorize_image(path: str, out_dir: str, params: Optional[Params] = None,
     record = {
         "schema": SCHEMA,
         "id": name,
-        "source": os.path.abspath(path),
+        "source": source,
         "files": files,
         "frame": "ink box centred on (0, 0), longest side spans [-1, 1], y up",
         "aspect": round(float((np.ptp(xs) + 1) / (np.ptp(ys) + 1)), 4),
@@ -230,10 +252,8 @@ def vectorize_image(path: str, out_dir: str, params: Optional[Params] = None,
         },
         "notes": seg.notes,
     }
-    with open(os.path.join(d, f"{name}.json"), "w", encoding="utf-8") as f:
-        json.dump(record, f, separators=(",", ":"))
-    record["_preview"] = _render_preview(seg, layers, strokes, fill_shapes)
-    return record
+    return {"svg": svg, "lines_svg": lines_svg, "png": png.tobytes() if ok else b"",
+            "record": record, "preview": _render_preview(seg, layers, strokes, fill_shapes)}
 
 
 def vectorize_folder(src: str, out_dir: str, params: Optional[Params] = None, verbose: bool = True) -> List[Dict]:

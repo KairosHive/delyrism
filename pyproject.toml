@@ -1,0 +1,89 @@
+# Delyrism as an installable package:
+#
+#   delyrism            the SymbolSpace engine (graph construction, Δ-graphs, traversal,
+#                       pose / motion), structures/*.json shipped as package data
+#   delyrism.server     the FastAPI backend incl. the live Δ-graph socket, OSC to
+#                       TouchDesigner, speech client, live profile  (python -m delyrism.server)
+#   symbol_vectorizer   hand-drawn symbols → vector graphics + space JSON
+#
+#   uv pip install -e ".[server,live,vectorize]"            (from a checkout)
+#   uv pip install "delyrism[server,live,vectorize] @ git+https://github.com/KairosHive/delyrism@realtime"
+#
+# torch is left unpinned on purpose: install the build you want (e.g. CUDA from
+# https://download.pytorch.org/whl/cu128) before or alongside this package.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "delyrism"
+version = "0.2.0"
+description = "Symbol spaces, context Δ-graphs and the live delyrism engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "KairosHive" }]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "networkx>=3.2",
+    "matplotlib>=3.7",
+    "pandas>=2.0",
+    "pillow>=10.0",
+    "requests>=2.31",
+    "torch>=2.6",
+    "transformers>=5.22",
+    "sentence-transformers>=5",
+    "accelerate>=1.0",
+    "tokenizers>=0.15",
+    "safetensors>=0.4.5",
+    "sentencepiece>=0.2",
+    "protobuf>=4.25.3",
+]
+
+[project.optional-dependencies]
+# the HTTP / WebSocket API (python -m delyrism.server)
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "python-multipart>=0.0.9",
+    "umap-learn>=0.5.5",
+]
+# live movement queries: pose drawing / motion on the server (landmarks come from the browser)
+live = [
+    "opencv-contrib-python>=4.8",
+    "mediapipe>=0.10.14",
+]
+# symbol_vectorizer
+vectorize = [
+    "opencv-contrib-python>=4.8",
+]
+# Topology tab (persistent homology)
+topology = ["ripser>=0.6.7"]
+# audio / image / video embedders (CLAP, CLIP, PE-AV) and audio contexts
+media = [
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "open-clip-torch>=2.24",
+    "timm>=0.9.12",
+    "ftfy",
+    "regex",
+    "tqdm",
+]
+all = ["delyrism[server,live,vectorize,topology,media]"]
+
+[project.scripts]
+delyrism-server = "delyrism.server.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/KairosHive/delyrism"
+
+[tool.setuptools.packages.find]
+include = ["delyrism*", "symbol_vectorizer*"]
+exclude = ["delyrism.legacy*"]
+
+[tool.setuptools.package-data]
+delyrism = ["structures/*.json"]

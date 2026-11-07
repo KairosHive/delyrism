@@ -8,9 +8,9 @@ and symbols + descriptors to the space JSON for live Delyrism.
 Standalone: depends on numpy, scipy, networkx, pillow and
 opencv-contrib-python (for thinning), and on nothing in delyrism.
 """
-from .core import Params, TraceParams, vectorize_folder, vectorize_image
+from .core import Params, TraceParams, vectorize_array, vectorize_folder, vectorize_image
 from .segment import SegmentParams, segment
 from .space import build_space, load_descriptors
 
-__all__ = ["Params", "SegmentParams", "TraceParams", "segment", "vectorize_image",
+__all__ = ["Params", "SegmentParams", "TraceParams", "segment", "vectorize_array", "vectorize_image",
            "vectorize_folder", "build_space", "load_descriptors"]

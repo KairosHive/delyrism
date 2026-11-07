@@ -166,6 +166,36 @@ def frame_messages(sim, seq: int, t: float, scale: float, meta: Dict[str, Any],
     return msgs
 
 
+def sim_frame(sim, seq: int, t: float, scale: float) -> Dict[str, Any]:
+    """The same frame as JSON for a browser preview (WS {"type": "sim"}):
+    exactly the layout TouchDesigner receives, columnar, in output units
+    (≈ −1…1, +y up).  Nodes are descriptors; `sym` indexes `symbols`."""
+    k = 1.0 / max(1e-9, scale)
+    n = len(sim.ids)
+    rel = sim.rel if sim.query_active else np.zeros(n)
+    r3 = lambda a: [round(float(v), 3) for v in a]
+    lak = sim.lakota_activation() if hasattr(sim, "lakota_activation") else None
+    return {
+        "type": "sim", "seq": int(seq), "t": round(float(t), 3), "graph_seq": int(sim.graph_seq),
+        "query_active": bool(sim.query_active), "awake": bool(sim.awake),
+        "symbols": list(sim.symbols),
+        "nodes": {
+            "id": list(sim.ids), "uid": [int(u) for u in sim.uid], "sym": [int(v) for v in sim.sym],
+            "x": r3(sim.x * k), "y": r3(-sim.y * k),
+            "rel": r3(rel), "size": r3(sim.size), "fade": r3(sim.fade),
+            "alive": [bool(a) for a in sim.alive],
+            "color": ["#%02x%02x%02x" % tuple(int(round(255 * float(c))) for c in rgb) for rgb in sim.rgb],
+        },
+        "edges": {
+            "src": [int(v) for v in sim.e_a], "dst": [int(v) for v in sim.e_b],
+            "weight": r3(sim.e_weight), "delta": r3(sim.e_delta), "sign": [int(v) for v in sim.e_sign],
+            "overlap": r3(sim.e_overlap if sim.query_active else np.zeros(len(sim.e_a))),
+            "fade": r3(sim.e_fade), "alive": [bool(a) for a in sim.e_alive],
+        },
+        "lakota": None if lak is None else {"names": list(getattr(sim, "lakota_names", [])), "activation": r3(lak)},
+    }
+
+
 # ---------------------------------------------------------------- transport
 def _env_bool(name: str, default: bool) -> bool:
     v = os.environ.get(name)

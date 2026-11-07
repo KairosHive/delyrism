@@ -53,4 +53,9 @@ COPY --from=frontend-builder /build/out ./web/frontend/out
 # Railway / Heroku-style $PORT, fall back to 8000 for local runs
 ENV PORT=8000
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --app-dir web/backend"]
+# the package itself (delyrism engine + delyrism.server), without re-resolving deps
+COPY pyproject.toml README.md ./
+COPY symbol_vectorizer ./symbol_vectorizer
+RUN pip install --no-cache-dir --no-deps -e .
+
+CMD ["sh", "-c", "python -m delyrism.server --host 0.0.0.0 --port ${PORT}"]

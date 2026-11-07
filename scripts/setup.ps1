@@ -2,7 +2,8 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 [-NoTts] [-NoSkills]
 #
-#   .venv       Python 3.11 - torch cu128 - engine + FastAPI backend - Node 22
+#   .venv       Python 3.11 - torch cu128 - the delyrism package (engine +
+#               delyrism.server, editable) - Node 22
 #               (nodejs-wheel, so no system Node is needed) - frontend npm install
 #   .venv-tts   Python 3.11 - torch 2.6 cu126 - Chatterbox-Turbo TTS service
 #               (its pins clash with the backend, hence a second env)
@@ -32,6 +33,7 @@ if (-not (Test-Path .venv\Scripts\python.exe)) { uv venv --python 3.11 .venv; Ch
 $py = '.venv\Scripts\python.exe'
 uv pip install --python $py torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128; Check
 uv pip install --python $py -r requirements.txt -r web/backend/requirements.txt --override scripts/overrides.txt; Check
+uv pip install --python $py -e '.[server,live,vectorize,topology,media]' --override scripts/overrides.txt; Check
 uv pip install --python $py 'nodejs-wheel>=22,<23'; Check
 
 Step 'frontend (npm install)'
