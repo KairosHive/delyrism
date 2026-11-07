@@ -716,6 +716,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "vq_target": None,                          # transcript: the embedding the query glides toward
         "vq_raw": None,                             # the latest raw query embedding (before habituation / media EMA / glide)
         "hab": _Habituation(),                      # per-kind running mean of media vectors
+        "qgen": 0,                                  # bumped by query / query_clear / transcript: a media
+                                                    # embedding started before the bump is dropped
         "hab_last": None,                           # {"kind", "beta_eff"} of the latest query vector
         "shown": {"context": "", "vctx": None},     # what the layout shows: the graph's context ...
         "scored": {"vq": None, "vq_raw": None, "kind": "text", "text": "", "active": False},   # ... and the scored query
@@ -966,6 +968,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["context"] = str(m.get("text") or "")
                 state["graph_dirty"] = True
             elif t == "query":
+                state["qgen"] += 1
                 state["query_text"] = str(m.get("text") or "")
                 state["query_kind"] = "text"
                 state["pending"] = None
@@ -979,6 +982,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["query_dirty"] = True
                 schedule_speak()          # restarts the 1 s timer on every edit
             elif t == "query_clear":
+                state["qgen"] += 1
                 if speak["task"] is not None:
                     speak["task"].cancel()
                 speak["last"] = speak["top"] = None
@@ -991,6 +995,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["query_text"] = ""
                 state["query_dirty"] = True
             elif t == "transcript":
+                state["qgen"] += 1
                 # spoken text (e.g. a live transcription of the last ~30 s): the
                 # query glides toward its embedding instead of jumping (glide())
                 text = str(m.get("text") or "")
@@ -1083,6 +1088,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             return
         state["pending"] = None
         kind, payload = pend
+        gen = state["qgen"]
         label = None
         if kind == "pose":
             if state["pose"] is None:
@@ -1113,6 +1119,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         else:
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
+        if state["qgen"] != gen:
+            return          # a query / query_clear / transcript arrived while embedding: the result is stale
         state["vq_raw"] = v
         v = _habituate(kind, v)          # image, video, audio, av, pose, motion
         a = state["audio_smoothing"]

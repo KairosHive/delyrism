@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.5.4)
+# Delyrism live API (package `delyrism`, v0.5.5)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -149,7 +149,9 @@ Media queries (the embedder must handle the modality: `modalities` in the
 0x04 av      uint32 LE audio length + audio payload + frames payload   (PE-AV only)
 ```
 
-Each becomes the query (`relevance.kind` = `audio` | `image` | `video` | `av`),
+A media embedding that is still running when a `query`, `query_clear` or
+`transcript` arrives is dropped when it finishes (it does not bring the old
+query back).  Each becomes the query (`relevance.kind` = `audio` | `image` | `video` | `av`),
 blended with the previous media vector by `audio_smoothing`.
 
 **Habituation** (graph params, so `profile.graph` or `{"type": "params"}`;
