@@ -1,4 +1,4 @@
-# Script CHOP: the background mosaic as instances (one sample per figure).
+﻿# Script CHOP: the background mosaic as instances (one sample per figure).
 #
 # Reads the selection published by script_symbol ('mosaic' = {cur, prev, mix})
 # and lays out each mosaic in one of two modes (Controls › Tiling Mode):
@@ -10,15 +10,19 @@
 #               remainder, ≥ 1 each), interleaved by smooth weighted round-robin
 #               and laid onto the 4 × 4 Bayer ranking so each symbol is spread
 #               evenly.  Size: Lattice Symbols per Screen Height, Lattice Spacing.
-#   snowflake — a symmetric procedural composition (mosaic_compose.py, seeded by
-#               the mosaic + Tilevariation, cached) repeated as a wallpaper tile
-#               with mirror edges.  Size: Tiles per Screen Height, Max Symbol Size.
+#   snowflake — one point-symmetric snowflake (D_n) grown around the screen
+#               centre out to the corners (mosaic_compose.py, seeded by the
+#               mosaic + Tilevariation, cached): arms, branches and
+#               sub-branches, every symbol turned with its path.  Controls:
+#               Arms, Symbol Size, Path Gap, Branching.  No drift (it would
+#               move the centre off the graph).
 #
 # Channels (pixels from the bottom-left, before drift):
 #   tx ty  position · rz rotation (deg) · sx sy size (sx < 0 = mirrored)
 #   sym    atlas index · layer 0 = current mosaic, 1 = the one fading out
-# The repeat period of the pattern (p1x p1y p2x p2y, px) is stored as 'period'
-# so glsl_tilefade can wrap the drift; it also does the whole-figure fade.
+# The repeat period of the pattern (p1x p1y p2x p2y, px; zeros = no drift) is
+# stored as 'period' so glsl_tilefade can wrap the drift; it also does the
+# whole-figure fade.
 
 import math
 import os
@@ -42,11 +46,13 @@ def _infos():
 	return _cache['infos']
 
 
-def _snowflake(m, variation, density, maxsize):
-	key = ('snow', m['sig'], variation, round(density, 3), round(maxsize, 3))
+def _snowflake(m, variation, aspect, opts):
+	key = ('snow', m['sig'], variation, round(aspect, 3), opts)
 	if key not in _cache['layouts']:
 		seed = (hash(m['sig']) ^ (variation * 7919)) & 0x7fffffff
-		res = C.compose(_infos(), m['symbols'], m['shares'], seed=seed, density=density, maxsize=maxsize)
+		arms, size, gap, branching = opts
+		res = C.compose(_infos(), m['symbols'], m['shares'], seed=seed, aspect=aspect,
+						arms=arms, size=size, gap=gap, branching=branching)
 		_cache['layouts'][key] = np.array([(k, x, y, s, phi, -1.0 if mir else 1.0)
 										   for k, x, y, s, phi, mir in res['items']], np.float32).reshape(-1, 6)
 		if len(_cache['layouts']) > 24:
@@ -54,27 +60,19 @@ def _snowflake(m, variation, density, maxsize):
 	return _cache['layouts'][key]
 
 
-def _expand_tile(L, layer, W, H, T, corner):
-	"""Repeat tile items over the screen plus margin (the drift shifts by up to one tile)."""
+def _place_flake(L, layer, W, H):
+	"""Snowflake items (screen-height units, centre origin) → pixels."""
+	out = np.empty((len(L), len(CHANS)), np.float32)
 	if not len(L):
-		return np.zeros((0, len(CHANS)), np.float32)
-	o = T / 2.0 if corner else 0.0                     # tile corner (or centre) at the screen centre
-	i0, i1 = int(np.floor((-W / 2 - o) / T)) - 2, int(np.ceil((W / 2 - o) / T)) + 1
-	j0, j1 = int(np.floor((-H / 2 - o) / T)) - 2, int(np.ceil((H / 2 - o) / T)) + 1
-	out = []
-	for i in range(i0, i1 + 1):
-		for j in range(j0, j1 + 1):
-			cx, cy = W / 2 + o + i * T, H / 2 + o + j * T
-			blk = np.empty((len(L), len(CHANS)), np.float32)
-			blk[:, 0] = cx + L[:, 1] * T
-			blk[:, 1] = cy + L[:, 2] * T
-			blk[:, 2] = L[:, 4]
-			blk[:, 3] = L[:, 3] * T * L[:, 5]
-			blk[:, 4] = L[:, 3] * T
-			blk[:, 5] = L[:, 0]
-			blk[:, 6] = layer
-			out.append(blk)
-	return np.concatenate(out)
+		return out
+	out[:, 0] = W / 2 + L[:, 1] * H
+	out[:, 1] = H / 2 + L[:, 2] * H
+	out[:, 2] = L[:, 4]
+	out[:, 3] = L[:, 3] * H * L[:, 5]
+	out[:, 4] = L[:, 3] * H
+	out[:, 5] = L[:, 0]
+	out[:, 6] = layer
+	return out
 
 
 # ------------------------------------------------------------------ lattice
@@ -176,15 +174,13 @@ def onCook(scriptOp):
 					period = per
 			_publish(scriptOp, parts, period, key)
 	else:
-		T = H / max(0.1, float(P.Tilecount))
-		variation, density = int(P.Tilevariation), float(P.Tiledensity)
-		maxsize = float(P.Tilemaxsize)
-		corner = P.Tileorigin.eval() == 'corner'
-		key = ('snow', sigs, W, H, round(T, 2), variation, round(density, 3), round(maxsize, 3), corner)
+		variation = int(P.Tilevariation)
+		opts = (int(P.Snowarms), round(float(P.Snowsize), 4), round(float(P.Snowgap), 3),
+				round(float(P.Snowbranch), 3))
+		key = ('snow', sigs, W, H, variation, opts)
 		if key != _cache['key']:
-			parts = [_expand_tile(_snowflake(m, variation, density, maxsize), layer, W, H, T, corner)
-					 for layer, m in layers]
-			_publish(scriptOp, parts, (T, 0.0, 0.0, T), key)
+			parts = [_place_flake(_snowflake(m, variation, W / H, opts), layer, W, H) for layer, m in layers]
+			_publish(scriptOp, parts, (0.0, 0.0, 0.0, 0.0), key)
 
 	scriptOp.clear()
 	out = _cache['out']

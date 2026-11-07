@@ -12,12 +12,13 @@
 //     opacity = ease(t)^curve
 //
 // Uniforms (auto-declared): sCarve (distance field)
-//   uTile (tile size px, opacity, drift x px, drift y px)
+//   uTile (unused, opacity, drift x px, drift y px)
 //   uRes  (width px, height px, current-mosaic weight, previous-mosaic weight)
 //   uFade (padding as fraction of the height, fade curve, 0, 0)
 //   uCol  (r, g, b, 0)
 //   uPer  repeat period of the pattern: p1 (x, y), p2 (x, y) in px — the drift
-//         is wrapped in these lattice coordinates so the pattern never runs out
+//         is wrapped in these lattice coordinates so the pattern never runs out;
+//         all zeros = no drift
 
 void main()
 {
@@ -27,9 +28,9 @@ void main()
 	vec3 p = TDIn_P();
 	vec2 res = uRes.xy;
 	mat2 per = mat2(uPer.xy, uPer.zw);
-	if (abs(determinant(per)) < 1.0)
-		per = mat2(vec2(max(1.0, uTile.x), 0.0), vec2(0.0, max(1.0, uTile.x)));
-	vec2 px = p.xy + per * fract(inverse(per) * uTile.zw);
+	vec2 px = p.xy;
+	if (abs(determinant(per)) >= 1.0)                       // zero period = a centred figure: no drift
+		px += per * fract(inverse(per) * uTile.zw);
 	float s = abs(TDIn_Sy());
 
 	float d = 1e9;
