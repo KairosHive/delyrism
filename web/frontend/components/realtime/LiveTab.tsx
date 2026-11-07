@@ -100,7 +100,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
     // the dance is drawn, then embedded by whichever visual tower the space has
     pose: poseCapable && (videoCapable || imageCapable || backend === "peav" || backend === "clip"),
     // movement words go through the text tower, which every backend has
-    motion: true,
+    motion: poseCapable,     // movement words need the server's pose stack (local installs, not the hosted site)
   };
   // show text + every live mode this space supports; if it supports none,
   // show the three generic ones greyed out so the hint explains what to build

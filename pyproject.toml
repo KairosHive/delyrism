@@ -62,6 +62,12 @@ live = [
 vectorize = [
     "opencv-contrib-python>=4.8",
 ]
+# the hosted website (Railway): API + Topology + Builder's PDF mining, CPU only,
+# no camera / movement / audio models (those are local: `live`, `media`)
+web = [
+    "delyrism[server,topology]",
+    "pymupdf>=1.24",
+]
 # delyrism.graphemes (symbols and movement in one wavelet basis)
 graphemes = [
     "opencv-contrib-python>=4.8",
@@ -80,7 +86,7 @@ media = [
     "regex",
     "tqdm",
 ]
-all = ["delyrism[server,live,vectorize,graphemes,topology,media]"]
+all = ["delyrism[server,web,live,vectorize,graphemes,topology,media]"]
 
 [project.scripts]
 delyrism-server = "delyrism.server.__main__:main"

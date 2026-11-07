@@ -22,46 +22,32 @@ RUN npm run build
 
 
 # ---------- 2. runtime image -------------------------------------------------
-# 3.11: transformers >= 5.22 (PE-AV, Voxtral) requires Python >= 3.11
+# 3.11: transformers >= 5.22 requires Python >= 3.11
 FROM python:3.11-slim
-
-# system libs the engine needs (audio, video, build tools for any source
-# distributions pip pulls in; libgl1 + libglib2.0-0 for the OpenCV that
-# mediapipe brings)
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        libsndfile1 ffmpeg git curl build-essential libgl1 libglib2.0-0 \
- && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# python deps — CPU-only torch wheels keep the image manageable
-COPY requirements.txt ./
-COPY web/backend/requirements.txt ./web/backend/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cpu \
- && pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir -r web/backend/requirements.txt
+# Python deps — the package's `web` extra (pyproject.toml): API, Topology,
+# Builder's PDF mining, on CPU torch.  No camera / movement / audio models:
+# MediaPipe, OpenCV, CLAP / CLIP / PE-AV, librosa and the TTS / transcription
+# stack are for local installs only.  Installed against stub packages first so
+# this layer stays cached when only the code changes.
+COPY pyproject.toml README.md ./
+RUN mkdir -p delyrism symbol_vectorizer  && touch delyrism/__init__.py symbol_vectorizer/__init__.py  && pip install --no-cache-dir --upgrade pip  && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu  && pip install --no-cache-dir ".[web]"  && pip uninstall -y delyrism  && rm -rf delyrism symbol_vectorizer build *.egg-info
 
-# source code
-COPY web/backend ./web/backend
+# source code, then the package itself (deps already in place)
 COPY delyrism ./delyrism
+COPY symbol_vectorizer ./symbol_vectorizer
+COPY web/backend ./web/backend
+RUN pip install --no-cache-dir --no-deps -e .
 
 # static export from stage 1
 COPY --from=frontend-builder /build/out ./web/frontend/out
 
-# Railway / Heroku-style $PORT, fall back to 8000 for local runs
-ENV PORT=8000
-# The hosted site has no TouchDesigner and no TTS service next to it: no OSC
-# stream, no spoken word.  The live graph itself (context x text query) runs
-# as usual; the installation features (OSC, voice, local GPU embedders,
-# transcription) are for local runs.
-ENV DELYRISM_OSC=0     DELYRISM_SPEAK=0
+# Railway / Heroku-style $PORT, fall back to 8000 for local runs.
+# The hosted site has no TouchDesigner, no TTS service and no GPU next to it:
+# no OSC stream, no spoken word, no audio / image / video embedders in the
+# model list.  The live graph itself (context x text query) runs as usual.
+ENV PORT=8000     DELYRISM_OSC=0     DELYRISM_SPEAK=0     DELYRISM_MEDIA=0
 EXPOSE 8000
-# the package itself (delyrism engine + delyrism.server), without re-resolving deps
-COPY pyproject.toml README.md ./
-COPY symbol_vectorizer ./symbol_vectorizer
-RUN pip install --no-cache-dir --no-deps -e .
-
-CMD ["sh", "-c", "python -m delyrism.server --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "python -m delyrism.server --host 0.0.0.0 --port ${PORT} --static /app/web/frontend/out"]

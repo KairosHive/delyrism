@@ -119,7 +119,16 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
 
     @app.get("/backends")
     def backends():
-        """Embedder backends and Cloudflare model names — for the frontend dropdowns."""
+        """Embedder backends and Cloudflare model names — for the frontend dropdowns.
+        DELYRISM_MEDIA=0 (the hosted image) leaves out the audio / image / video
+        models (CLAP, CLIP, PE-AV): those run on local installs only."""
+        out = _backends()
+        if os.environ.get("DELYRISM_MEDIA", "1").strip().lower() in ("0", "false", "no", "off"):
+            out["embedders"] = [e for e in out["embedders"]
+                                if not (e.get("audio") or e.get("image") or e.get("video") or e.get("av"))]
+        return out
+
+    def _backends():
         return {
             "embedders": [
                 {"id": "cloudflare-bge-m3", "label": "Cloudflare · BGE-M3 (multilingual)", "remote": True, "audio": False, "dim": 1024},

@@ -489,7 +489,9 @@ _POSE_SIZE = 224        # the embedders' input side
 
 def _pose_capable() -> bool:
     import importlib.util
-    return importlib.util.find_spec("mediapipe") is not None
+    # MediaPipe (server-side tracking) and OpenCV (the pose drawing): the `live`
+    # extra.  The hosted site installs neither, so its pose / movement modes hide.
+    return all(importlib.util.find_spec(m) is not None for m in ("mediapipe", "cv2"))
 
 
 def _pose_style(opts: Dict[str, Any], size: int) -> PoseStyle:
