@@ -180,7 +180,7 @@ export interface SubgraphEdge { source: string; target: string; weight: number; 
 export interface SubgraphResponse { nodes: SubgraphNode[]; edges: SubgraphEdge[]; }
 
 export interface BackendsResponse {
-  embedders: { id: string; label: string; remote: boolean; audio: boolean; dim: number }[];
+  embedders: { id: string; label: string; remote: boolean; audio: boolean; image?: boolean; video?: boolean; av?: boolean; dim: number }[];
 }
 
 export interface SimilarityResponse {

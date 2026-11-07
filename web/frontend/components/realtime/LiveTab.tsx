@@ -1,6 +1,8 @@
 "use client";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useQuery } from "@tanstack/react-query";
+import { api, type BackendsResponse } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { useLive, useLiveSocket, videoFrameCount, MAX_VIDEO_FRAMES, type QueryMode } from "@/lib/liveGraph";
 import { Slider } from "@/components/ui/Slider";
@@ -91,6 +93,11 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
     set: s.set, camVideo: s.camVideo,
   })));
   const backend = useSidebar((s) => s.embedderBackend);
+  // does this server offer any audio / image / video model?  The hosted site
+  // (DELYRISM_MEDIA=0) lists text embedders only: then the query is text only,
+  // without the greyed hints for modes no model there could serve
+  const backends = useQuery({ queryKey: ["backends"], queryFn: () => api.get<BackendsResponse>("/backends"), staleTime: Infinity });
+  const mediaOffered = (backends.data?.embedders ?? []).some((e) => e.audio || e.image || e.video || e.av);
   const can: Record<QueryMode, boolean> = {
     text: true,
     audio: audioCapable || backend === "clap" || backend === "peav",
@@ -105,7 +112,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   // show text + every live mode this space supports; if it supports none,
   // show the three generic ones greyed out so the hint explains what to build
   const modes: QueryMode[] = (["text", "audio", "image", "video", "av", "pose", "motion"] as QueryMode[]).filter((m) => can[m]);
-  if (modes.length === 1) modes.push("audio", "video", "av");
+  if (modes.length === 1 && mediaOffered) modes.push("audio", "video", "av");
   const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP" : "";
   const usesMic = queryMode === "audio" || queryMode === "av";
   const usesCam = queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose" || queryMode === "motion";
@@ -129,7 +136,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
         <span>⌕ query</span>
         <span className="font-normal normal-case tracking-normal text-ink-500">pulls its overlap together · stretches the rest</span>
         <span className="ml-auto flex items-center gap-2 normal-case tracking-normal">
-          <span className="inline-flex overflow-hidden rounded-md border border-ink-700 text-[10px]">
+          {modes.length > 1 && <span className="inline-flex overflow-hidden rounded-md border border-ink-700 text-[10px]">
             {modes.map((m) => (
               <button
                 key={m}
@@ -140,7 +147,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
                 {m === "text" || m === "motion" || !prefix ? MODE_LABEL[m] : `${prefix} · ${MODE_LABEL[m]}`}
               </button>
             ))}
-          </span>
+          </span>}
           <span className="flex items-center gap-1.5 text-[10px] text-ink-500">
             <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
             <span className="font-mono">{status}{status === "ready" ? ` · ${nEdges} edges${queryActive ? ` · ${queryKind} query on` : ""}` : ""}</span>
