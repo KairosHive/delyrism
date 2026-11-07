@@ -48,6 +48,9 @@ COPY --from=frontend-builder /build/out ./web/frontend/out
 # The hosted site has no TouchDesigner, no TTS service and no GPU next to it:
 # no OSC stream, no spoken word, no audio / image / video embedders in the
 # model list.  The live graph itself (context x text query) runs as usual.
-ENV PORT=8000     DELYRISM_OSC=0     DELYRISM_SPEAK=0     DELYRISM_MEDIA=0
+# The container sees every host core (48 on Railway) under a quota of a few
+# CPUs: without caps BLAS, OpenMP, numba and torch start one thread per host
+# core and get throttled (a 144×1024 SVD took 11 s instead of 15 ms).
+ENV PORT=8000     DELYRISM_OSC=0     DELYRISM_SPEAK=0     DELYRISM_MEDIA=0     OMP_NUM_THREADS=4     OPENBLAS_NUM_THREADS=4     MKL_NUM_THREADS=4     NUMBA_NUM_THREADS=4
 EXPOSE 8000
 CMD ["sh", "-c", "python -m delyrism.server --host 0.0.0.0 --port ${PORT} --static /app/web/frontend/out"]

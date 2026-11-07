@@ -77,6 +77,44 @@ def _process_stats() -> Dict[str, Any]:
     return out
 
 
+def _cpu_quota() -> Optional[float]:
+    """CPUs this container may use (cgroup v2 cpu.max / v1 cfs quota), None if unlimited."""
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()[:2]
+        return None if quota == "max" else int(quota) / int(period)
+    except (OSError, ValueError):
+        pass
+    try:
+        q = int(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
+        p = int(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
+        return None if q <= 0 else q / p
+    except (OSError, ValueError):
+        return None
+
+
+def cap_threads() -> Optional[int]:
+    """Fit the math libraries' thread pools to the container's CPU quota when
+    no *_NUM_THREADS variable says otherwise.  A pool sized to the host's
+    cores under a small quota is throttled into slowness."""
+    if os.environ.get("OMP_NUM_THREADS") or os.environ.get("OPENBLAS_NUM_THREADS"):
+        return None
+    quota = _cpu_quota()
+    if not quota or quota >= (os.cpu_count() or 1):
+        return None
+    n = max(1, min(4, int(quota)))
+    try:
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(n)
+    except ImportError:
+        pass
+    try:
+        import torch
+        torch.set_num_threads(n)
+    except Exception:  # noqa: BLE001 — torch is optional on the hosted image's path
+        pass
+    return n
+
+
 def _default_static_dir() -> Optional[Path]:
     env = os.environ.get("DELYRISM_STATIC_DIR")
     if env:
@@ -93,6 +131,7 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
     in the background (/healthz says ready=false until it is loaded)."""
     if profile is not None:
         live_profile.apply(profile)
+    cap_threads()
 
     app = FastAPI(
         title="Delyrism API",
