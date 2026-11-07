@@ -315,7 +315,7 @@ _GRAPH_DEFAULTS: Dict[str, Any] = dict(
     habituation=0.0, habituation_tau=60.0,
 )
 _HAB_KEYS = ("habituation", "habituation_tau")     # scoring only: changing them does not rebuild the graph
-_HAB_KINDS = ("image", "video", "audio", "av", "pose")
+_HAB_KINDS = ("image", "video", "audio", "av", "pose", "text", "speech", "motion")
 
 
 def _hab_beta(params: Dict[str, Any], kind: str) -> float:
@@ -716,7 +716,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "vq_target": None,                          # transcript: the embedding the query glides toward
         "vq_raw": None,                             # the latest raw query embedding (before habituation / media EMA / glide)
         "hab": _Habituation(),                      # per-kind running mean of media vectors
-        "hab_last": None,                           # {"kind", "beta_eff"} of the latest media vector
+        "hab_last": None,                           # {"kind", "beta_eff"} of the latest query vector
         "shown": {"context": "", "vctx": None},     # what the layout shows: the graph's context ...
         "scored": {"vq": None, "vq_raw": None, "kind": "text", "text": "", "active": False},   # ... and the scored query
         "transcript": prof.transcript.model_dump(), # {tau, hz} latent smoothing of spoken-text queries
@@ -849,12 +849,20 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         state["rel_prev"] = rel if rel else None
         return rel
 
+    def _habituate(key: str, v: np.ndarray) -> np.ndarray:
+        """Habituate a raw query vector under the mean `key` (see _Habituation)."""
+        prm = state["params"]
+        out, b = state["hab"].apply(key, v, _hab_beta(prm, key), float(prm.get("habituation_tau") or 60.0),
+                                    time.perf_counter())
+        state["hab_last"] = {"kind": key, "beta_eff": b}
+        return out
+
     def _query_now() -> Dict[str, Any]:
         """The query as it is about to be scored (kept with the layout for snapshots)."""
         vq = state["vq"]
         return {"vq": vq, "vq_raw": state["vq_raw"], "kind": state["query_kind"],
                 "text": state["query_text"], "active": vq is not None,
-                "hab": state["hab_last"] if state["query_kind"] in _HAB_KINDS else None}
+                "hab": state["hab_last"]}
 
     def _snapshot(req_id: Any, fmt: str) -> Dict[str, Any]:
         """One recording sample (WS {"type": "snapshot"}): the layout as the
@@ -963,8 +971,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["pending"] = None
                 state["rel_prev"] = None
                 state["vq_target"] = None
-                state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
-                state["vq_raw"] = state["vq"]
+                raw = await asyncio.to_thread(_text_vec, space, state["query_text"])
+                state["vq_raw"] = raw
+                state["vq"] = None if raw is None else _habituate("text", raw)
+                if raw is None:
+                    state["hab_last"] = None
                 state["query_dirty"] = True
                 schedule_speak()          # restarts the 1 s timer on every edit
             elif t == "query_clear":
@@ -974,6 +985,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["vq"] = None
                 state["vq_target"] = None
                 state["vq_raw"] = None
+                state["hab_last"] = None
                 state["pending"] = None
                 state["rel_prev"] = None
                 state["query_text"] = ""
@@ -993,8 +1005,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     state["pending"] = None
                 state["query_kind"] = "speech"
                 state["query_text"] = text
-                state["vq_target"] = target
                 state["vq_raw"] = target
+                # habituate the target, then the glide moves toward it; typed
+                # text sent as a transcript ("source": "typed") has its own mean
+                target = _habituate("text" if m.get("source") == "typed" else "speech", target)
+                state["vq_target"] = target
                 if state["vq"] is None or float(state["transcript"]["tau"]) <= 0:
                     state["vq"] = target      # first words (or no smoothing): start there
                 state["query_dirty"] = True
@@ -1099,13 +1114,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
         state["vq_raw"] = v
-        if kind in _HAB_KINDS:
-            prm = state["params"]
-            v, b = state["hab"].apply(kind, v, _hab_beta(prm, kind), float(prm.get("habituation_tau") or 60.0),
-                                      time.perf_counter())
-            state["hab_last"] = {"kind": kind, "beta_eff": b}
-        else:
-            state["hab_last"] = None
+        v = _habituate(kind, v)          # image, video, audio, av, pose, motion
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
         # each movement description already sums up a whole window, so it

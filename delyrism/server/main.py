@@ -69,7 +69,7 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
 
     app = FastAPI(
         title="Delyrism API",
-        version="0.5.3",
+        version="0.5.4",
         description="HTTP surface for the SymbolSpace engine and the live Δ-graph.",
     )
 

@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.5.3)
+# Delyrism live API (package `delyrism`, v0.5.4)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -127,7 +127,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 |---|---|
 | `{"type": "context", "text": "…"}` | the dream: rebuilds the Δ-graph (send on every settled edit, ~200 ms debounce is plenty) |
 | `{"type": "query", "text": "…"}` | text query → relevance; speech after `delay` |
-| `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
+| `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20, "source"?: "typed"}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
 | `{"type": "snapshot", "id"?: any, "format"?: "list" \| "b64"}` | one recording sample, answered at once with a `snapshot` message (below). Read-only: does not claim the OSC output |
@@ -155,8 +155,9 @@ blended with the previous media vector by `audio_smoothing`.
 **Habituation** (graph params, so `profile.graph` or `{"type": "params"}`;
 off by default): a camera that always sees the same room keeps lighting the
 same few descriptors, because every frame shares the room (and the modality's
-own offset).  Each socket keeps a running mean `mu` of the raw vectors of each
-media kind (image, video, audio, av, pose) and scores
+own offset); typed and spoken queries drift toward the same few words too.
+Each socket keeps a running mean `mu` of the raw query vectors of each kind
+and scores
 
 ```
 b      = beta_kind · min(1, seconds since mu started / habituation_tau)    (warm-up: first frames are not cancelled)
@@ -166,15 +167,30 @@ mu    ← mu + (1 − exp(−dt / habituation_tau)) · (v − mu)               
 
 | param | default | |
 |---|---|---|
-| `habituation` | `0` | a number = beta for image and video; or a map `{"image": 0.5, "video": 0.5, "audio": 0, "av": 0, "pose": 0}` (missing kinds 0). Clipped to 0…1 |
+| `habituation` | `0` | a map `{"text", "speech", "motion", "image", "video", "audio", "av", "pose": beta}` (missing kinds 0), or a number = beta for image and video only. Clipped to 0…1 |
 | `habituation_tau` | `60` | time constant of the running mean, s |
 
-The mean is tracked for every media kind even while beta is 0 (so switching it
-on starts warm), lives as long as the socket, and survives `query_clear` and
-mode switches.  Changing these params re-scores the next media vector; it
-does not rebuild the graph.  At beta 1 a perfectly static scene leaves only
+Which mean a query uses:
+
+| key | vectors |
+|---|---|
+| `text` | each `query` message, and each `transcript` sent with `"source": "typed"` |
+| `speech` | each other `transcript` target |
+| `motion` | each movement description (after its `contrast` baseline) |
+| `image` · `video` · `audio` · `av` · `pose` | each media / pose vector |
+
+A transcript's target is habituated first and the glide then moves toward the
+habituated target; `query_kind` stays `"speech"` for every transcript.  The
+mean is tracked for every key even while its beta is 0 (so switching it on
+starts warm), updates only when a new vector of that key arrives (dt =
+wall-clock time since the previous one, so after a long pause the mean is
+close to the previous query), lives as long as the socket, and survives
+`query_clear` and mode switches.  Each `query` updates the `text` mean, so a
+client that sends a query on every keystroke habituates to its partial words:
+send on settled edits.  Changing these params applies from the next vector; it
+does not rebuild the graph.  At beta 1 a perfectly static input leaves only
 noise once the mean has caught up; a vector that cancels completely falls back
-to the raw one.  Text, speech and movement-words queries are not habituated.
+to the raw one.
 
 
 Landmarks from the browser tracker (`web/frontend/lib/poseTracker.ts`
@@ -228,7 +244,7 @@ ones still being scored):
  "query_vec": [...] | null,             // the vector the relevance was scored with (after the media EMA / speech glide)
  "query_target": [...] | null,          // the latest raw embedding: = query_vec for text, the transcript's target
                                         // while the glide moves toward it, the newest media vector before habituation and the EMA
- "habituation": {"kind": "image", "beta_eff": 0.5} | null,   // media queries: the warm-up-scaled beta used for the latest vector
+ "habituation": {"kind": "image", "beta_eff": 0.5} | null,   // the mean key and warm-up-scaled beta of the latest query vector
  "nodes": {…the sim frame's node columns…, "relevance": [...]},   // relevance = the scored 0…1 activation;
                                         // rel = the same after the layout's contrast curve; alive=false = fading out
  "edges": {…the sim frame's edge columns…},                       // delta = signed Δ cosine (3 decimals)
