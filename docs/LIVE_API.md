@@ -105,6 +105,9 @@ TTS service at `url`; without it nothing is spoken and nothing fails.
 | GET | `/spaces/{space_id}` | → 200 `{space_id, symbols, descriptors, owners, embedding_dim, color_map}` · 404 unknown (e.g. after a server restart: call `/live/setup` again) |
 | GET | `/spaces/presets/{name}` | → `{name, symbols}` from the shipped structures (`lakota`, `elements`, …) |
 | GET | `/realtime/osc` · POST | OSC status / `{enabled, host, port, hz, scale}` |
+| GET | `/realtime/session/{id}` | a finished session's result |
+| GET | `/realtime/session/{id}/raw` | the recording and its result as one JSON file (download) |
+| POST | `/realtime/session/{id}/story` | `{form?, language?, model?}` → a short text woven from the session's phases (Cloudflare LLM) |
 | GET | `/realtime/speech` · POST | speech status / settings (as in the profile) |
 
 Spaces live in memory: a server restart forgets them (the socket then closes
@@ -128,6 +131,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
 | `{"type": "stt", "keep"?: 30, "language"?: "en", "reset"?: true}` | speech mode: seconds of words kept in the query, the spoken language (omit to detect), forget what was heard |
 | `{"type": "media_center", "on"?: true, "memory"?: 120, "warmup"?: 5, "reset"?: true}` | sound, camera and pose queries are scored after subtracting the mean of the session's recent queries of the same kind (on by default, `memory` s, from the `warmup`-th query). Every sound shares one direction that puts a few words at the top of every query; centering removes it (on 60 nature recordings with Gemini Embedding 2 the top word "storm" fell from 40 to 10 wins). `reset` forgets the history |
+| `{"type": "session_start", "name"?: "…"}` · `{"type": "session_stop"}` | record a **session**: one snapshot a second (the query's relevance over every descriptor, scored as the graph is, with its kind and text) and every event (context with its own relevance, queries, heard and spoken words, movement descriptions, Δ-graph changes). Stopping analyses it (`delyrism/session.py`) and answers `session_result` |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
@@ -175,6 +179,8 @@ description arrives as a `motion` message and becomes the query
 | `motion` | each movement description | `text` (the words, "" when nothing moved or nobody is in frame), `level`, the qualities |
 | `pose` | per tracked batch | `jpeg` (base64 drawing of the dancer with trails), `present` |
 | `heard` | each transcribed speech chunk | `text` (this chunk's words), `transcript` (the rolling words that are the query) |
+| `session` | a session starts recording or is being analysed | `state` ("recording" · "analysing") |
+| `session_result` | the session was analysed | `id`, `saved` (path on a local install, null on the hosted site), `result`: `summary`, `layout` (descriptors on the 2D map), `trajectory` (attention path, dwells, context path), `territory` (time in the top 5 per descriptor, reach, never reached, symbol shares and their stream per minute), `topology` (groups and loops per sliding window, their changes, Δ-graph edges born and dying), `phases` (phases with their words and symbol, recurrence matrix, returns), `words`, `archetypes` (session archetypes), `fingerprint` |
 | `spoken` | a word was spoken | `word`, `duration`, `mood`, `mood_probs` |
 | `sim` | at the subscribed rate while anything moves, 4 Hz once settled | see below |
 | `error` | | `detail` |

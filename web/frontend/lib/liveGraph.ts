@@ -9,7 +9,7 @@
 
 import * as React from "react";
 import { create } from "zustand";
-import { rebuildLostSpace, wsUrl } from "./api";
+import { rebuildLostSpace, wsUrl, type SessionDone } from "./api";
 import { useSidebar } from "./store";
 import type { DeltaEdge } from "./api";
 import { startMicCapture, type MicCapture } from "./liveAudio";
@@ -125,6 +125,10 @@ interface LiveState {
   sendInterval: number;          // ms between embeddings
   audioSmoothing: number;        // server-side EMA on successive media vectors (before scoring)
   relSmoothing: number;          // server-side EMA on the relevance activations (after scoring)
+  sessionState: "idle" | "recording" | "analysing";   // a Live session (delyrism/session.py)
+  sessionStartedAt: number | null;                    // performance.now() at start
+  sessionName: string;
+  sessionResult: SessionDone | null;                  // the last finished session's analysis
   mediaCenter: boolean;          // centre sound / camera queries on the session's mean (removes per-word bias)
   centerMemory: number;          // seconds of past queries in that mean
   centered: boolean;             // the last relevance was centred (warm-up done)
@@ -171,6 +175,9 @@ interface LiveState {
   stopLive: () => void;
   setAudioSmoothing: (v: number) => void;
   setRelSmoothing: (v: number) => void;
+  startSession: (name?: string) => void;
+  stopSession: () => void;
+  closeSessionResult: () => void;
   setMediaCenter: (on: boolean) => void;
   setCenterMemory: (s: number) => void;
   resetCenter: () => void;
@@ -485,6 +492,10 @@ export const useLive = create<LiveState>((set, get) => ({
   sendInterval: 600,
   audioSmoothing: 0.5,
   relSmoothing: 0.6,
+  sessionState: "idle",
+  sessionStartedAt: null,
+  sessionName: "",
+  sessionResult: null,
   mediaCenter: true,
   centerMemory: 120,
   centered: false,
@@ -596,6 +607,17 @@ export const useLive = create<LiveState>((set, get) => ({
     if (cam && tracks(get().queryMode)) void cam.fastShutter(v);
   },
   setRelSmoothing: (v) => { set({ relSmoothing: v }); get()._send?.({ type: "rel_smoothing", value: v }); },
+  startSession: (name = "") => {
+    if (!get()._send) return;
+    set({ sessionState: "recording", sessionStartedAt: performance.now(), sessionName: name });
+    get()._send?.({ type: "session_start", name });
+  },
+  stopSession: () => {
+    if (get().sessionState !== "recording") return;
+    set({ sessionState: "analysing" });
+    get()._send?.({ type: "session_stop" });
+  },
+  closeSessionResult: () => set({ sessionResult: null }),
   setMediaCenter: (on) => { set({ mediaCenter: on }); get()._send?.({ type: "media_center", on }); },
   setCenterMemory: (s) => { set({ centerMemory: s }); get()._send?.({ type: "media_center", memory: s }); },
   resetCenter: () => { set({ centered: false, centerN: 0 }); get()._send?.({ type: "media_center", reset: true }); },
@@ -718,6 +740,12 @@ export function useLiveSocket() {
             centerN: Number(msg.center_n ?? 0),
             ...(msg.kind === "motion" && msg.active ? { motionApplied: { text: String(msg.query ?? ""), at: performance.now() } } : {}),
           }));
+        } else if (msg.type === "session") {
+          if (msg.state === "recording") useLive.setState({ sessionState: "recording" });
+          else if (msg.state === "analysing") useLive.setState({ sessionState: "analysing" });
+        } else if (msg.type === "session_result") {
+          useLive.setState({ sessionState: "idle", sessionStartedAt: null,
+                             sessionResult: { id: msg.id, result: msg.result, saved: msg.saved ?? null } });
         } else if (msg.type === "heard") {
           if (useLive.getState().queryMode !== "speech") return;
           useLive.setState({ heard: String(msg.text ?? ""), transcript: String(msg.transcript ?? "") });
@@ -738,6 +766,8 @@ export function useLiveSocket() {
       sock.onerror = () => useLive.setState({ status: "error" });
       sock.onclose = (ev) => {
         useLive.setState({ status: closed ? "closed" : "connecting", _send: null });
+        if (useLive.getState().sessionState !== "idle")
+          useLive.setState({ sessionState: "idle", sessionStartedAt: null, error: "the session ended with the connection" });
         if (closed) return;
         if (ev.code === 4404) {
           // the server lost the space (restart): rebuild it under the same id,

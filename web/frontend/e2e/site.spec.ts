@@ -127,3 +127,40 @@ test("an audio-capable space offers the microphone in Live", async ({ page }) =>
   await expect(page.getByText(/centred on \d+ queries|nothing varies yet/)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "■ stop" }).click();
 });
+
+test("a Live session records and opens its result panel", async ({ page }) => {
+  test.skip(external, "a 30 s recording against the test server");
+  test.setTimeout(120_000);
+  const problems = watch(page);
+  await build(page);
+  await openTab(page, "Live");
+  await expect(page.getByText(/^ready · \d+ edges/)).toBeVisible();
+  const context = page.getByPlaceholder("a slow fire under ice…");
+  const query = page.getByPlaceholder(/what are you looking for in it/);
+  await context.fill("flooding spirits dancing around floating suns");
+  await page.getByPlaceholder("name (optional)").fill("e2e");
+  await page.getByRole("button", { name: "● Start session" }).click();
+  await expect(page.getByText("recording")).toBeVisible();
+  const steps = [["rain over the river", ""], ["deep water and tears", ""], ["embers, smoke and fury", "a fire in the night"],
+                 ["the forge and the sun", ""], ["wind and open sky", "a storm over the plain"], ["rain over the river", ""]];
+  for (const [q, c] of steps) {
+    if (c) await context.fill(c);
+    await query.fill(q);
+    await page.waitForTimeout(5_000);
+  }
+  await page.getByRole("button", { name: "■ End session" }).click();
+  const panel = page.getByTestId("session-panel");
+  await expect(panel).toBeVisible({ timeout: 60_000 });   // the first session on a fresh server also fits the UMAP map
+  for (const label of ["A · Trajectory", "B · Territory", "C · Topology over time", "D · Phases and returns",
+                       "E · Words", "G · Session archetypes", "H · Fingerprint"])
+    await expect(panel.getByText(label)).toBeVisible();
+  await expect(panel.getByText("embers, smoke and fury")).toBeVisible();          // the words, in order
+  const raw = await page.request.get(await panel.getByRole("link", { name: "↓ raw data" }).getAttribute("href") as string);
+  expect(raw.ok()).toBeTruthy();
+  expect((await raw.json()).raw.events.filter((e: any) => e.type === "query").length).toBeGreaterThanOrEqual(5);
+  await panel.getByRole("button", { name: /weave a text/ }).click();
+  await expect(panel.locator("p.whitespace-pre-wrap")).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 3200 });
+  await panel.screenshot({ path: "test-results/session-panel.png" });
+  expect(problems).toEqual([]);
+});

@@ -35,3 +35,6 @@ offload/
 # Leftovers of the TouchDesigner patch, which now lives in the do-you-dream repo
 td/
 .claude/skills/
+
+# Live sessions saved by local installs
+sessions/

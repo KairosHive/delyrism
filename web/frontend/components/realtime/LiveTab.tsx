@@ -8,6 +8,7 @@ import { Select } from "@/components/ui/Select";
 import { LiveDeltaGraph } from "./LiveDeltaGraph";
 import { PosePanel } from "./PoseQuery";
 import { MotionPanel } from "./MotionQuery";
+import { SessionBar, SessionPanel } from "./SessionPanel";
 
 /**
  * Live tab — the Explorer's Δ-graph driven by two continuously edited
@@ -22,12 +23,14 @@ export function LiveTab() {
   if (!spaceId) return <EmptyState />;
   return (
     <div className="w-full space-y-4">
+      <SessionBar />
       <Inputs />
       <LiveDeltaGraph />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr,1fr]">
         <Overlap />
         <Knobs />
       </div>
+      <SessionPanel />
     </div>
   );
 }

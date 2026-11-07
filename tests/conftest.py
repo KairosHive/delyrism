@@ -7,6 +7,8 @@ import os
 os.environ["DELYRISM_TEST_EMBEDDER"] = "1"      # before the server modules load
 os.environ.setdefault("DELYRISM_OSC", "0")
 os.environ.setdefault("DELYRISM_SPEAK", "0")
+import tempfile
+os.environ["DELYRISM_SESSIONS_DIR"] = tempfile.mkdtemp(prefix="delyrism-sessions-")
 
 import pytest
 from fastapi.testclient import TestClient

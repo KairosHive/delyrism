@@ -362,6 +362,104 @@ def _live_graph(space_id: str, space, context: str, params: Dict[str, Any]) -> D
 CENTER_KINDS = ("audio", "image", "video", "av", "pose")
 
 
+# ---- Live sessions (delyrism/session.py) -------------------------------------
+# A session records one snapshot a second and every event while it runs; when it
+# ends it is analysed, kept here for download and, on local installs, saved to
+# DELYRISM_SESSIONS_DIR (default ./sessions; the hosted image keeps none on disk).
+
+_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SESSIONS_MAX = 24
+
+
+def _sessions_dir():
+    import os
+    from pathlib import Path
+    d = os.environ.get("DELYRISM_SESSIONS_DIR")
+    if d:
+        return Path(d)
+    if os.environ.get("DELYRISM_MEDIA", "1").strip().lower() in ("0", "false", "no", "off"):
+        return None                                # hosted: the download is the copy
+    return Path("sessions")
+
+
+def _session_finish(space, rec) -> Dict[str, Any]:
+    """Analyse a stopped recording, keep it, save it locally.  -> {id, result, saved}"""
+    import uuid
+    from delyrism import session as S
+    from ..util import color_map_to_hex
+    raw = rec.to_raw()
+    try:
+        _model, XY, _ = engine_cache.get_umap_layout(space)
+    except Exception:                               # no umap: the PCA the space already has
+        XY = space._pca.transform(space.D)[:, :2]
+    colors = color_map_to_hex(space.get_symbol_color_dict(palette=engine_cache.get_palette(space)))
+    result = S.analyse(raw, space.D, np.asarray(XY)[:, :2], colors)
+    sid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    _SESSIONS[sid] = {"raw": raw, "result": result, "space_id": rec.space_id}
+    while len(_SESSIONS) > _SESSIONS_MAX:
+        _SESSIONS.pop(next(iter(_SESSIONS)))
+    saved = None
+    d = _sessions_dir()
+    if d is not None:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            f = d / f"session-{sid}.json"
+            f.write_text(S.to_json({"raw": raw, "result": result}), encoding="utf-8")
+            saved = str(f)
+        except OSError as e:
+            print(f"[session] could not save: {e}")
+    return {"id": sid, "result": result, "saved": saved}
+
+
+@router.get("/session/{sid}")
+def session_result(sid: str) -> Dict[str, Any]:
+    if sid not in _SESSIONS:
+        raise HTTPException(status_code=404, detail="unknown session")
+    return {"id": sid, "result": _SESSIONS[sid]["result"]}
+
+
+@router.get("/session/{sid}/raw")
+def session_raw(sid: str):
+    """The recording and its analysis as one JSON file (the session's raw data)."""
+    from fastapi.responses import Response
+    from delyrism import session as S
+    if sid not in _SESSIONS:
+        raise HTTPException(status_code=404, detail="unknown session")
+    body = S.to_json({"raw": _SESSIONS[sid]["raw"], "result": _SESSIONS[sid]["result"]})
+    return Response(body, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="delyrism-session-{sid}.json"'})
+
+
+@router.post("/session/{sid}/story")
+def session_story(sid: str, req: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A short text woven from the session's phases (their words and archetypes, in order)."""
+    import os
+    if sid not in _SESSIONS:
+        raise HTTPException(status_code=404, detail="unknown session")
+    req = req or {}
+    res = _SESSIONS[sid]["result"]
+    phases = (res.get("phases") or {}).get("phases") or []
+    if not phases:
+        raise HTTPException(status_code=400, detail="the session has no phases to tell")
+    beats = "\n".join(f"{i + 1}. ({p['symbol']}) {', '.join(p['words'])}" for i, p in enumerate(phases))
+    form = str(req.get("form") or "prose poem")
+    lang = str(req.get("language") or "English")
+    messages = [
+        {"role": "system", "content": f"You write short {form}s in {lang}. No title, no preamble, no lists."},
+        {"role": "user", "content": "A live session moved through these phases, in order; each is named by the "
+                                    "archetype it leaned toward and its most present words.\n" + beats +
+                                    f"\nWrite one {form} of about 120 words that passes through the phases in order, "
+                                    "using their words as images."},
+    ]
+    if _testing.enabled() and not os.environ.get("CLOUDFLARE_API_TOKEN"):
+        text = " / ".join(", ".join(p["words"][:2]) for p in phases)       # stand-in without credentials
+        return {"story": text, "model": "test-stand-in", "beats": phases}
+    from . import story as _story
+    model = str(req.get("model") or "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+    text = _story._call_cloudflare(messages, model=model, max_tokens=400, temperature=0.85, top_p=0.9)
+    return {"story": text, "model": model, "beats": phases}
+
+
 def _session_center(v: np.ndarray, hist: list, now: float, memory: float, warmup: int):
     """(v minus the mean of the vectors in `hist` from the last `memory` s,
     re-normalised; whether it was centred).  Uncentred until `warmup` vectors."""
@@ -681,6 +779,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     glide_wake = asyncio.Event()
     stt_wake = asyncio.Event()
     center: Dict[str, Any] = {"on": True, "memory": 120.0, "warmup": 5, "hist": {}, "active": False}
+    session: Dict[str, Any] = {"rec": None}
     heard: Dict[str, Any] = {"queue": [], "lines": [], "keep": 30.0, "language": None}
     emb = space.embedder
     # server-side twin of the browser's spring layout → OSC (see live_sim.py)
@@ -742,6 +841,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             speech.cfg.last_mood = mood
             if osc.is_owner(osc_token):
                 osc.send([mixed("/delyrism/speak", word, res["path"], float(res["duration"]), mood["mood"])])
+            note("spoken", word)
             await ws.send_json({"type": "spoken", "word": word, "duration": res["duration"],
                                 "mood": mood["mood"], "mood_probs": mood["probs"]})
         except asyncio.CancelledError:
@@ -791,6 +891,40 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 "query": state["query_text"], "kind": state["query_kind"],
                 "centered": bool(center["active"]),
                 "center_n": len(center["hist"].get(state["query_kind"], []))}
+
+    def _full_relevance() -> Optional[np.ndarray]:
+        """The query's cosine with every descriptor, scored as _score scores the graph."""
+        if state["vq"] is None or graph.get("D1") is None:
+            return None
+        head = _head_for_kind(space, state["query_kind"])
+        D1 = _shifted_for_head(space_id, space, graph, state["context"], state["params"], head)
+        vq, kind = state["vq"], state["query_kind"]
+        if center["on"] and kind in CENTER_KINDS:
+            vq, _ = _session_center(vq, center["hist"].get(kind, []), time.perf_counter(),
+                                    center["memory"], center["warmup"])
+        return np.asarray(D1 @ vq, dtype=np.float32)
+
+    def _context_rel(text: str) -> Optional[list]:
+        try:
+            v = space.ctx_vec(sentence=text, ignore_override=True)
+            return np.round(np.asarray(space.D @ v, dtype=np.float32), 5).tolist() if v is not None else None
+        except Exception:
+            return None
+
+    def note(kind: str, text: str = "", **extra) -> None:
+        """An event in the running session, if any."""
+        if session["rec"] is not None:
+            session["rec"].event(kind, text, **extra)
+
+    async def session_beat() -> None:
+        """One snapshot a second while a session runs."""
+        while True:
+            rec = session["rec"]
+            if rec is not None:
+                rel = await asyncio.to_thread(_full_relevance)
+                if session["rec"] is rec:
+                    rec.snapshot(rel, state["query_kind"], state["query_text"])
+            await asyncio.sleep(1.0)
 
     def _score() -> Dict[str, float]:
         """Relevance of the active query inside the right head, then the
@@ -867,6 +1001,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 text = " ".join(w for _, w in heard["lines"])
                 await ws.send_json({"type": "heard", "text": words, "transcript": text})
                 if words:
+                    note("heard", words)
+                if words:
                     await apply_transcript(text)
 
     async def reader() -> None:
@@ -928,8 +1064,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if t == "context":
                 state["context"] = str(m.get("text") or "")
                 state["graph_dirty"] = True
+                if session["rec"] is not None:
+                    note("context", state["context"], rel=await asyncio.to_thread(_context_rel, state["context"]))
             elif t == "query":
                 state["query_text"] = str(m.get("text") or "")
+                note("query", state["query_text"])
                 state["query_kind"] = "text"
                 state["pending"] = None
                 state["rel_prev"] = None
@@ -966,6 +1105,29 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 continue
             elif t == "audio_smoothing":
                 state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
+            elif t == "session_start":
+                from delyrism.session import SessionRecorder
+                session["rec"] = SessionRecorder(space_id, space.descriptors, space.owner, space.symbols,
+                                                 name=str(m.get("name") or ""))
+                ctx = state["context"]
+                session["rec"].event("context", ctx,
+                                     rel=await asyncio.to_thread(_context_rel, ctx) if ctx.strip() else None)
+                if graph.get("edges"):
+                    session["rec"].event("graph", ctx, edges=[[e["source"], e["target"], e["delta"]] for e in graph["edges"]])
+                await ws.send_json({"type": "session", "state": "recording", "name": session["rec"].name})
+                continue
+            elif t == "session_stop":
+                rec, session["rec"] = session["rec"], None
+                if rec is None:
+                    continue
+                rec.stop()
+                await ws.send_json({"type": "session", "state": "analysing", "snapshots": len(rec.t)})
+                try:
+                    done = await asyncio.to_thread(_session_finish, space, rec)
+                    await ws.send_json({"type": "session_result", **done})
+                except Exception as e:  # noqa: BLE001
+                    await ws.send_json({"type": "error", "detail": f"session analysis: {e}"})
+                continue
             elif t == "media_center":
                 # {"on": bool, "memory": s, "warmup": n, "reset": bool}
                 if "on" in m:
@@ -1056,6 +1218,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             reading = await asyncio.to_thread(_motion_reading, state["pose"], window, level,
                                               _motion_session(state), relative)
             await ws.send_json({"type": "motion", "level": level, **reading})
+            if reading.get("text"):
+                note("motion", reading["text"])
             if not reading["text"]:
                 return          # nothing tracked or nothing moving enough to say: hold the last query
             v = await asyncio.to_thread(_text_vec, space, reading["text"])
@@ -1106,6 +1270,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     await _lakota_update(nodes=True)
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
+                    note("graph", ctx, edges=[[e["source"], e["target"], e["delta"]] for e in graph["edges"]])
                     media_top_changed(rel)
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
@@ -1235,7 +1400,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     tasks = [asyncio.create_task(reader()), asyncio.create_task(worker()),
              asyncio.create_task(pose_loop()), asyncio.create_task(osc_pump()),
-             asyncio.create_task(glide()), asyncio.create_task(stt_loop())]
+             asyncio.create_task(glide()), asyncio.create_task(stt_loop()), asyncio.create_task(session_beat())]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for d in done:

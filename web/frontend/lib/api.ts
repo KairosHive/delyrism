@@ -18,6 +18,11 @@ const BASE =
   process.env.NEXT_PUBLIC_API_BASE
   || (process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : "");
 
+/** HTTP URL for a backend path (links and downloads), same origin rules as `BASE`. */
+export function apiUrl(path: string): string {
+  return `${BASE}${path}`;
+}
+
 /** WebSocket URL for a backend path — same origin rules as `BASE`. */
 export function wsUrl(path: string): string {
   if (BASE) return BASE.replace(/^http/, "ws") + path;
@@ -432,3 +437,28 @@ export interface WordCatalystResponse {
   h2_baseline: number;
   ripser_available: boolean;
 }
+
+
+// ---------- Live sessions (delyrism/session.py) ----------
+
+export interface SessionPoint { t: number; x: number; y: number; kind?: string }
+export interface SessionResult {
+  summary: { duration: number; snapshots: number; active_share: number; kinds: string[]; name: string };
+  layout: { id: string; symbol: string; x: number; y: number; color: string }[];
+  symbols: { id: string; color: string }[];
+  empty?: boolean;
+  words?: { t: number; type: string; text: string }[];
+  trajectory?: { path: SessionPoint[]; dwells: { t0: number; t1: number; x: number; y: number; words: string[] }[];
+                 context_path: (SessionPoint & { text: string })[]; distance: number };
+  territory?: { visits: Record<string, number>; reached: number; never: string[];
+                symbol_share: Record<string, number>; stream: { t0: number; t1: number; shares: number[] }[] };
+  topology?: { windows: { t0: number; t1: number; visited: number; groups: number; loops: number }[];
+               events: { t: number; text: string }[]; scale: number;
+               graph_events: { t: number; born: number; died: number; kept: number; top_born: string[]; top_died: string[] }[] };
+  phases?: { phases: { t0: number; t1: number; words: string[]; symbol: string }[];
+             recurrence: { t: number[]; M: number[][] }; returns: { t: number; to: number; r: number }[] };
+  archetypes?: Record<string, string[]>;
+  fingerprint?: { symbols: string[]; symbol_share: number[]; diversity: number; drift: number; recurrence: number;
+                  phases: number; duration: number };
+}
+export interface SessionDone { id: string; result: SessionResult; saved: string | null }
