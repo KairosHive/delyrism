@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.4)
+# Delyrism live API (package `delyrism`, v0.4.1)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -105,7 +105,7 @@ TTS service at `url`; without it nothing is spoken and nothing fails.
 | POST | `/live/profile` | full profile → the applied profile (422 if invalid) |
 | GET | `/spaces/{space_id}` | → 200 `{space_id, symbols, descriptors, owners, embedding_dim, color_map}` · 404 unknown (e.g. after a server restart: call `/live/setup` again) |
 | GET | `/spaces/presets/{name}` | → `{name, symbols}` from the shipped structures (`lakota`, `elements`, …) |
-| GET | `/realtime/osc` · POST | OSC status / `{enabled, host, port, hz, scale}` |
+| GET | `/realtime/osc` · POST | OSC status / `{enabled, host, port, hz, scale}`. The status has `owner: {space_id, symbols, context, layout_source, …}` for the socket TouchDesigner currently shows (null when none); TD also gets `/delyrism/space s space_id` with the labels (on owner change and about 1/s). |
 | GET | `/realtime/speech` · POST | speech status / settings (as in the profile) |
 
 Spaces live in memory: a server restart forgets them (the socket then closes

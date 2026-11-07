@@ -659,7 +659,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     osc.register(osc_token, lambda: {
         "layout_source": "browser" if sim.client_fresh(time.perf_counter()) else "server-sim",
         "browser_fps": round(sim.client_fps, 1), "awake": sim.awake, "nodes": len(sim.ids),
-        "context": state["context"][:60]})
+        "context": state["context"][:60],
+        "space_id": space_id, "symbols": list(space.symbols)})
     speak: Dict[str, Any] = {"task": None, "last": None, "top": None, "t": 0.0, "heard": 0.0,
                              "synth": False, "again": False}
 
@@ -1126,7 +1127,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 if moving or now - last_send >= 0.25:
                     key = (sim.order_version, osc.owner_epoch)
                     labels = key != seen or now - last_labels >= 1.0
-                    meta = {"context": state["context"], "query": state["query_text"],
+                    meta = {"space_id": space_id, "context": state["context"], "query": state["query_text"],
                             "kind": state["query_kind"] if state["vq"] is not None else ""}
                     osc.send(frame_messages(sim, seq, now - t_start, osc.scale, meta, labels))
                     seq += 1

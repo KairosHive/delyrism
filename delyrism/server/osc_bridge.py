@@ -52,6 +52,7 @@ Event, outside the frame bundles (app/speech.py):
 Sent with the frame when the node order changed, and once a second:
   /delyrism/node/label   s×N   descriptor text
   /delyrism/symbols      s×S   archetype names (index = /node/sym)
+  /delyrism/space        s space_id   the owning socket's space (GET /spaces/{space_id})
   /delyrism/context      s
   /delyrism/query        s text  s kind (text | audio | image | video | av | "")
   /delyrism/lakota/names s×K   Lakota symbol names (delyrism/structures/lakota.json order)
@@ -158,6 +159,7 @@ def frame_messages(sim, seq: int, t: float, scale: float, meta: Dict[str, Any],
             strings(f"{P}/node/label", sim.ids),
             strings(f"{P}/symbols", sim.symbols),
             strings(f"{P}/context", [meta.get("context", "")]),
+            strings(f"{P}/space", [meta.get("space_id", "")]),
             strings(f"{P}/query", [meta.get("query", ""), meta.get("kind", "")]),
         ]
         if getattr(sim, "lakota_names", None):
