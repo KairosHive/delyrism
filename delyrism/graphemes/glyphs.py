@@ -88,8 +88,18 @@ def load_omniglot(split: str = "background", alphabets: Optional[Iterable[str]] 
     keep = set(alphabets) if alphabets else None
     cache = os.path.join(CACHE, "omniglot", f"{split}.pkl")
     if os.path.exists(cache):
+        this = __name__
+
+        class _Local(pickle.Unpickler):                        # our own cache; earlier versions lived in delyrism.glyphs
+            def find_class(self, module, name):
+                return super().find_class(this if module == "delyrism.glyphs" else module, name)
+
         with open(cache, "rb") as f:
-            out = pickle.load(f)
+            raw = _Local(f).load()
+        out = [r if isinstance(r, Drawing) else Drawing(*r) for r in raw]
+        if raw and isinstance(raw[0], Drawing):                # rewrite as plain tuples, independent of the class path
+            with open(cache, "wb") as f:
+                pickle.dump([(d.system, d.symbol, d.drawer, d.strokes, d.char) for d in out], f)
         return [d for d in out if not keep or d.system in keep]
     root = _omniglot_dir(split)
     out = []
@@ -107,7 +117,7 @@ def load_omniglot(split: str = "background", alphabets: Optional[Iterable[str]] 
                     if strokes:
                         out.append(Drawing(alpha, f"{alpha}/{ch}", fn[-6:-4], strokes))
     with open(cache, "wb") as f:
-        pickle.dump(out, f)
+        pickle.dump([(d.system, d.symbol, d.drawer, d.strokes, d.char) for d in out], f)
     return [d for d in out if not keep or d.system in keep]
 
 

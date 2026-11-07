@@ -60,9 +60,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--g4); outlin
 .dir { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: center; font: 400 11px/1.2 var(--mono); color: var(--muted); }
 .drawings { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
 .drawings .card canvas.big { aspect-ratio: 1; }
-.drawings .card canvas.bars { aspect-ratio: 6 / 1; }
+.drawings .card canvas.bars { aspect-ratio: 4 / 1; }
 .inkrow { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; align-items: center; font: 400 12px/1.2 var(--mono); color: var(--muted); }
-#inkbar { height: 12px; }
+#inkbar, #bendbar { height: 12px; }
 .sub { font: 400 11px/1.3 var(--mono); color: var(--muted); }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 400 12px/1 var(--mono); color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -103,20 +103,24 @@ footer { font: 400 12px/1.6 var(--mono); color: var(--muted); max-width: 80ch; b
 
   <section>
     <div><h2>Draw one</h2>
-      <p class="lede">Draw with a mouse, a pen or a finger. Each stroke is cut where the six graphemes fit best. A dynamic program chooses the cut points that let the six rebuild every fragment most closely, with a small cost per cut, so a fine wiggle splits into its bends and a clean arc stays whole. The coloured line is what the six rebuild, coloured by the grapheme that bends each fragment most. The weights update as you draw.</p></div>
+      <p class="lede">Draw with a mouse, a pen or a finger. Each stroke is cut where the six graphemes fit best. A dynamic program chooses the cut points that let the six rebuild every fragment most closely, with a small cost per cut, so a fine wiggle splits into its bends and a clean arc stays whole. Cuts are weighed against the whole symbol, so every stroke is re-cut each time you lift the pen. The coloured line is what the six rebuild, coloured by the grapheme that bends each fragment most. The weights update as you draw.</p></div>
     <div class="studio">
       <div class="padbox">
         <canvas id="pad" aria-label="drawing pad"></canvas>
         <div class="padbar"><span class="note" id="padnote">Example drawing. Clear it to draw your own.</span>
           <span style="display:flex;gap:6px"><button id="undo" type="button">Undo stroke</button><button id="clear" type="button">Clear</button></span></div>
-        <div class="dir"><span class="row tag">✂</span><label for="lam">cut readiness: higher cuts more, lower keeps fragments long <input id="lam" type="range" min="0.004" max="0.08" step="0.002" value="0.02"></label></div>
+        <div class="dir"><span class="row tag">✂</span><label for="lam">cut readiness: higher cuts more, lower keeps fragments long <input id="lam" type="range" min="0.002" max="0.05" step="0.001" value="0.01"></label></div>
       </div>
       <div class="readout">
-        <div class="panel"><h3>This fragment <small id="fraginfo">the one being drawn</small></h3>
+        <div class="panel"><h3><span>This fragment <span style="display:inline-flex;gap:4px;vertical-align:middle">
+            <button id="prevf" type="button" aria-label="previous fragment" style="padding:3px 9px">‹</button><button id="nextf" type="button" aria-label="next fragment" style="padding:3px 9px">›</button></span></span>
+            <small id="fraginfo">the one being drawn</small></h3>
+          <span class="sub" id="fragcolour">hover a fragment on the pad, or step with the arrows</span>
           <span class="sub">solid: bends the path · pale: changes the pace along it</span>
           <div class="bars" id="fragbars"></div></div>
         <div class="panel"><h3>Whole drawing <small id="drawinfo"></small></h3>
           <div class="inkrow"><span>ink by colour</span><canvas id="inkbar" aria-label="length of line in each colour"></canvas></div>
+          <div class="inkrow"><span>bending</span><canvas id="bendbar" aria-label="how the bending splits across graphemes"></canvas></div>
           <span class="sub">weights (energy): the straight grapheme carries every fragment's forward motion, so it holds most of the energy even where the line is coloured</span>
           <div class="bars" id="totbars"></div>
           <canvas id="grid" aria-label="grapheme by direction weights"></canvas>
@@ -146,7 +150,7 @@ footer { font: 400 12px/1.6 var(--mono); color: var(--muted); max-width: 80ch; b
 
   <section>
     <div><h2>Your drawings, in graphemes</h2>
-      <p class="lede">Each drawing is cut the same way, at pen lifts and wherever the six graphemes fit best, and every fragment is rebuilt from the six. Colour marks the grapheme that bends a fragment most, measured across the stroke, and fragments in ink colour are close to straight. Grey dots are your original line. Under each drawing, the ink bar measures the colours by length of line, and the energy bar is the grapheme distribution itself. The straight grapheme carries every fragment's forward motion, so it holds most of the energy even where the line is coloured.</p></div>
+      <p class="lede">Each drawing is cut the same way, at pen lifts and wherever the six graphemes fit best, and every fragment is rebuilt from the six. Colour marks the grapheme that bends a fragment most, measured across the stroke, and fragments in ink colour are close to straight. Grey dots are your original line. Under each drawing, the ink bar measures the colours by length of line, the bending bar shows how the bending splits across graphemes, and the energy bar is the grapheme distribution itself. The straight grapheme carries every fragment's forward motion, so it holds most of the energy even where the line is coloured.</p></div>
     <div class="legend" id="legend"></div>
     <div class="drawings" id="drawings"></div>
     <div><button id="replay" type="button">Replay drawing</button></div>
@@ -178,7 +182,7 @@ const L = DATA.planar[0].length;
 const atoms = DATA.planar;
 const WALL = DATA.W, KEPT = DATA.kept, BANDS = DATA.bands;
 const GROUPS = KEPT.map(i => [i]);                                      // the six graphemes
-let LAMBDA = 0.02;                                                       // cost of one cut
+let LAMBDA = 0.01;                                                       // cost of one cut
 const NG = GROUPS.length;
 const G0 = WALL[KEPT[0]];
 function bent(vec, k, rot = [1, 0]) {                     // the straight grapheme with vec added across it
@@ -333,14 +337,15 @@ const drawItems = DATA.drawings.map(d => {
   segmentDrawing(item);
   return item;
 });
-function segmentDrawing(item) {                           // pen lifts, then the optimal cuts, as on the pad
-  const frs = [];
-  item.d.strokes.forEach(P => { const cuts = segmentDP(P);
+function segmentDrawing(item) {                           // pen lifts, then the optimal cuts for the whole symbol, as on the pad
+  const frs = [], total = item.d.strokes.reduce((a, P) => a + pathLen(P), 0);
+  item.d.strokes.forEach(P => { const cuts = segmentDP(P, total);
     for (let q = 0; q < cuts.length - 1; q++) { const f = project(P.slice(cuts[q], cuts[q + 1] + 1));
-      if (f) { const s = f.e.reduce((a, b) => a + b, 0) || 1; frs.push({ pts: f.pts, dom: f.dom, len: f.len, e: f.e.map(v => v / s * f.len) }); } } });
-  const tot = new Array(NG).fill(0), ink = new Array(NG).fill(0);
-  frs.forEach(f => { f.e.forEach((v, k) => { tot[k] += v; }); ink[f.dom] += f.len; });
-  Object.assign(item, { frs, tot, ink });
+      if (f) { const s = f.e.reduce((a, b) => a + b, 0) || 1;
+        frs.push({ pts: f.pts, dom: f.dom, len: f.len, e: f.e.map(v => v / s * f.len), b: f.acrossE.map(v => v / s * f.len) }); } } });
+  const tot = new Array(NG).fill(0), ink = new Array(NG).fill(0), bend = new Array(NG).fill(0);
+  frs.forEach(f => { f.e.forEach((v, k) => { tot[k] += v; }); f.b.forEach((v, k) => { bend[k] += v; }); ink[f.dom] += f.len; });
+  Object.assign(item, { frs, tot, ink, bend });
   item.el.querySelector(".share").textContent = `${frs.length} fragments`;
 }
 let drawT0 = performance.now();
@@ -359,7 +364,7 @@ function drawDrawing(item, now) {
       const p = strokePath(ctx, f.pts, m, local * L, C.gr[f.dom], 2.8 * dpr);
       if (local < 1) pen(ctx, p, C.gr[f.dom], 4 * dpr);
     }); }
-  stackedRows(cbar, [["ink", item.ink], ["energy", item.tot]]);
+  stackedRows(cbar, [["ink", item.ink], ["bending", item.bend], ["energy", item.tot]]);
 }
 function stackedRows(canvas, rows) {                      // labelled stacked bars, one per row
   const { ctx, w, h, dpr } = fit(canvas); ctx.clearRect(0, 0, w, h);
@@ -470,12 +475,13 @@ function fitShare(seg) {                                  // share of a fragment
   for (const i of KEPT) { const a = WALL[i]; let re = 0, im = 0; for (let t = 0; t < L; t++) { re += a[t] * zx[t]; im += a[t] * zy[t]; } got += re * re + im * im; }
   return { share: got / tot, len };
 }
-function segmentDP(P) {
-  // the cut points minimising (motion the six miss, weighted by length) + LAMBDA per fragment
+function pathLen(P) { let t = 0; for (let i = 1; i < P.length; i++) t += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return t; }
+function segmentDP(P, symTotal) {
+  // the cut points minimising (motion the six miss, weighted by its share of the symbol's ink) + LAMBDA per fragment
   const n = P.length; if (n < 8) return [0, n - 1];
   const m = Math.min(n, 110), cand = Array.from({ length: m }, (_, i) => Math.round(i * (n - 1) / (m - 1)));
-  let total = 0; for (let i = 1; i < n; i++) total += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
-  if (total < 1e-4) return [0, n - 1];
+  const own = pathLen(P), total = symTotal || own;
+  if (own < 1e-4) return [0, n - 1];
   const best = new Float64Array(m).fill(Infinity), from = new Int32Array(m).fill(-1); best[0] = 0;
   for (let j = 1; j < m; j++) for (let i = 0; i < j; i++) {
     if (best[i] === Infinity || (cand[j] - cand[i] < 4 && !(i === 0 && j === m - 1))) continue;
@@ -487,18 +493,21 @@ function segmentDP(P) {
   return out.reverse();
 }
 const segCache = new WeakMap();
-function cutsFor(key, P, finished) {
+function cutsFor(key, P, total, finished, allowStale) {
   const hit = segCache.get(key);
-  if (hit && hit.lambda === LAMBDA && hit.n === P.length) return hit.cuts;
-  const cuts = segmentDP(P);
-  if (finished) segCache.set(key, { lambda: LAMBDA, n: P.length, cuts });
+  if (hit && hit.lambda === LAMBDA && hit.n === P.length && (allowStale || Math.abs(hit.total - total) < 1e-9)) return hit.cuts;
+  const cuts = segmentDP(P, total);
+  if (finished) segCache.set(key, { lambda: LAMBDA, n: P.length, total, cuts });
   return cuts;
 }
 function analyseAll() {
   const frags = [];
+  const Ps = strokes.map(st => { const R = resample(st); return R ? smooth(R) : null; });
+  const total = Ps.reduce((a, P) => a + (P ? pathLen(P) : 0), 0);
   strokes.forEach((st, si) => {
-    const R = resample(st); if (!R) return;
-    const P = smooth(R), cuts = cutsFor(st, P, st !== cur);
+    const P = Ps[si]; if (!P) return;
+    // while a stroke is being drawn, earlier strokes keep their cuts; at pen-up all are re-cut for the whole symbol
+    const cuts = cutsFor(st, P, total, st !== cur, cur !== null && st !== cur);
     for (let q = 0; q < cuts.length - 1; q++) {
       const f = project(P.slice(cuts[q], cuts[q + 1] + 1));
       if (f) { f.stroke = si; f.cut = P[cuts[q]]; frags.push(f); }
@@ -510,17 +519,17 @@ function analyseAll() {
 // readout rows
 function makeBars(el, extra) {
   const rows = NAMES.slice(0, NG).map((n, k) => { const r = document.createElement("div"); r.className = "bar";
-    r.innerHTML = `<span class="lab">g${k} ${n}</span><span class="track"><span class="fill" style="background:${k ? `var(--g${k})` : "var(--ink)"}"></span></span><span class="val">0%</span><span class="arr"></span>`;
+    r.innerHTML = `<span class="lab">g${k} ${n}</span><span class="track"><span class="fill" data-col="${k ? `var(--g${k})` : "var(--ink)"}"></span></span><span class="val">0%</span><span class="arr"></span>`;
     el.appendChild(r); return r; });
   if (extra) { const r = document.createElement("div"); r.className = "bar";
-    r.innerHTML = `<span class="lab">beyond the six</span><span class="track"><span class="fill" style="background:var(--muted)"></span></span><span class="val">0%</span><span class="arr"></span>`;
+    r.innerHTML = `<span class="lab">beyond the six</span><span class="track"><span class="fill" data-col="var(--muted)"></span></span><span class="val">0%</span><span class="arr"></span>`;
     el.appendChild(r); rows.push(r); }
   return rows;
 }
 const fragRows = makeBars(document.getElementById("fragbars"), true);
 const totRows = makeBars(document.getElementById("totbars"), false);
 function setRow(r, share, angle, solid = share) {
-  const fill = r.querySelector(".fill"), col = fill.dataset.col || (fill.dataset.col = fill.style.background);
+  const fill = r.querySelector(".fill"), col = fill.dataset.col;
   const cut = share > 0 ? Math.max(0, Math.min(100, solid / share * 100)) : 100;
   fill.style.background = `linear-gradient(90deg, ${col} 0 ${cut}%, color-mix(in srgb, ${col} 32%, transparent) ${cut}% 100%)`;
   fill.style.width = `${Math.max(0, Math.min(100, share * 100)).toFixed(1)}%`;
@@ -529,8 +538,11 @@ function setRow(r, share, angle, solid = share) {
   if (angle === null || share < 0.02) { arr.textContent = ""; } else { arr.textContent = "→"; arr.style.transform = `rotate(${-angle}rad)`; }
 }
 
+let sel = null, lastFrags = [];                         // the fragment the panel shows (null: the last one)
 function renderStudio() {
   const frags = analyseAll();
+  lastFrags = frags;
+  const shown = frags.length ? (sel === null || sel >= frags.length ? frags.length - 1 : sel) : -1;
   const { ctx, w, h, dpr } = fit(padEl); ctx.clearRect(0, 0, w, h);
   const toPx = ([x, y]) => [x * w, -y * w];
   // your ink
@@ -538,18 +550,24 @@ function renderStudio() {
   strokes.forEach(st => { if (st.length < 2) return; ctx.beginPath(); ctx.moveTo(st[0].x * w, st[0].y * w); st.forEach(p => ctx.lineTo(p.x * w, p.y * w)); ctx.stroke(); });
   ctx.globalAlpha = 1;
   // what the six rebuild, coloured by the grapheme that bends each fragment most
+  if (shown >= 0) {                                       // halo on the fragment the panel describes
+    const fs = frags[shown]; ctx.strokeStyle = C.gr[fs.dom]; ctx.globalAlpha = 0.3; ctx.lineWidth = 12 * dpr; ctx.beginPath();
+    let p = toPx(fs.pts[0]); ctx.moveTo(p[0], p[1]); fs.pts.forEach(q => { p = toPx(q); ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.globalAlpha = 1; }
   frags.forEach(f => {
     ctx.strokeStyle = C.gr[f.dom]; ctx.lineWidth = 2.6 * dpr; ctx.beginPath();
     let p = toPx(f.pts[0]); ctx.moveTo(p[0], p[1]); f.pts.forEach(q => { p = toPx(q); ctx.lineTo(p[0], p[1]); }); ctx.stroke();
     const c0 = toPx(f.cut); ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(c0[0], c0[1], 2.6 * dpr, 0, 2 * Math.PI); ctx.fill();
   });
   // this fragment: the last one of the stroke being drawn (or the last drawn)
-  const f = frags.length ? frags[frags.length - 1] : null;
+  const f = shown >= 0 ? frags[shown] : null;
   if (f) {
     const s = f.total;
     f.e.forEach((v, k) => setRow(fragRows[k], v / s, f.dirs[k], k === 0 ? v / s : f.acrossE[k] / s));
     setRow(fragRows[NG], Math.max(0, 1 - f.captured), null);
-    document.getElementById("fraginfo").textContent = `${(f.len * 100).toFixed(0)}% of pad width long`;
+    document.getElementById("fraginfo").textContent = `${shown + 1} of ${frags.length} · ${(f.len * 100).toFixed(0)}% of pad width`;
+    document.getElementById("fragcolour").innerHTML = f.dom
+      ? `coloured <b style="color:var(--g${f.dom})">g${f.dom} ${NAMES[f.dom]}</b>, the longest solid bar: it bends this fragment most`
+      : `coloured <b>g0 straight</b>: it bends less than 5% of its forward motion`;
   } else { fragRows.forEach(r => setRow(r, 0, null)); document.getElementById("fraginfo").textContent = "draw to start"; }
   // whole drawing: length-weighted grapheme x direction distribution
   const G6 = Array.from({ length: NG }, () => new Array(8).fill(0)); let wsum = 0, capt = 0, lsum = 0;
@@ -560,6 +578,12 @@ function renderStudio() {
   G6.forEach((r, k) => { const m = r.reduce((x, y) => x + y, 0); let best = 0; r.forEach((x, j) => { if (x > r[best]) best = j; });
     setRow(totRows[k], m / tot, m > 0 ? best * Math.PI / 4 : null); });
   document.getElementById("drawinfo").textContent = `${strokes.filter(s => s.length > 1).length} strokes · ${frags.length} fragments`;
+  { const bend = new Array(NG).fill(0);
+    frags.forEach(fr => { const es = fr.e.reduce((a, b) => a + b, 0) || 1; fr.acrossE.forEach((v, k) => { bend[k] += v / es * fr.len; }); });
+    const { ctx: g, w: bw, h: bh } = fit(document.getElementById("bendbar")); g.clearRect(0, 0, bw, bh);
+    const s = bend.reduce((a, b) => a + b, 0); let x = 0;
+    if (s > 0) bend.forEach((v, k) => { const ww = v / s * bw; g.fillStyle = C.gr[k]; g.fillRect(x, 0, Math.max(0, ww - 1), bh); x += ww; });
+    else { g.fillStyle = C.rule; g.fillRect(0, 0, bw, bh); } }
   { const ink = new Array(NG).fill(0); frags.forEach(fr => { ink[fr.dom] += fr.len; });
     const { ctx: g, w: iw, h: ih } = fit(document.getElementById("inkbar")); g.clearRect(0, 0, iw, ih);
     const s = ink.reduce((a, b) => a + b, 0); let x = 0;
@@ -581,12 +605,24 @@ const scheduleStudio = () => { if (!studioQueued) { studioQueued = true; request
 function addPoint(e) { const r = padEl.getBoundingClientRect(); cur.push({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.width, t: e.timeStamp / 1000 }); }
 padEl.addEventListener("pointerdown", e => {
   if (example) { strokes = []; example = false; document.getElementById("padnote").textContent = "Lift the pen between strokes. Each stroke is analysed as you draw it."; }
-  padEl.setPointerCapture(e.pointerId); cur = []; strokes.push(cur); addPoint(e); e.preventDefault(); scheduleStudio();
+  sel = null; padEl.setPointerCapture(e.pointerId); cur = []; strokes.push(cur); addPoint(e); e.preventDefault(); scheduleStudio();
 });
-padEl.addEventListener("pointermove", e => { if (!cur) return; (e.getCoalescedEvents ? e.getCoalescedEvents() : [e]).forEach(addPoint); scheduleStudio(); });
+padEl.addEventListener("pointermove", e => {
+  if (!cur && e.buttons === 0 && lastFrags.length) {     // hover: show the nearest fragment
+    const r = padEl.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = -(e.clientY - r.top) / r.width;
+    let best = null, bd = 0.04;
+    lastFrags.forEach((f, i) => f.pts.forEach(q => { const d = Math.hypot(q[0] - x, q[1] - y); if (d < bd) { bd = d; best = i; } }));
+    if (best !== null && best !== sel) { sel = best; scheduleStudio(); }
+    return;
+  }
+  if (!cur) return; (e.getCoalescedEvents ? e.getCoalescedEvents() : [e]).forEach(addPoint); scheduleStudio(); });
 ["pointerup", "pointercancel", "lostpointercapture"].forEach(n => padEl.addEventListener(n, () => { cur = null; scheduleStudio(); }));
 document.getElementById("clear").addEventListener("click", () => { strokes = []; example = false; scheduleStudio();
   document.getElementById("padnote").textContent = "Lift the pen between strokes. Each stroke is analysed as you draw it."; });
+const stepFrag = d => { if (!lastFrags.length) return; const cur0 = sel === null ? lastFrags.length - 1 : sel;
+  sel = (cur0 + d + lastFrags.length) % lastFrags.length; scheduleStudio(); };
+document.getElementById("prevf").addEventListener("click", () => stepFrag(-1));
+document.getElementById("nextf").addEventListener("click", () => stepFrag(1));
 document.getElementById("undo").addEventListener("click", () => { strokes.pop(); scheduleStudio(); });
 document.getElementById("lam").addEventListener("input", e => { LAMBDA = +e.target.value; drawItems.forEach(segmentDrawing); drawT0 = performance.now(); scheduleStudio(); });
 new ResizeObserver(scheduleStudio).observe(padEl);
