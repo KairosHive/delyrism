@@ -52,6 +52,31 @@ def warmup(prof: Optional[live_profile.LiveProfile] = None) -> None:
         _state.update(ready=True, warming=False)
 
 
+def _process_stats() -> Dict[str, Any]:
+    """pid, resident memory, cores the process sees, the container's CPU
+    quota and the thread caps, so restarts and CPU throttling are visible
+    from outside (Railway shows neither per request)."""
+    out: Dict[str, Any] = {"pid": os.getpid(), "cpus_visible": os.cpu_count()}
+    try:
+        out["cpus_usable"] = len(os.sched_getaffinity(0))
+    except AttributeError:
+        pass
+    for path in ("/sys/fs/cgroup/cpu.max", "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"):
+        try:
+            out["cpu_quota"] = Path(path).read_text().strip()
+            break
+        except OSError:
+            continue
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                out["rss_mb"] = round(int(line.split()[1]) / 1024, 1)
+    except OSError:
+        pass
+    out["threads"] = {k: os.environ.get(k) for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")}
+    return out
+
+
 def _default_static_dir() -> Optional[Path]:
     env = os.environ.get("DELYRISM_STATIC_DIR")
     if env:
@@ -114,7 +139,8 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
     def healthz():
         """ok = the process answers; ready = the warm-up (if any) is done."""
         return {"ok": True, "ready": bool(_state["ready"]), "warming": bool(_state["warming"]),
-                "error": _state["error"], "uptime": round(time.time() - _state["started"], 1)}
+                "error": _state["error"], "uptime": round(time.time() - _state["started"], 1),
+                **_process_stats()}
 
     @app.get("/api")
     def api_info():

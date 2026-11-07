@@ -32,11 +32,12 @@ from __future__ import annotations
 import hashlib
 import itertools
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from ..schemas import (
     TopologySummaryEntry, TopologySummaryResponse, PCAPoint, SetQualityMetrics,
@@ -322,7 +323,7 @@ def _resolve_D_and_key(
 # ---------- /topology/summary -----------------------------------------------
 
 @router.post("/summary", response_model=TopologySummaryResponse)
-def topology_summary(req: dict):
+def topology_summary(req: dict, response: Response):
     """Per-symbol TopoScore + a joint PCA-2D layout of every descriptor.
 
     Returned in one shot so the Overview view doesn't need to roundtrip
@@ -334,7 +335,9 @@ def topology_summary(req: dict):
         raise HTTPException(status_code=400, detail="space_id required")
     space = _require(space_id)
 
+    marks = [("start", time.perf_counter())]
     D, key, _ = _resolve_D_and_key(space, space_id, req, "summary")
+    marks.append(("shift", time.perf_counter()))
     cached = engine_cache.memo_get(key)
     if cached is not None:
         return cached
@@ -363,6 +366,7 @@ def topology_summary(req: dict):
         max_workers = min(8, max(1, len(items)))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             raw = list(ex.map(_one, items))
+        marks.append(("ph", time.perf_counter()))
 
         rows = []
         for sym, ph_out in raw:
@@ -424,6 +428,7 @@ def topology_summary(req: dict):
     # Joint PCA-2D over all descriptors (uses the same D that drove PH —
     # original or shifted depending on use_context).
     Z = _pca2d(_row_norm(D))
+    marks.append(("pca", time.perf_counter()))
     pts = [
         PCAPoint(word=d, symbol=space.owner[d], x=float(Z[i, 0]), y=float(Z[i, 1]))
         for i, d in enumerate(space.descriptors)
@@ -443,6 +448,7 @@ def topology_summary(req: dict):
         union_X = _build_union_for_ph(sym_emb, target_max=150, seed=42)
         union_dgms = _get_ph(space_id, "__union__", union_X,
                              maxdim=2, thresh=1.0, cocycles=False)["dgms"]
+        marks.append(("union", time.perf_counter()))
         coverage_h1 = _sum_finite(union_dgms[1])
         coverage_h2 = _sum_finite(union_dgms[2])
 
@@ -498,6 +504,9 @@ def topology_summary(req: dict):
                                   ripser_available=have_ripser,
                                   set_quality=set_q)
     engine_cache.memo_put(key, out)
+    # where the time went, per step (browser Network tab → Timing)
+    response.headers["Server-Timing"] = ", ".join(
+        f"{name};dur={(t - t0) * 1000:.1f}" for (_, t0), (name, t) in zip(marks, marks[1:]))
     return out
 
 
