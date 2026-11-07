@@ -53,6 +53,9 @@ SHAPE_DEFAULTS: Dict[str, float] = dict(
     focus=2.0, contraction=0.7, damping=8.0, stiffness=40.0, repulsion=60000.0, unlinked=6000.0,
     # springSim.ts params not exposed in the UI
     center=2.0, radial=6.0, minsep=44.0, collide=160.0,
+    # query presence: eases toward 1 while a query is on and toward 0 after it
+    # is cleared, with this time constant in s (0 = switch at once)
+    query_fade_tau=1.5,
 )
 
 
@@ -78,7 +81,8 @@ class LiveSim:
     def __init__(self) -> None:
         self.shape: Dict[str, float] = dict(SHAPE_DEFAULTS)
         self.relevance: Dict[str, float] = {}
-        self.query_active = False
+        self.query_on = False          # the socket has a query (the presence's target)
+        self.presence = 0.0            # 0…1: how much query there is (see apply_rest)
         self.graph_seq = 0
         self.order_version = 0
         self.awake = True
@@ -107,6 +111,7 @@ class LiveSim:
         self.sym = np.zeros(0, dtype=np.int32)
         self.x, self.y, self.vx, self.vy = z.copy(), z.copy(), z.copy(), z.copy()
         self.size, self.pull, self.rel, self.fade = z.copy(), z.copy(), z.copy(), z.copy()
+        self.rel_q = z.copy()          # sharpened relevance of the (last) query, before the presence
         self.rgb = np.zeros((0, 3))
         self.alive = np.zeros(0, dtype=bool)
 
@@ -123,6 +128,11 @@ class LiveSim:
     def wake(self) -> None:
         self.awake = True
         self._sleep_timer = 0.0
+
+    @property
+    def query_active(self) -> bool:
+        """A query shows (presence ≥ 0.01): true from a query until its fade-out ends."""
+        return self.presence >= 0.01
 
     @property
     def fading(self) -> bool:
@@ -168,8 +178,29 @@ class LiveSim:
         self.apply_rest()
 
     def set_relevance(self, relevance: Dict[str, float], active: bool) -> None:
-        self.relevance = dict(relevance or {})
-        self.query_active = bool(active)
+        """New relevance of the active query; active=False (query cleared)
+        keeps the last relevance while the presence fades it out."""
+        self.query_on = bool(active)
+        if active:
+            self.relevance = dict(relevance or {})
+        if self.shape["query_fade_tau"] <= 0:
+            self.presence = 1.0 if active else 0.0
+            if not active:
+                self.relevance = {}
+        self.apply_rest()
+
+    def _step_presence(self, dt: float) -> None:
+        tgt = 1.0 if self.query_on else 0.0
+        if self.presence == tgt:
+            return
+        tau = self.shape["query_fade_tau"]
+        p = tgt if tau <= 0 else tgt + (self.presence - tgt) * math.exp(-dt / tau)
+        if self.query_on and p > 0.999:
+            p = 1.0
+        if not self.query_on and p < 0.01:
+            p = 0.0
+            self.relevance = {}          # faded out: forget the last query
+        self.presence = p
         self.apply_rest()
 
     def set_graph(self, nodes: Sequence[Dict[str, Any]], edges: Sequence[Dict[str, Any]],
@@ -320,6 +351,7 @@ class LiveSim:
                 setattr(self, name, getattr(self, name)[keep_n])
             self.ids = [i for i, m in zip(self.ids, keep_n) if m]
             self.order_version += 1
+        self.apply_rest()      # realign rel_q / overlap with the remaining rows
 
     # --------------------------------------------------- Lakota background
     def set_lakota(self, names: Sequence[str], rows: Dict[str, np.ndarray],
@@ -345,10 +377,11 @@ class LiveSim:
             self._lak_rows = (np.stack([self.lakota_of.get(i, z) for i in self.ids]).astype(np.float64)
                               if self.ids else np.zeros((0, K)))
             self._lak_key = key
-        w = (self.rel if self.query_active else self.size) * self.alive
+        pr = float(self.presence)
+        w = (pr * self.rel_q + (1.0 - pr) * self.size) * self.alive
         act = w @ self._lak_rows if len(w) else np.zeros(K)
-        if self.query_active and self.lakota_query is not None:
-            act = act + max(float(act.sum()), 1.0) * self.lakota_query
+        if pr > 0.0 and self.lakota_query is not None:
+            act = act + pr * max(float(act.sum()), 1.0) * self.lakota_query
         if float(act.sum()) <= 1e-9:                      # empty graph: every symbol, equally
             act = np.full(K, 1.0 / K)
         return act
@@ -358,18 +391,17 @@ class LiveSim:
         """LiveDeltaGraph.applyRest: sharpened relevance sets each spring's
         rest length and stiffness; the radial spring follows relevance."""
         g = self.shape["focus"]
+        p = float(self.presence)
         rel = np.asarray([self.relevance.get(i, 0.0) for i in self.ids], dtype=np.float64)
-        self.rel = np.power(np.clip(rel, 0.0, 1.0), g) if len(rel) else rel
+        self.rel_q = np.power(np.clip(rel, 0.0, 1.0), g) if len(rel) else rel
+        self.rel = p * self.rel_q                     # what the outputs show: scaled by the presence
         if len(self.e_a):
-            ov = np.sqrt(np.maximum(0.0, self.rel[self.e_a] * self.rel[self.e_b]))
-            self.e_overlap = ov
+            ov = np.sqrt(np.maximum(0.0, self.rel_q[self.e_a] * self.rel_q[self.e_b]))
+            self.e_overlap = p * ov
             long = BASE_DIST + 140.0 * self.shape["contraction"]
-            if self.query_active:
-                self.e_rest = long + (SHORT_DIST - long) * ov
-                self.e_k = 0.6 + 0.8 * ov
-            else:
-                self.e_rest = np.full(len(ov), BASE_DIST)
-                self.e_k = np.ones(len(ov))
+            # blend the no-query springs (BASE_DIST, k 1) into the query springs by the presence
+            self.e_rest = BASE_DIST + p * (long + (SHORT_DIST - long) * ov - BASE_DIST)
+            self.e_k = 1.0 + p * (0.6 + 0.8 * ov - 1.0)
         self.wake()
 
     # ---------------------------------------------------------------- step
@@ -379,6 +411,7 @@ class LiveSim:
         dt = float(min(0.05, max(0.0, dt)))
         if dt <= 0.0:
             return
+        self._step_presence(dt)
         self._step_fades(dt)
         n = len(self.ids)
         if not physics:
@@ -450,11 +483,11 @@ class LiveSim:
             # central forces (torque-free about the origin)
             ax[A] -= p["center"] * self.x[A]
             ay[A] -= p["center"] * self.y[A]
-            if self.query_active:
+            if self.presence > 0.0:
                 r = np.hypot(self.x[A], self.y[A])
                 r = np.where(r == 0, 1e-6, r)
-                target = RADIAL_INNER + (1.0 - self.rel[A]) * (RADIAL_OUTER - RADIAL_INNER)
-                f = p["radial"] * (target - r) / r
+                target = RADIAL_INNER + (1.0 - self.rel_q[A]) * (RADIAL_OUTER - RADIAL_INNER)
+                f = self.presence * p["radial"] * (target - r) / r
                 ax[A] += f * self.x[A]
                 ay[A] += f * self.y[A]
             # integrate (semi-implicit Euler + exact linear drag); fading-out

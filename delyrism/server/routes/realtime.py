@@ -716,6 +716,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "vq_target": None,                          # transcript: the embedding the query glides toward
         "vq_raw": None,                             # the latest raw query embedding (before habituation / media EMA / glide)
         "hab": _Habituation(),                      # per-kind running mean of media vectors
+        "vq_fade": None,                            # the cleared query, while its presence fades out
         "qgen": 0,                                  # bumped by query / query_clear / transcript: a media
                                                     # embedding started before the bump is dropped
         "hab_last": None,                           # {"kind", "beta_eff"} of the latest query vector
@@ -851,6 +852,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         state["rel_prev"] = rel if rel else None
         return rel
 
+    def _continue_from() -> Optional[np.ndarray]:
+        """The query a new one blends / glides from: the active vector, else
+        the cleared one while its presence is still fading out."""
+        if state["vq"] is not None:
+            return state["vq"]
+        return state["vq_fade"] if sim.query_active else None
+
     def _habituate(key: str, v: np.ndarray) -> np.ndarray:
         """Habituate a raw query vector under the mean `key` (see _Habituation)."""
         prm = state["params"]
@@ -880,6 +888,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             "context": shown["context"], "context_vec": _vec_out(shown["vctx"], fmt),
             "context_pending": state["context"] if state["context"] != shown["context"] else None,
             "query_active": bool(q["active"]),
+            "query_presence": round(float(sim.presence), 4),
             "query_kind": q["kind"] if q["active"] else None,
             "query_text": q["text"] if q["active"] else None,
             "query_vec": _vec_out(q["vq"], fmt), "query_target": _vec_out(q["vq_raw"], fmt),
@@ -983,6 +992,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 schedule_speak()          # restarts the 1 s timer on every edit
             elif t == "query_clear":
                 state["qgen"] += 1
+                if state["vq"] is not None:
+                    state["vq_fade"] = state["vq"]
                 if speak["task"] is not None:
                     speak["task"].cancel()
                 speak["last"] = speak["top"] = None
@@ -1015,8 +1026,12 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 # text sent as a transcript ("source": "typed") has its own mean
                 target = _habituate("text" if m.get("source") == "typed" else "speech", target)
                 state["vq_target"] = target
-                if state["vq"] is None or float(state["transcript"]["tau"]) <= 0:
-                    state["vq"] = target      # first words (or no smoothing): start there
+                if float(state["transcript"]["tau"]) <= 0:
+                    state["vq"] = target      # no smoothing: jump
+                elif state["vq"] is None:
+                    # from empty: glide from the query still fading out, else start
+                    # at the target (the presence then fades it in)
+                    state["vq"] = _continue_from() if _continue_from() is not None else target
                 state["query_dirty"] = True
                 glide_wake.set()
                 if "speech" not in speech.cfg.media_kinds:
@@ -1124,12 +1139,15 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         state["vq_raw"] = v
         v = _habituate(kind, v)          # image, video, audio, av, pose, motion
         a = state["audio_smoothing"]
-        prev = state["vq"] if state["query_kind"] == kind else None
+        # blend from the current query whatever its kind (one embedding space),
+        # except across PE-AV heads, whose vectors live in different spaces
+        same_space = _head_for_kind(space, kind) == _head_for_kind(space, state["query_kind"])
+        prev = _continue_from() if same_space else None
         # each movement description already sums up a whole window, so it
         # replaces the query outright instead of blending into the last one
         if prev is not None and a > 0 and kind != "motion":
             v = _unit(a * prev + (1.0 - a) * v)
-        if state["query_kind"] != kind:
+        if not same_space:
             state["rel_prev"] = None
         state["vq"] = v
         state["query_kind"] = kind

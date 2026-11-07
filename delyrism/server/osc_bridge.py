@@ -19,7 +19,7 @@ same node; row j of every /edge/* array is the same edge.
   /delyrism/node/vx      f×N   velocity, output units / s
   /delyrism/node/vy      f×N
   /delyrism/node/size    f×N   Σ|Δ| of the node's edges, min-max → 0…1  (browser: node radius)
-  /delyrism/node/rel     f×N   query relevance after the focus exponent, 0…1 (0 when no query)
+  /delyrism/node/rel     f×N   query relevance after the focus exponent, × the query presence, 0…1
   /delyrism/node/pull    f×N   raw context pull, cos(D′_i, v_ctx)
   /delyrism/node/r|g|b   f×N   archetype colour, 0…1
   /delyrism/node/sym     i×N   archetype index into /delyrism/symbols
@@ -33,7 +33,10 @@ same node; row j of every /edge/* array is the same edge.
   /delyrism/edge/weight  f×E   |Δ| min-max → 0…1  (browser: line width)
   /delyrism/edge/delta   f×E   signed Δ cosine (after − before)
   /delyrism/edge/sign    i×E   +1 strengthens (teal) · −1 weakens (red)
-  /delyrism/edge/overlap f×E   sqrt(rel_src · rel_dst) — how much the query lights this edge
+  /delyrism/edge/overlap f×E   sqrt(rel_src · rel_dst) × presence — how much the query lights this edge
+  /delyrism/query/presence f   0…1: how much query there is — eases in after a query and out after
+                               query_clear (shape query_fade_tau); blend query-driven looks by it.
+                               query_active (in /frame) = presence ≥ 0.01
   /delyrism/edge/len     f×E   current length, output units
   /delyrism/edge/alive   i×E
   /delyrism/edge/fade    f×E
@@ -128,7 +131,7 @@ def frame_messages(sim, seq: int, t: float, scale: float, meta: Dict[str, Any],
     x, y = sim.x * k, -sim.y * k            # sim is y-down (canvas); output is y-up
     vx, vy = sim.vx * k, -sim.vy * k
     n, e = len(sim.ids), len(sim.e_a)
-    rel = sim.rel if sim.query_active else np.zeros(n)
+    rel = sim.rel                            # already scaled by the query presence
     xmin, ymin, xmax, ymax = (float(x.min()), float(y.min()), float(x.max()), float(y.max())) if n else (0.0,) * 4
     a, b = sim.e_a, sim.e_b
     x0, y0, x1, y1 = x[a], y[a], x[b], y[b]
@@ -147,7 +150,8 @@ def frame_messages(sim, seq: int, t: float, scale: float, meta: Dict[str, Any],
         floats(f"{P}/edge/x1", x1), floats(f"{P}/edge/y1", y1),
         floats(f"{P}/edge/weight", sim.e_weight), floats(f"{P}/edge/delta", sim.e_delta),
         ints(f"{P}/edge/sign", sim.e_sign),
-        floats(f"{P}/edge/overlap", sim.e_overlap if sim.query_active else np.zeros(e)),
+        floats(f"{P}/edge/overlap", sim.e_overlap),
+        floats(f"{P}/query/presence", [float(sim.presence)]),
         floats(f"{P}/edge/len", np.hypot(x1 - x0, y1 - y0)),
         ints(f"{P}/edge/alive", sim.e_alive.astype(np.int32)), floats(f"{P}/edge/fade", sim.e_fade),
     ]
@@ -174,12 +178,13 @@ def sim_frame(sim, seq: int, t: float, scale: float) -> Dict[str, Any]:
     (≈ −1…1, +y up).  Nodes are descriptors; `sym` indexes `symbols`."""
     k = 1.0 / max(1e-9, scale)
     n = len(sim.ids)
-    rel = sim.rel if sim.query_active else np.zeros(n)
+    rel = sim.rel
     r3 = lambda a: [round(float(v), 3) for v in a]
     lak = sim.lakota_activation() if hasattr(sim, "lakota_activation") else None
     return {
         "type": "sim", "seq": int(seq), "t": round(float(t), 3), "graph_seq": int(sim.graph_seq),
-        "query_active": bool(sim.query_active), "awake": bool(sim.awake),
+        "query_active": bool(sim.query_active), "query_presence": round(float(sim.presence), 4),
+        "awake": bool(sim.awake),
         "symbols": list(sim.symbols),
         "nodes": {
             "id": list(sim.ids), "uid": [int(u) for u in sim.uid], "sym": [int(v) for v in sim.sym],
@@ -191,7 +196,7 @@ def sim_frame(sim, seq: int, t: float, scale: float) -> Dict[str, Any]:
         "edges": {
             "src": [int(v) for v in sim.e_a], "dst": [int(v) for v in sim.e_b],
             "weight": r3(sim.e_weight), "delta": r3(sim.e_delta), "sign": [int(v) for v in sim.e_sign],
-            "overlap": r3(sim.e_overlap if sim.query_active else np.zeros(len(sim.e_a))),
+            "overlap": r3(sim.e_overlap),
             "fade": r3(sim.e_fade), "alive": [bool(a) for a in sim.e_alive],
         },
         "lakota": None if lak is None else {"names": list(getattr(sim, "lakota_names", [])), "activation": r3(lak)},

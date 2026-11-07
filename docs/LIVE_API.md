@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.5.5)
+# Delyrism live API (package `delyrism`, v0.6)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -73,7 +73,8 @@ with the usual messages.
   "global_mode": "descriptor",          // "none" = raw geometry
   "global_pcs": 1,                       // the "PCA = 1": top principal direction removed
   "graph": {"top_abs_edges": 30},        // overrides of the live graph params (see below)
-  "shape": {"focus": 2.0},               // layout: focus, contraction, damping, stiffness, repulsion, unlinked
+  "shape": {"focus": 2.0},               // layout: focus, contraction, damping, stiffness, repulsion, unlinked,
+                                         // query_fade_tau (s, default 1.5: see Query presence)
   "pose": {"tracker": "body"},           // body | hands | face | both; trace, fit, joints, smooth
   "audio_smoothing": null, "rel_smoothing": null,
   "motion": {"auto": true, "refresh": 3.0, "window": 3.0, "level": "full", "contrast": 0.7, "relative": 1.0},
@@ -228,6 +229,32 @@ description arrives as a `motion` message and becomes the query
 | `snapshot` | in answer to `snapshot` | see below |
 | `error` | | `detail` |
 
+### Query presence
+
+The server's layout does not switch a query on and off; it fades it.  A
+presence `p` (0…1) eases toward 1 while the socket has a query and toward 0
+after `query_clear`, with time constant `shape.query_fade_tau` (s, default 1.5;
+0 = switch at once; per socket with `{"type": "shape"}` or from
+`profile.shape`).  Everything the query drives is blended by `p`:
+
+- node `rel` and edge `overlap` (sim frames, OSC) are scaled by `p`;
+- spring rest lengths / stiffness and the radial pull blend from the no-query
+  layout (p = 0) to the query layout (p = 1);
+- the Lakota background weights blend from node size to relevance.
+
+After `query_clear` the last relevance stays and fades out; once `p < 0.01` it
+is dropped and `query_active` turns false (~7 s at tau 1.5).  `query_active`
+(sim frames, OSC `/frame`, snapshot) = `p ≥ 0.01`; `query_presence` (sim
+frames, snapshot) and OSC `/delyrism/query/presence f` carry `p` itself, to
+blend by instead of switching on `query_active`.
+
+Switching kinds keeps the latent smoothing too: a media vector blends
+(`audio_smoothing`) from the current query whatever its kind, and a transcript
+glides from it; after `query_clear`, a new query blends / glides from the
+cleared one while it is still fading out, else starts at its own vector and
+fades in by `p`.  Only PE-AV queries of different heads (audio / video / av)
+start fresh, since their vectors live in different spaces.
+
 ### `snapshot` — a recording sample
 
 The layout and the vectors it was built and scored from, all from the same
@@ -241,6 +268,7 @@ ones still being scored):
  "context_vec": [...] | null,           // its embedding (the Δ-graph's sentence vector), null without a context
  "context_pending": "…" | null,         // a newer context whose graph is still being built
  "query_active": true,
+ "query_presence": 0.83,                // the layout's query presence (see Query presence)
  "query_kind": "text" | "speech" | "audio" | "image" | "video" | "av" | "motion" | "pose" | null,
  "query_text": "lightning" | null,      // the text / transcript / movement words; "(camera)" etc. for media
  "query_vec": [...] | null,             // the vector the relevance was scored with (after the media EMA / speech glide)
@@ -264,13 +292,13 @@ The server's own layout (the one streamed to TouchDesigner over OSC), as
 columnar JSON; ~2.6 KB for a 16-node graph, ~26/s at `hz: 30`.
 
 ```json
-{"type": "sim", "seq": 412, "t": 13.71, "graph_seq": 3, "query_active": true, "awake": true,
+{"type": "sim", "seq": 412, "t": 13.71, "graph_seq": 3, "query_active": true, "query_presence": 1.0, "awake": true,
  "symbols": ["BAG", "CLOUDS", "DRAGONFLY", …],          // the space's symbol order (TD: Pal0…Pal9 by this index)
  "nodes": {"id": ["clouds", …],                          // descriptor label (nodes are descriptors)
            "uid": [17, …],                               // stable per descriptor, survives graph changes
            "sym": [1, …],                                // index into symbols = the owner symbol
            "x": [-0.192, …], "y": [0.537, …],            // output units ≈ −1…1, +y up, origin centre
-           "rel": [0.0, …],                              // query relevance 0…1 (0 without a query)
+           "rel": [0.0, …],                              // query relevance 0…1, × query_presence
            "size": [0.4, …],                             // Σ|Δ| of the node's edges, 0…1
            "fade": [1.0, …], "alive": [true, …],         // appear / disappear envelope; false = fading out
            "color": ["#ffd166", …]},                     // the space palette's colour (TD may use its own)
