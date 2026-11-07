@@ -62,3 +62,9 @@ protobuf>=4.25.3
 
 # ---- Real-time OSC Server ----
 python-osc
+
+# ---- Graphemes (delyrism/graphemes) ----
+opencv-contrib-python>=4.8   # thinning glyphs into strokes (cv2.ximgproc)
+fonttools>=4.40              # symbol-font coverage
+pandas>=2.0                  # EMOKINE motion CSVs
+pywavelets>=1.6              # wavelet packet best basis (learning only)
