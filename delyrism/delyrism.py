@@ -188,15 +188,24 @@ class TextEmbedder:
             self._init_clip(model)
         elif self.backend_type == "peav":
             self._init_peav(model)
+        elif self.backend_type == "gemini":
+            self._init_gemini(model)
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav | gemini")
 
         # Check if backend was properly initialized
-        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip", "peav"):
+        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip", "peav", "gemini"):
             raise RuntimeError(f"[Embedder] FAILED to initialize backend '{backend}'. Check dependencies and model availability.")
 
     # ---------- init helpers ----------
+    def _init_gemini(self, model_name: Optional[str]):
+        """Gemini Embedding 2 over REST: text and audio share one space (delyrism/gemini.py)."""
+        from .gemini import GeminiEmbedder
+        self._gemini = GeminiEmbedder(model_name)
+        self.dim = self._gemini.dim
+        self.audio_capable = True
+
     def _init_cloudflare(self, model_name: str):
         """Initialize Cloudflare Workers AI embedding backend."""
         import os
@@ -509,6 +518,8 @@ class TextEmbedder:
     # --- replace your embed_audio_array fallback with this (no torchaudio) ---
     @torch.no_grad()
     def embed_audio_array(self, wave: np.ndarray, sr: int) -> np.ndarray:
+        if self.backend_type == "gemini":
+            return self._gemini.embed_audio(np.asarray(wave, dtype=np.float32), sr)
         if self.backend_type == "peav":
             return self._peav.embed_audio(np.asarray(wave, dtype=np.float32), sr)
         if self.backend_type == "audioclip":
@@ -656,6 +667,10 @@ class TextEmbedder:
         context: Optional[str] = None,
         batch_size: int = 32  # Process in chunks to save RAM
     ):
+        # --- Gemini Embedding 2 (REST, shares its space with audio) ---
+        if self.backend_type == "gemini":
+            return self._gemini.embed_text(list(texts))
+
         # --- Cloudflare path (fastest!) ---
         if self.backend_type == "cloudflare" and hasattr(self, "_cf_ready"):
             # For Qwen-family CF embedders, apply the same instruction/context

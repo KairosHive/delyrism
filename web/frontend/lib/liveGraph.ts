@@ -49,7 +49,7 @@ export interface TrackStats {
   offThread: boolean;   // tracking in a worker on the camera's own frames (else on the page, from the <video>)
 }
 
-export type QueryKind = "text" | "audio" | "image" | "video" | "av" | "pose" | "motion";
+export type QueryKind = "text" | "speech" | "audio" | "image" | "video" | "av" | "pose" | "motion";
 export type QueryMode = QueryKind;
 const tracks = (m: QueryMode) => m === "pose" || m === "motion";   // modes fed by the landmark tracker
 
@@ -107,6 +107,7 @@ interface LiveState {
   videoCapable: boolean;         // … a video tower (PE-AV, sliding window of frames)
   avCapable: boolean;            // … a joint audio-visual tower (PE-AV)
   poseCapable: boolean;          // the server has MediaPipe for pose tracking
+  sttCapable: boolean;           // the server can transcribe speech (Cloudflare Whisper)
   pending: number;               // in-flight recomputes (for the status pulse)
 
   // ----- live media query (mic / camera sliding windows) -----
@@ -115,6 +116,10 @@ interface LiveState {
   liveError: string | null;
   audioLevel: number;            // smoothed RMS 0..~0.5
   audioWindow: number;           // seconds of audio per embedding
+  speechChunk: number;           // speech mode: seconds of audio per transcribed chunk
+  speechKeep: number;            // speech mode: seconds of words kept in the query
+  heard: string;                 // speech mode: the last chunk's words
+  transcript: string;            // speech mode: the rolling transcript that is the query
   videoWindow: number;           // seconds of frames per embedding
   videoFps: number;              // frames per second fed to the model (window × fps = frames)
   sendInterval: number;          // ms between embeddings
@@ -150,7 +155,7 @@ interface LiveState {
   threshold: number;    // relevance cut for the "overlap subgraph" readout
 
   _send: ((msg: object) => void) | null;
-  _sendBinary: ((kind: 1 | 2 | 3 | 4 | 5 | 6, buf: ArrayBuffer) => void) | null;
+  _sendBinary: ((kind: 1 | 2 | 3 | 4 | 5 | 6 | 7, buf: ArrayBuffer) => void) | null;
   _mic: MicCapture | null;
   _cam: CameraCapture | null;
   _ticker: ReturnType<typeof setInterval> | null;
@@ -175,7 +180,7 @@ const DEBOUNCE_MS = 180;
 let ctxTimer: ReturnType<typeof setTimeout> | null = null;
 let qTimer: ReturnType<typeof setTimeout> | null = null;
 
-const needsMic = (m: QueryMode) => m === "audio" || m === "av";
+const needsMic = (m: QueryMode) => m === "audio" || m === "av" || m === "speech";
 const needsCam = (m: QueryMode) => m === "image" || m === "video" || m === "av" || tracks(m);
 
 // ---- browser landmark tracker (pose / movement modes) ----------------------
@@ -394,7 +399,11 @@ async function ensureCapture(get: () => LiveState, set: (p: Partial<LiveState>) 
 function sendWindow(get: () => LiveState) {
   const s = get();
   if (!s._sendBinary) return;
-  if (s.queryMode === "audio") {
+  if (s.queryMode === "speech") {
+    // consecutive chunks (the ticker runs at the chunk length), transcribed on the server
+    const a = s._mic?.window(s.speechChunk);
+    if (a) s._sendBinary(7, a);
+  } else if (s.queryMode === "audio") {
     const a = s._mic?.window(s.audioWindow);
     if (a) s._sendBinary(1, a);
   } else if (s.queryMode === "image") {
@@ -423,7 +432,8 @@ function sendWindow(get: () => LiveState) {
 }
 
 /** Each mode's send rate: movement mode refreshes at its own pace. */
-const tickMs = (s: LiveState) => (s.queryMode === "motion" ? s.motionRefresh * 1000 : s.sendInterval);
+const tickMs = (s: LiveState) =>
+  s.queryMode === "motion" ? s.motionRefresh * 1000 : s.queryMode === "speech" ? s.speechChunk * 1000 : s.sendInterval;
 
 function restartTicker(get: () => LiveState, set: (p: Partial<LiveState>) => void) {
   const s = get();
@@ -451,6 +461,7 @@ export const useLive = create<LiveState>((set, get) => ({
   videoCapable: false,
   avCapable: false,
   poseCapable: false,
+  sttCapable: false,
   pending: 0,
 
   queryMode: "text",
@@ -458,6 +469,10 @@ export const useLive = create<LiveState>((set, get) => ({
   liveError: null,
   audioLevel: 0,
   audioWindow: 2.5,
+  speechChunk: 3,
+  speechKeep: 30,
+  heard: "",
+  transcript: "",
   videoWindow: 3.0,
   videoFps: 4,
   sendInterval: 600,
@@ -520,6 +535,10 @@ export const useLive = create<LiveState>((set, get) => ({
       return;
     }
     s._send?.({ type: "query_clear" });
+    if (queryMode === "speech") {
+      set({ heard: "", transcript: "" });
+      s._send?.({ type: "stt", reset: true, keep: s.speechKeep });
+    }
     // movement words come from body and hands; a face has its own description (next)
     if (queryMode === "motion" && s.poseOpts.tracker === "face") get().setPoseOpts({ tracker: "body" });
     // switching between live modes on the fly keeps whatever capture the
@@ -612,7 +631,7 @@ const SHAPE_KEYS = ["focus", "contraction", "damping", "stiffness", "repulsion",
 const shapeOf = (s: LiveState) => Object.fromEntries(SHAPE_KEYS.map((k) => [k, s[k]]));
 
 const asKind = (k: unknown): QueryKind =>
-  k === "audio" || k === "image" || k === "video" || k === "av" || k === "pose" || k === "motion" ? k : "text";
+  k === "speech" || k === "audio" || k === "image" || k === "video" || k === "av" || k === "pose" || k === "motion" ? k : "text";
 
 /** Open / maintain the live graph socket for the current space. */
 export function useLiveSocket() {
@@ -636,7 +655,7 @@ export function useLiveSocket() {
       sock.onopen = () => {
         attempt = 0;
         const send = (msg: object) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg)); };
-        const sendBinary = (kind: 1 | 2 | 3 | 4 | 5 | 6, buf: ArrayBuffer) => {
+        const sendBinary = (kind: 1 | 2 | 3 | 4 | 5 | 6 | 7, buf: ArrayBuffer) => {
           if (sock.readyState !== WebSocket.OPEN || sock.bufferedAmount > 2_000_000) return;
           const out = new Uint8Array(1 + buf.byteLength);
           out[0] = kind;
@@ -662,7 +681,8 @@ export function useLiveSocket() {
         if (msg.type === "ready") {
           useLive.setState((s) => ({ status: "ready", params: { ...msg.params, ...(s.params ?? {}) },
             audioCapable: !!msg.audio_capable, imageCapable: !!msg.image_capable,
-            videoCapable: !!msg.video_capable, avCapable: !!msg.av_capable, poseCapable: !!msg.pose_capable }));
+            videoCapable: !!msg.video_capable, avCapable: !!msg.av_capable, poseCapable: !!msg.pose_capable,
+            sttCapable: !!msg.stt_capable }));
         } else if (msg.type === "graph") {
           useLive.setState((s) => ({
             graph: { nodes: msg.nodes, edges: msg.edges, context: msg.context },
@@ -681,6 +701,9 @@ export function useLiveSocket() {
             queryKind: asKind(msg.kind),
             ...(msg.kind === "motion" && msg.active ? { motionApplied: { text: String(msg.query ?? ""), at: performance.now() } } : {}),
           }));
+        } else if (msg.type === "heard") {
+          if (useLive.getState().queryMode !== "speech") return;
+          useLive.setState({ heard: String(msg.text ?? ""), transcript: String(msg.transcript ?? "") });
         } else if (msg.type === "motion") {
           if (useLive.getState().queryMode !== "motion") return;
           useLive.setState({ motion: msg as MotionReading });

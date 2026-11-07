@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import profile as live_profile
 from . import testing as _testing
+from .. import gemini as _gemini
 from .routes import analysis, builder, context, delta, live, realtime, spaces, story, topology
 
 # readiness for process managers: /healthz → "ready" once the warm-up (if any) is done
@@ -128,7 +129,7 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
         out = _backends()
         if os.environ.get("DELYRISM_MEDIA", "1").strip().lower() in ("0", "false", "no", "off"):
             out["embedders"] = [e for e in out["embedders"]
-                                if not (e.get("audio") or e.get("image") or e.get("video") or e.get("av"))]
+                                if e.get("api") or not (e.get("audio") or e.get("image") or e.get("video") or e.get("av"))]
         return out
 
     def _backends():
@@ -139,6 +140,8 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
                 {"id": "cloudflare-embeddinggemma", "label": "Cloudflare · EmbeddingGemma 300M", "remote": True, "audio": False, "dim": 768},
                 {"id": "cloudflare-bge-large", "label": "Cloudflare · BGE Large EN", "remote": True, "audio": False, "dim": 1024},
                 {"id": "cloudflare-bge-base", "label": "Cloudflare · BGE Base EN", "remote": True, "audio": False, "dim": 768},
+                {"id": "gemini-embedding-2", "label": "Gemini Embedding 2 (audio+text, API)", "remote": True, "audio": True,
+                 "api": True, "available": _gemini.available(), "dim": 768},
                 {"id": "qwen3", "label": "Local · Qwen3 Embedding", "remote": False, "audio": False, "dim": 1024},
                 {"id": "qwen2", "label": "Local · Qwen2 Embedding", "remote": False, "audio": False, "dim": 1024},
                 {"id": "sentence-transformer", "label": "Local · sentence-transformers", "remote": False, "audio": False, "dim": 768},

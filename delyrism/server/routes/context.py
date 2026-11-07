@@ -98,6 +98,24 @@ def set_morphing_blend(req: MorphBlendRequest) -> dict:
     return {"ok": True, "active": True}
 
 
+def _read_audio(blob: bytes):
+    """(mono float32, sr).  The page always sends 16-bit PCM WAV, which the
+    standard library reads, so the hosted image needs no audio stack; other
+    formats go through librosa where it is installed."""
+    import wave
+    try:
+        with wave.open(io.BytesIO(blob)) as w:
+            n, ch, width, sr = w.getnframes(), w.getnchannels(), w.getsampwidth(), w.getframerate()
+            raw = w.readframes(n)
+        if width != 2:
+            raise ValueError(f"{8 * width}-bit WAV")
+        x = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        return (x.reshape(-1, ch).mean(axis=1) if ch > 1 else x), sr
+    except (wave.Error, EOFError, ValueError):
+        import librosa
+        return librosa.load(io.BytesIO(blob), sr=None, mono=True)
+
+
 @router.post("/encode-audio", response_model=EncodeAudioResponse)
 async def encode_audio(
     space_id: str = Form(...),
@@ -113,13 +131,11 @@ async def encode_audio(
             status_code=400,
             detail="this space's embedder has no audio tower: rebuild it with an audio-capable backend",
         )
-    try:
-        import librosa
-    except ImportError:
-        raise HTTPException(status_code=500, detail="librosa not installed on server")
-
     blob = await file.read()
-    wave, sr = librosa.load(io.BytesIO(blob), sr=None, mono=True)
+    try:
+        wave, sr = _read_audio(blob)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"could not read the audio: {e}")
     if max_seconds and len(wave) > max_seconds * sr:
         wave = wave[: max_seconds * sr]
     v = space.embedder.embed_audio_array(wave, sr)

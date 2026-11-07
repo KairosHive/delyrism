@@ -28,11 +28,12 @@ No build-command, start-command or root-directory overrides needed.
 
 | Variable                  | Required for                              |
 |---------------------------|-------------------------------------------|
-| `CLOUDFLARE_ACCOUNT_ID`   | Cloudflare embedder + story generator     |
+| `CLOUDFLARE_ACCOUNT_ID`   | Cloudflare embedder, story generator, Live speech → text (Whisper) |
 | `CLOUDFLARE_API_TOKEN`    | Same                                      |
 | `CLOUDFLARE_GATEWAY_ID`   | (optional) Cloudflare AI Gateway proxy    |
 | `CLOUDFLARE_GATEWAY_TOKEN`| (optional) AI Gateway auth                |
 | `EGREGORE_URL`            | (optional) URL of an Egregore builder     |
+| `GEMINI_API_KEY`          | (optional) Gemini Embedding 2: sound and words in one space, for the microphone in Live and the Audio Context box |
 | `CORS_ORIGINS`            | Unused in single-service mode             |
 
 If you skip the Cloudflare vars the Cloudflare embedder dropdown will

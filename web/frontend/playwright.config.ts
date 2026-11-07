@@ -25,6 +25,9 @@ export default defineConfig({
     baseURL: external || `http://127.0.0.1:${PORT}`,
     trace: "retain-on-failure",
     ...devices["Desktop Chrome"],
+    // a fake microphone (a tone) and no permission prompt, for the speech mode
+    launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] },
+    permissions: ["microphone"],
   },
   webServer: external
     ? undefined
@@ -32,7 +35,7 @@ export default defineConfig({
         command: `"${PY}" -m delyrism.server --host 127.0.0.1 --port ${PORT} --static "${path.join(__dirname, "out")}"`,
         cwd: ROOT,
         url: `http://127.0.0.1:${PORT}/healthz`,
-        env: { DELYRISM_TEST_EMBEDDER: "1", DELYRISM_OSC: "0", DELYRISM_SPEAK: "0", DELYRISM_MEDIA: "0" },
+        env: { DELYRISM_TEST_EMBEDDER: "1", DELYRISM_TEST_STT: "1", DELYRISM_OSC: "0", DELYRISM_SPEAK: "0", DELYRISM_MEDIA: "0" },
         reuseExistingServer: false,
         timeout: 120_000,
       },

@@ -30,7 +30,8 @@ def test_backends_lists_cloudflare_embedders(client):
 def test_backends_hide_media_models_when_hosted(client, monkeypatch):
     monkeypatch.setenv("DELYRISM_MEDIA", "0")
     embs = client.get("/backends").json()["embedders"]
-    assert not any(e.get("audio") or e.get("image") or e.get("video") for e in embs)
+    local_media = [e for e in embs if not e.get("api") and (e.get("audio") or e.get("image") or e.get("video"))]
+    assert local_media == []                      # API models (Gemini) stay: they need no local model
 
 
 def test_presets(client):
@@ -251,3 +252,40 @@ def test_lost_space_is_404_with_the_detail_the_client_expects(client, symbols, f
     assert client.post("/spaces", json=build_body(symbols)).json()["space_id"] == sid
     r2 = client.get(path.format(sid=sid)) if method == "get" else client.post(path, json={"space_id": sid, **extra})
     assert r2.status_code == 200, r2.text
+
+
+# ---------- sound in an audio-capable space (Gemini Embedding 2 online) ----------
+
+@pytest.fixture(scope="module")
+def audio_space(client, symbols):
+    body = build_body(symbols)
+    body["embedder"] = {"backend": "gemini-embedding-2"}
+    r = client.post("/spaces", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _tone_wav(freq: float, seconds: float = 1.0, sr: int = 16000, amp: float = 0.3) -> bytes:
+    import io, wave
+    import numpy as np
+    t = np.arange(int(seconds * sr)) / sr
+    pcm = (amp * np.sin(2 * np.pi * freq * t) * 32767).astype("<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+def test_encode_audio_in_an_audio_space(client, audio_space):
+    """The sidebar's Audio Context: a WAV becomes a context vector (no librosa needed)."""
+    r = client.post("/context/encode-audio", data={"space_id": audio_space["space_id"]},
+                    files={"file": ("a.wav", _tone_wav(220), "audio/wav")})
+    assert r.status_code == 200, r.text
+    assert r.json()["dim"] > 0
+
+
+def test_unreadable_audio_is_400(client, audio_space):
+    r = client.post("/context/encode-audio", data={"space_id": audio_space["space_id"]},
+                    files={"file": ("a.wav", b"not audio at all", "audio/wav")})
+    assert r.status_code == 400

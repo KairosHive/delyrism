@@ -25,7 +25,10 @@ from . import testing as _testing
 
 
 # The engine knows only these primitive backend ids:
-_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav"}
+_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav", "gemini"}
+
+# API embedders with an audio tower: no local model, so the hosted site offers them
+_API_PRESETS = {"gemini-embedding-2": ("gemini", "gemini-embedding-2")}
 
 # UI-facing Cloudflare presets — same mapping the Streamlit app uses.  Each UI
 # id collapses to backend="cloudflare" + a specific @cf/... model.
@@ -41,13 +44,16 @@ _CF_PRESETS = {
 def _resolve_backend(backend: str, model: Any) -> tuple[str, Any]:
     """Translate a UI backend id (e.g. 'cloudflare-bge-m3') into the
     (engine_backend, model) pair the TextEmbedder constructor expects."""
+    if backend in _API_PRESETS:
+        engine, preset = _API_PRESETS[backend]
+        return engine, (model or preset)
     if backend in _CF_PRESETS:
         # User-supplied model overrides the preset; otherwise use the preset.
         return "cloudflare", (model or _CF_PRESETS[backend])
     if backend not in _ENGINE_BACKENDS:
         raise ValueError(
             f"Unknown embedder backend '{backend}'. "
-            f"Known UI ids: {sorted({*_ENGINE_BACKENDS, *_CF_PRESETS})}"
+            f"Known UI ids: {sorted({*_ENGINE_BACKENDS, *_CF_PRESETS, *_API_PRESETS})}"
         )
     return backend, model
 
@@ -151,7 +157,8 @@ def get_embedder(cfg: Dict[str, Any]) -> Tuple[str, TextEmbedder]:
         emb = _embedder_cache.get(fp)
         if emb is None and _testing.enabled():          # tests / offline runs, see testing.py
             emb = _testing.HashEmbedder(default_instruction=cfg.get("default_instruction"),
-                                        default_context=cfg.get("default_context"))
+                                        default_context=cfg.get("default_context"),
+                                        audio=cfg.get("backend") in _testing.AUDIO_BACKENDS)
             _add_encode_cache(emb)
             _embedder_cache[fp] = emb
         if emb is None:

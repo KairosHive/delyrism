@@ -126,6 +126,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "context", "text": "…"}` | the dream: rebuilds the Δ-graph (send on every settled edit, ~200 ms debounce is plenty) |
 | `{"type": "query", "text": "…"}` | text query → relevance; speech after `delay` |
 | `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
+| `{"type": "stt", "keep"?: 30, "language"?: "en", "reset"?: true}` | speech mode: seconds of words kept in the query, the spoken language (omit to detect), forget what was heard |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
@@ -150,6 +151,14 @@ then        rows × 7 float32 LE    x y z visibility wx wy wz (MediaPipe normali
             body 33 rows · hands 42 · face 478 · both 75
 ```
 
+**Speech mode** = binary kind `7`, a microphone chunk in the audio layout
+(`uint32 LE sample-rate · int16 LE PCM mono`, 1.5 to 8 s, consecutive). The
+server transcribes each chunk with Cloudflare Workers AI Whisper
+(`@cf/openai/whisper-large-v3-turbo`, override with `DELYRISM_STT_MODEL`),
+keeps the last `keep` seconds of words and applies them as a `transcript`
+(latent smoothing above). Silent chunks are not sent to Whisper. `ready`
+carries `stt_capable` (Cloudflare credentials present).
+
 **Movement mode** = stream these frames; with `profile.motion.auto` the server
 describes the movement every `refresh` s while frames arrive (stop sending
 them to leave movement mode, then send a `query` or `query_clear`). Each
@@ -164,6 +173,7 @@ description arrives as a `motion` message and becomes the query
 | `relevance` | after each query / graph change, and `hz`/s while a spoken query glides | `relevance: {descriptor: 0…1}`, `active`, `query` (the text, the transcript or the movement words), `kind` ("text" · "speech" · "motion" · …) |
 | `motion` | each movement description | `text` (the words, "" when nothing moved or nobody is in frame), `level`, the qualities |
 | `pose` | per tracked batch | `jpeg` (base64 drawing of the dancer with trails), `present` |
+| `heard` | each transcribed speech chunk | `text` (this chunk's words), `transcript` (the rolling words that are the query) |
 | `spoken` | a word was spoken | `word`, `duration`, `mood`, `mood_probs` |
 | `sim` | at the subscribed rate while anything moves, 4 Hz once settled | see below |
 | `error` | | `detail` |

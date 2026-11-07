@@ -94,3 +94,31 @@ test("a space the server lost is rebuilt without a visible error", async ({ page
   await openTab(page, "Live");
   await expect(page.getByText(/^ready · \d+ edges/)).toBeVisible();
 });
+
+test("Live speech mode transcribes the microphone into a spoken query", async ({ page }) => {
+  test.skip(external, "uses the test server's stand-in transcriber and Chromium's fake microphone");
+  const problems = watch(page);
+  await build(page);
+  await openTab(page, "Live");
+  await expect(page.getByText(/^ready · \d+ edges/)).toBeVisible();
+  await page.getByPlaceholder("a slow fire under ice…").fill("flooding spirits dancing around floating suns");
+  await page.getByRole("button", { name: "speech → text" }).click();
+  await page.getByRole("button", { name: "● listen" }).click();
+  await expect(page.getByText("the water rises")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/speech query on/)).toBeVisible();
+  await page.getByRole("button", { name: "■ stop" }).click();
+  expect(problems).toEqual([]);
+});
+
+test("an audio-capable space offers the microphone in Live", async ({ page }) => {
+  test.skip(external, "builds with the test server's stand-in for Gemini");
+  await page.goto("/");
+  await page.getByText("Embedding Model", { exact: true }).click();      // the sidebar section holding the dropdown
+  const backend = page.locator("select").filter({ has: page.locator('option[value="gemini-embedding-2"]') });
+  await expect(backend).toHaveCount(1);
+  await backend.selectOption("gemini-embedding-2");
+  await page.getByRole("button", { name: /^(Build|Rebuild) space$/ }).click();
+  await expect(page.getByRole("button", { name: "Rebuild space" })).toBeVisible();
+  await openTab(page, "Live");
+  await expect(page.getByRole("button", { name: "Gemini · mic" })).toBeVisible();
+});

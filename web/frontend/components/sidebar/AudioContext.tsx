@@ -30,7 +30,7 @@ export function AudioContext() {
   // Only CLAP exposes the audio path in the UI (matches the old Streamlit
   // app's behavior).  The engine technically supports audioclip too, but it
   // was never surfaced.
-  const audioCapable = backend === "clap";
+  const audioCapable = backend === "clap" || backend === "gemini-embedding-2";
 
   const [status, setStatus] = React.useState<"idle" | "encoding" | "ok" | "error">("idle");
   const [error, setError] = React.useState<string | null>(null);
@@ -159,7 +159,7 @@ export function AudioContext() {
 
       {!audioCapable ? (
         <p className="text-[11px] text-ink-400">
-          Switch the Embedding Model to <span className="text-accent-300">CLAP</span> and rebuild
+          Switch the Embedding Model to <span className="text-accent-300">Gemini Embedding 2</span> (or local CLAP) and rebuild
           the space to enable audio context.
         </p>
       ) : !spaceId ? (

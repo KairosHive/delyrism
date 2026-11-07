@@ -37,6 +37,8 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from .. import engine_cache
 from ..util import to_hex
+from .. import testing as _testing
+from .. import transcribe
 from delyrism.traversal import DeltaWalker, WalkerParams
 
 router = APIRouter(prefix="/realtime", tags=["realtime"])
@@ -603,6 +605,12 @@ _BIN_KINDS = {
     4: ("av", _av_vec, 4 + 4 + 2 * 1000 + 100),
 }
 _POSE_KIND = 5          # JPEG for the pose tracker; embedded on pose_tick, not on arrival
+_STT_KIND = 7           # speech chunk (same layout as audio), transcribed and queried as words
+
+
+def _stt_capable() -> bool:
+    """Speech mode needs Cloudflare Whisper (or the test stand-in)."""
+    return transcribe.available() or _testing.enabled()
 _LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(audio + video)", "pose": "(pose)",
            "motion": "(movement)"}
 
@@ -648,6 +656,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     wake = asyncio.Event()
     pose_wake = asyncio.Event()
     glide_wake = asyncio.Event()
+    stt_wake = asyncio.Event()
+    heard: Dict[str, Any] = {"queue": [], "lines": [], "keep": 30.0, "language": None}
     emb = space.embedder
     # server-side twin of the browser's spring layout → OSC (see live_sim.py)
     sim = LiveSim()
@@ -749,7 +759,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                         "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
                         "video_capable": bool(getattr(emb, "video_capable", False)),
                         "av_capable": bool(getattr(emb, "av_capable", False)),
-                        "pose_capable": _pose_capable()})
+                        "pose_capable": _pose_capable(),
+                        "stt_capable": _stt_capable()})
 
     def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
         return {"relevance": rel, "active": state["vq"] is not None,
@@ -783,6 +794,50 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         if res is not None:
             sim.set_lakota(lakota.NAMES, res[0], res[1])
 
+    async def apply_transcript(text: str) -> None:
+        """Spoken text becomes the query: it sets a target embedding and the
+        query vector glides toward it (glide()).  Empty text holds the query."""
+        target = await asyncio.to_thread(_text_vec, space, text) if text.strip() else None
+        if target is None:
+            return                    # nothing said yet: hold the current query
+        if state["query_kind"] != "speech":
+            state["rel_prev"] = None
+            state["pending"] = None
+        state["query_kind"] = "speech"
+        state["query_text"] = text
+        state["vq_target"] = target
+        if state["vq"] is None or float(state["transcript"]["tau"]) <= 0:
+            state["vq"] = target      # first words (or no smoothing): start there
+        state["query_dirty"] = True
+        glide_wake.set()
+        if "speech" not in speech.cfg.media_kinds:
+            schedule_speak()          # speaks `delay` s after the transcript stops changing
+        wake.set()
+
+    async def stt_loop() -> None:
+        """Speech mode: transcribe each microphone chunk (Cloudflare Whisper),
+        keep the last `keep` seconds of words and query with them."""
+        while True:
+            await stt_wake.wait()
+            stt_wake.clear()
+            while heard["queue"]:
+                wave, sr = _parse_audio(heard["queue"].pop(0))
+                prompt = " ".join(w for _, w in heard["lines"])
+                try:
+                    stt = _testing.fake_transcribe if _testing.stt_stand_in() else transcribe.transcribe
+                    words = await asyncio.to_thread(stt, wave, sr, heard["language"], prompt)
+                except Exception as e:  # noqa: BLE001 — one failed chunk must not end the session
+                    await ws.send_json({"type": "error", "detail": f"speech to text: {e}"})
+                    continue
+                now = time.perf_counter()
+                if words:
+                    heard["lines"].append((now, words))
+                heard["lines"][:] = [(t, w) for t, w in heard["lines"] if now - t <= heard["keep"]]
+                text = " ".join(w for _, w in heard["lines"])
+                await ws.send_json({"type": "heard", "text": words, "transcript": text})
+                if words:
+                    await apply_transcript(text)
+
     async def reader() -> None:
         while True:
             msg = await ws.receive()
@@ -807,6 +862,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     state["pose_lm"].append(_parse_landmarks(bytes(buf[1:])))
                     del state["pose_lm"][:-120]            # never more than ~4 s behind
                     pose_wake.set()
+                    continue
+                if buf and buf[0] == _STT_KIND and len(buf) > 4 + 2 * 1000:
+                    heard["queue"].append(bytes(buf[1:]))
+                    del heard["queue"][:-3]
+                    stt_wake.set()
                     continue
                 spec = _BIN_KINDS.get(buf[0] if buf else 0)
                 if spec and len(buf) - 1 >= spec[2]:
@@ -859,25 +919,20 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             elif t == "transcript":
                 # spoken text (e.g. a live transcription of the last ~30 s): the
                 # query glides toward its embedding instead of jumping (glide())
-                text = str(m.get("text") or "")
                 for k in ("tau", "hz"):
                     if m.get(k) is not None:
                         state["transcript"][k] = float(m[k])
-                target = await asyncio.to_thread(_text_vec, space, text) if text.strip() else None
-                if target is None:
-                    continue                  # nothing said yet: hold the current query
-                if state["query_kind"] != "speech":
-                    state["rel_prev"] = None
-                    state["pending"] = None
-                state["query_kind"] = "speech"
-                state["query_text"] = text
-                state["vq_target"] = target
-                if state["vq"] is None or float(state["transcript"]["tau"]) <= 0:
-                    state["vq"] = target      # first words (or no smoothing): start there
-                state["query_dirty"] = True
-                glide_wake.set()
-                if "speech" not in speech.cfg.media_kinds:
-                    schedule_speak()          # speaks `delay` s after the transcript stops changing
+                await apply_transcript(str(m.get("text") or ""))
+                continue
+            elif t == "stt":
+                # speech mode settings: transcript memory (s) and language (None = detect)
+                if m.get("keep") is not None:
+                    heard["keep"] = float(np.clip(float(m["keep"]), 5.0, 120.0))
+                if "language" in m:
+                    heard["language"] = (str(m["language"]).strip() or None) if m["language"] else None
+                if m.get("reset"):
+                    heard["lines"].clear()
+                continue
             elif t == "audio_smoothing":
                 state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
             elif t == "rel_smoothing":
@@ -1133,7 +1188,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     tasks = [asyncio.create_task(reader()), asyncio.create_task(worker()),
              asyncio.create_task(pose_loop()), asyncio.create_task(osc_pump()),
-             asyncio.create_task(glide())]
+             asyncio.create_task(glide()), asyncio.create_task(stt_loop())]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for d in done:

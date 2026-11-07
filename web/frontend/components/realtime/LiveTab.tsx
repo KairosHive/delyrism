@@ -66,9 +66,10 @@ function Inputs() {
   );
 }
 
-const MODE_LABEL: Record<QueryMode, string> = { text: "text", audio: "mic", image: "camera", video: "video", av: "audio + video", pose: "pose", motion: "movement → text" };
+const MODE_LABEL: Record<QueryMode, string> = { text: "text", speech: "speech → text", audio: "mic", image: "camera", video: "video", av: "audio + video", pose: "pose", motion: "movement → text" };
 const MODE_HINT: Record<QueryMode, string> = {
   text: "typed sentence",
+  speech: "the microphone transcribed (Whisper on Cloudflare); the last seconds of words are the query and it glides as they change",
   audio: "sliding window of microphone audio through the audio tower",
   image: "latest camera frame through the CLIP image tower",
   video: "sliding window of camera frames through the PE-AV video tower",
@@ -79,13 +80,14 @@ const MODE_HINT: Record<QueryMode, string> = {
 
 function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; status: string; nEdges: number; queryActive: boolean; error: string | null }) {
   const { query, setQuery, queryMode, setQueryMode, live, startLive, stopLive, liveError, audioLevel, queryKind,
-          audioCapable, imageCapable, videoCapable, avCapable, poseCapable,
+          audioCapable, imageCapable, videoCapable, avCapable, poseCapable, sttCapable, transcript, speechChunk, speechKeep,
           audioWindow, videoWindow, videoFps, sendInterval, setSendInterval, motionRefresh,
           audioSmoothing, setAudioSmoothing, relSmoothing, setRelSmoothing, set, camVideo } = useLive(useShallow((s) => ({
     query: s.query, setQuery: s.setQuery, queryMode: s.queryMode, setQueryMode: s.setQueryMode, live: s.live,
     startLive: s.startLive, stopLive: s.stopLive, liveError: s.liveError, audioLevel: s.audioLevel, queryKind: s.queryKind,
     audioCapable: s.audioCapable, imageCapable: s.imageCapable, videoCapable: s.videoCapable, avCapable: s.avCapable,
-    poseCapable: s.poseCapable, audioWindow: s.audioWindow, videoWindow: s.videoWindow, videoFps: s.videoFps,
+    poseCapable: s.poseCapable, sttCapable: s.sttCapable, transcript: s.transcript, speechChunk: s.speechChunk,
+    speechKeep: s.speechKeep, audioWindow: s.audioWindow, videoWindow: s.videoWindow, videoFps: s.videoFps,
     sendInterval: s.sendInterval, setSendInterval: s.setSendInterval, motionRefresh: s.motionRefresh,
     audioSmoothing: s.audioSmoothing, setAudioSmoothing: s.setAudioSmoothing, relSmoothing: s.relSmoothing, setRelSmoothing: s.setRelSmoothing,
     set: s.set, camVideo: s.camVideo,
@@ -93,7 +95,8 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   const backend = useSidebar((s) => s.embedderBackend);
   const can: Record<QueryMode, boolean> = {
     text: true,
-    audio: audioCapable || backend === "clap" || backend === "peav",
+    speech: sttCapable,
+    audio: audioCapable || backend === "clap" || backend === "peav" || backend === "gemini-embedding-2",
     image: imageCapable || backend === "clip",
     video: videoCapable || backend === "peav",
     av: avCapable || backend === "peav",
@@ -104,10 +107,11 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   };
   // show text + every live mode this space supports; if it supports none,
   // show the three generic ones greyed out so the hint explains what to build
-  const modes: QueryMode[] = (["text", "audio", "image", "video", "av", "pose", "motion"] as QueryMode[]).filter((m) => can[m]);
+  const modes: QueryMode[] = (["text", "speech", "audio", "image", "video", "av", "pose", "motion"] as QueryMode[]).filter((m) => can[m]);
   if (modes.length === 1) modes.push("audio", "video", "av");
-  const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP" : "";
-  const usesMic = queryMode === "audio" || queryMode === "av";
+  const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP"
+    : backend === "gemini-embedding-2" ? "Gemini" : "";
+  const usesMic = queryMode === "audio" || queryMode === "av" || queryMode === "speech";
   const usesCam = queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose" || queryMode === "motion";
   const poseClip = queryMode === "pose" && videoCapable;
   const level = Math.min(1, audioLevel * 6);
@@ -137,7 +141,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
                 className={`px-2 py-0.5 transition ${queryMode === m ? "bg-[#c2a6fe]/25 text-ink-50" : can[m] ? "text-ink-400 hover:text-ink-100" : "text-ink-600"}`}
                 title={MODE_HINT[m]}
               >
-                {m === "text" || m === "motion" || !prefix ? MODE_LABEL[m] : `${prefix} · ${MODE_LABEL[m]}`}
+                {m === "text" || m === "speech" || m === "motion" || !prefix ? MODE_LABEL[m] : `${prefix} · ${MODE_LABEL[m]}`}
               </button>
             ))}
           </span>
@@ -175,7 +179,8 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
             )}
             <span className="ml-auto font-mono text-[10px] text-ink-500">
               {live
-                ? queryMode === "audio" ? `${audioWindow.toFixed(1)} s / ${sendInterval} ms`
+                ? queryMode === "speech" ? `${speechChunk.toFixed(1)} s chunks`
+                  : queryMode === "audio" ? `${audioWindow.toFixed(1)} s / ${sendInterval} ms`
                   : queryMode === "image" ? `1 frame / ${sendInterval} ms`
                   : queryMode === "video" ? `${videoWindow.toFixed(1)} s · ${nFrames} f / ${sendInterval} ms`
                   : queryMode === "pose" ? `${poseClip ? `${videoWindow.toFixed(1)} s · ${nFrames} f` : "still"} / ${sendInterval} ms`
@@ -184,6 +189,11 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
                 : "off"}
             </span>
           </div>
+          {queryMode === "speech" && (
+            <div className="min-h-[44px] rounded-md bg-ink-950/50 px-3 py-2 text-[13px] leading-snug text-ink-200">
+              {transcript || <span className="text-ink-500">{live ? "listening…" : "press listen and speak"}</span>}
+            </div>
+          )}
           {queryMode === "pose" && <PosePanel />}
           {queryMode === "motion" && <MotionPanel />}
           {queryMode === "pose" && !can.pose && (
@@ -196,13 +206,15 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
           {queryMode !== "pose" && !can[queryMode] && (
             <div className="text-[11px] text-warning">
               This space was built with <span className="font-mono">{backend}</span>, which has no {MODE_LABEL[queryMode]} tower. Choose
-              <span className="mx-1 font-mono">{queryMode === "image" ? "Local · CLIP ViT-B/32" : queryMode === "audio" ? "Local · CLAP or PE-AV" : "Local · PE-AV small"}</span>
+              <span className="mx-1 font-mono">{queryMode === "image" ? "Local · CLIP ViT-B/32" : queryMode === "audio" ? "Gemini Embedding 2 (or local CLAP)" : "Local · PE-AV small"}</span>
               in the sidebar and rebuild — descriptors and media then share one space.
             </div>
           )}
           {liveError && <div className="text-[11px] text-danger">{liveError}</div>}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {usesMic && <Slider label="audio window" value={audioWindow} min={0.5} max={6} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("audioWindow", v)} help="Seconds of recent sound embedded each time." />}
+            {queryMode === "speech" && <Slider label="chunk" value={speechChunk} min={1.5} max={8} step={0.5} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("speechChunk", v)} help="Seconds of speech per transcription. Shorter is more reactive and cuts more words." />}
+            {queryMode === "speech" && <Slider label="memory" value={speechKeep} min={5} max={120} step={5} format={(v) => `${v} s`} onChange={(v) => { set("speechKeep", v); useLive.getState()._send?.({ type: "stt", keep: v }); }} help="Seconds of words kept in the query." />}
+            {usesMic && queryMode !== "speech" && <Slider label="audio window" value={audioWindow} min={0.5} max={6} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("audioWindow", v)} help="Seconds of recent sound embedded each time." />}
             {(queryMode === "video" || queryMode === "av" || poseClip) && <Slider label="video window" value={videoWindow} min={0.5} max={10} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(v) => set("videoWindow", v)} help="Seconds of recent frames fed to the model each time." />}
             {(queryMode === "video" || queryMode === "av" || poseClip) && <Slider label="model fps" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps · ${nFrames} f`} onChange={(v) => set("videoFps", v)} help={`Frames per second inside the window (camera is sampled at this rate). window × fps = ${nFrames} frames per embedding, capped at ${MAX_VIDEO_FRAMES}; ~55 ms per frame on the GPU.`} />}
             {queryMode === "image" && <Slider label="capture" value={videoFps} min={1} max={16} step={1} format={(v) => `${v} fps`} onChange={(v) => set("videoFps", v)} help="How often a camera frame is grabbed." />}

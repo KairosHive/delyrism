@@ -197,6 +197,26 @@ Ten archetypal systems ship under [`delyrism/structures/`](delyrism/structures/)
 
 Every sidebar control has a `?` tooltip — the parameter reference lives in the UI, not in this README.
 
+## Tests
+
+The tests cover the website as it runs online. `pytest` runs the real API
+with a deterministic stand-in embedder (`DELYRISM_TEST_EMBEDDER=1`), so it
+needs no network and no model. It checks every route the page calls, the
+Live socket (context, typed, spoken and microphone queries), speech to text,
+Gemini Embedding 2 and the rebuild of a space the server lost. Playwright
+builds a space in the static site served by the same server and opens every
+tab, with a fake microphone for the speech mode.
+
+```bash
+pip install -e ".[test]"
+pytest
+cd web/frontend && npm run build && PYTHON=python npm run e2e
+```
+
+GitHub Actions runs both and builds the Docker image on every push. After
+each Railway deploy, and nightly, it replays the browser tests against the
+deployed site (repository variable `SITE_URL`).
+
 ## Use cases
 
 - **Mythopoetic writing** — generate story seeds from Δ-graph motifs in 15 literary registers
