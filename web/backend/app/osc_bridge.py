@@ -41,7 +41,9 @@ same node; row j of every /edge/* array is the same edge.
   /delyrism/end          i seq     — last message of the frame: commit here
 
 Event, outside the frame bundles (app/speech.py):
-  /delyrism/speak        s word  s wav path  f seconds   — the query's top word, synthesised; play it
+  /delyrism/speak        s word  s wav path  f seconds  s mood  — the query's top word, synthesised in a
+                         mood sampled from the queried sub-network (neutral, happy, angry, fear, sigh,
+                         whispering, dramatic); play it
 
 Sent with the frame when the node order changed, and once a second:
   /delyrism/node/label   s×N   descriptor text

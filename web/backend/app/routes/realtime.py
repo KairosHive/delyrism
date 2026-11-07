@@ -278,8 +278,17 @@ def speech_status() -> Dict[str, Any]:
 
 @router.post("/speech")
 def speech_configure(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Patch the voice: {enabled, delay, url, repeat}."""
+    """Patch the voice: {enabled, delay, url, repeat, mood, mood_threshold, mood_temperature, mood_tau}."""
     return speech.cfg.configure(**cfg)
+
+
+@router.get("/speech/moods/{space_id}")
+def speech_moods(space_id: str) -> Dict[str, Any]:
+    """Mood balance across the space's descriptors + the most typical descriptors per mood."""
+    space = engine_cache.get_space(space_id)
+    if space is None:
+        raise HTTPException(status_code=404, detail="unknown space_id")
+    return speech.mood_report(space)
 
 
 # ---- OSC output (TouchDesigner) — format documented in app/osc_bridge.py ----
@@ -636,13 +645,18 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             word = max(rel, key=rel.get)
             if word == speak["last"] and not speech.cfg.repeat:
                 return
-            res = await asyncio.to_thread(speech.synthesize, word)
+            # mood sampled from the queried sub-network (see app/speech.py)
+            mood = (await asyncio.to_thread(speech.choose_mood, space, dict(rel))
+                    if speech.cfg.mood else dict(mood="neutral", tag=None, probs={}, nodes=[]))
+            res = await asyncio.to_thread(speech.synthesize, word, mood["tag"])
             if not res:
                 return
             speak["last"] = word
+            speech.cfg.last_mood = mood
             if osc.is_owner(osc_token):
-                osc.send([mixed("/delyrism/speak", word, res["path"], float(res["duration"]))])
-            await ws.send_json({"type": "spoken", "word": word, "duration": res["duration"]})
+                osc.send([mixed("/delyrism/speak", word, res["path"], float(res["duration"]), mood["mood"])])
+            await ws.send_json({"type": "spoken", "word": word, "duration": res["duration"],
+                                "mood": mood["mood"], "mood_probs": mood["probs"]})
         except asyncio.CancelledError:
             pass
 

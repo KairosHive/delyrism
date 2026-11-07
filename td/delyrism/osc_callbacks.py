@@ -55,6 +55,8 @@ def _speak(args):
 		a.par.cuepulse.pulse()
 	try:
 		op.Controls.par.Lastspoken = word
+		if len(args) > 3:
+			op.Controls.par.Lastmood = str(args[3])
 	except Exception:
 		pass
 
