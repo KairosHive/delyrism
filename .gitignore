@@ -29,12 +29,9 @@ Thumbs.db
 *.log
 offload/
 
-# TouchDesigner: incremental saves + backups (td/delyrism_particles.toe is the patch)
-td/*.[0-9]*.toe
-td/Backup/
-.venv-tts/
-td/runtime/
-
-# Local agent tooling: TDMCPSkills are fetched by scripts/setup.ps1; local Claude settings
-.claude/skills/td-*/
+# Local agent tooling: local Claude settings
 .claude/settings.local.json
+
+# Leftovers of the TouchDesigner patch, which now lives in the do-you-dream repo
+td/
+.claude/skills/

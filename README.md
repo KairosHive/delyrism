@@ -11,9 +11,9 @@ A FastAPI + Next.js stack. Slider tweaks are instant; backend memoises embedding
 ## Quickstart
 
 ```bash
-conda create -n delyrism python=3.10 -y && conda activate delyrism
-pip install -r requirements.txt -r web/backend/requirements.txt
-pip install -e ".[server,live,vectorize,topology,media]"
+uv venv --python 3.11 .venv            # transformers >= 5.22 needs Python >= 3.11
+uv pip install torch --index-url https://download.pytorch.org/whl/cu128   # or /whl/cpu
+uv pip install -e ".[all]"
 cd web/frontend && npm install && cd ../..
 
 # two terminals
@@ -22,35 +22,34 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000 npm --prefix web/frontend run dev
 # open http://localhost:3000
 ```
 
+On Windows `scripts/setup.ps1` does all of this (Node included, via
+nodejs-wheel) and `scripts/run.ps1` starts both servers.
+
 ### As a package
 
 `delyrism` is pip-installable (`pyproject.toml`): the engine, the FastAPI
 backend as `delyrism.server` (`python -m delyrism.server`, or the
-`delyrism-server` command) and `symbol_vectorizer`.  An installation embeds
-live delyrism by starting the server with a live profile and building its
-space in one call — see [docs/LIVE_API.md](docs/LIVE_API.md).
+`delyrism-server` command), `delyrism.graphemes` and `symbol_vectorizer`.
+
+| extra | for |
+|---|---|
+| `web` | the hosted website (API, Topology, Builder PDFs) on CPU, what the Docker image installs |
+| `server` · `topology` | the API · persistent homology |
+| `live` · `media` | local pose / movement queries · audio, image and video embedders (CLAP, CLIP, PE-AV) |
+| `vectorize` · `graphemes` | `symbol_vectorizer` · `delyrism.graphemes` |
+| `all` | everything |
+
+The **do-you-dream** installation
+([KairosHive/do-you-dream](https://github.com/KairosHive/do-you-dream): the
+TouchDesigner patch with particles and the Lakota mosaic, the voice, live
+transcription, symbol creation from drawings) runs live delyrism from this
+package: it starts the server with a live profile and builds its space in one
+call — see [docs/LIVE_API.md](docs/LIVE_API.md).
 
 ```bash
-uv pip install "delyrism[server,live,vectorize] @ git+https://github.com/KairosHive/delyrism@realtime"
+uv pip install "delyrism[server,vectorize] @ git+https://github.com/KairosHive/delyrism@v0.3.0"
 python -m delyrism.server --port 8000 --profile live_profile.json --warmup
 ```
-
-### Local realtime stack (Windows · NVIDIA GPU · TouchDesigner)
-
-The `realtime` branch streams the live Δ-graph over OSC into a TouchDesigner
-patch (`td/delyrism_particles.toe`: GPU particles, the Lakota symbol mosaic,
-a spoken voice with live effects).  Everything is set up from this repo:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup.ps1   # uv envs (.venv, .venv-tts), Node, npm, TD agent skills
-powershell -ExecutionPolicy Bypass -File scripts/run.ps1     # backend :8000 · frontend :3000 · TTS :8010 · TouchDesigner
-```
-
-Only TouchDesigner 2025.x is installed by hand.  Models (Hugging Face
-embedders, Chatterbox-Turbo, MediaPipe) download on first use; the voice
-references are in `web/tts/voices/` (regenerate with `web/tts/make_voices.py`),
-the symbol assets in `td/assets/lakota/`.  TDMCP (TouchDesigner ↔ agent bridge)
-is embedded in the patch; `.mcp.json` points Claude Code at it.
 
 For Cloudflare-backed embedders + LLMs, set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. Or pick the local `sentence-transformer` backend in the sidebar for fully-offline use. Railway deployment: [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md).
 

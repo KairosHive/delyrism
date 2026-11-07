@@ -1,4 +1,4 @@
-"""Speak the query's most activated word — client of the TTS service (web/tts).
+"""Speak the query's most activated word — client of a TTS service (the do-you-dream repo ships one: tts/tts_server.py).
 
 When the text query is edited, the live socket waits `delay` seconds after
 the last edit, takes the node with the highest query relevance (the brightest

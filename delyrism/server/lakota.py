@@ -1,6 +1,6 @@
 """Lakota symbol affinity for the TouchDesigner background, for any space.
 
-The background tiles Lakota symbols (td/assets/lakota).  Which ones, and in
+The background tiles Lakota symbols (td/assets/lakota in the do-you-dream repo).  Which ones, and in
 what shares, follows the words the live graph activates — whatever symbols
 the space itself was built from.  Each Lakota symbol is a prototype: the mean
 embedding of its descriptors in delyrism/structures/lakota.json, embedded by
