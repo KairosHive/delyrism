@@ -400,7 +400,7 @@ export const useLive = create<LiveState>((set, get) => ({
   context: "",
   query: "",
 
-  focus: 3,
+  focus: 2,
   contraction: 0.7,
   damping: 8,
   stiffness: 40,

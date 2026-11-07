@@ -50,7 +50,7 @@ FADE_OUT = 0.9
 
 SHAPE_DEFAULTS: Dict[str, float] = dict(
     # liveGraph.ts store defaults
-    focus=3.0, contraction=0.7, damping=8.0, stiffness=40.0, repulsion=60000.0, unlinked=6000.0,
+    focus=2.0, contraction=0.7, damping=8.0, stiffness=40.0, repulsion=60000.0, unlinked=6000.0,
     # springSim.ts params not exposed in the UI
     center=2.0, radial=6.0, minsep=44.0, collide=160.0,
 )
