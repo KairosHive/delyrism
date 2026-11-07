@@ -232,6 +232,19 @@ def get_palette(space) -> str:
 # This is what makes "dots stay still, only arrows move" possible — both
 # endpoints read from the same cached layout.
 
+# UMAP runs on numba, whose default threading layer (workqueue) aborts the
+# whole process when two threads launch parallel kernels at once.  The page
+# fires /reduce-2d and /shift together right after a (re)build, so every
+# UMAP fit and transform goes through this lock.
+UMAP_LOCK = threading.RLock()
+
+
+def umap_transform(model, X):
+    """model.transform(X) under UMAP_LOCK."""
+    with UMAP_LOCK:
+        return model.transform(X)
+
+
 def get_umap_layout(space):
     """Return (umap_model, Y_descriptors, Y_centroids).
 
@@ -246,20 +259,24 @@ def get_umap_layout(space):
         return cached
 
     import umap
-    centroids = np.stack([space.symbol_centroids[s] for s in space.symbols])
-    n = space.D.shape[0]
-    joint = np.vstack([space.D, centroids])
+    with UMAP_LOCK:
+        cached = getattr(space, "_umap_layout", None)      # fitted while we waited
+        if cached is not None:
+            return cached
+        centroids = np.stack([space.symbol_centroids[s] for s in space.symbols])
+        n = space.D.shape[0]
+        joint = np.vstack([space.D, centroids])
 
-    model = umap.UMAP(
-        n_neighbors=min(20, max(2, joint.shape[0] - 1)),
-        min_dist=0.1,
-        metric="cosine",
-        random_state=42,
-    )
-    Y = model.fit_transform(joint)
-    layout = (model, Y[:n], Y[n:])
-    space._umap_layout = layout  # type: ignore[attr-defined]
-    return layout
+        model = umap.UMAP(
+            n_neighbors=min(20, max(2, joint.shape[0] - 1)),
+            min_dist=0.1,
+            metric="cosine",
+            random_state=42,
+        )
+        Y = model.fit_transform(joint)
+        layout = (model, Y[:n], Y[n:])
+        space._umap_layout = layout  # type: ignore[attr-defined]
+        return layout
 
 
 def get_space(space_id: str) -> Optional[SymbolSpace]:

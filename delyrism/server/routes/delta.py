@@ -115,7 +115,7 @@ def shift_arrows(req: ShiftRequest) -> ShiftResponse:
             # only arrow tips move, which is what the user expects from a
             # "context shift" visualization.
             model, Y0, Yc = engine_cache.get_umap_layout(space)
-            Y1 = model.transform(D1)
+            Y1 = engine_cache.umap_transform(model, D1)
         except ImportError:
             pca = space._pca
             Y0 = pca.transform(space.D); Y1 = pca.transform(D1); Yc = pca.transform(centroids)
