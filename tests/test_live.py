@@ -101,8 +101,10 @@ def test_speech_chunks_become_a_rolling_spoken_query(client, space, monkeypatch)
         ws.send_bytes(speech_chunk())
         second = recv_until(ws, "heard")
         assert second["transcript"] == "the water rises and the fire answers"
-        rel = recv_until(ws, "relevance", where=lambda m: m.get("kind") == "speech" and m.get("active"))
-        assert "fire" in rel["query"]
+        # the glide toward the first chunk may still be sending: wait for the second chunk's query
+        rel = recv_until(ws, "relevance", where=lambda m: m.get("kind") == "speech" and m.get("active")
+                         and "fire" in m.get("query", ""))
+        assert rel["relevance"]
 
 
 def test_a_failed_chunk_reports_and_the_session_goes_on(client, space, monkeypatch):
