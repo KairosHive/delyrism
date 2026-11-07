@@ -13,7 +13,7 @@ on:
 jobs:
   smoke:
     if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04      # Playwright 1.55 has no Chromium for ubuntu-latest (26.04)
     timeout-minutes: 15
     env:
       E2E_URL: ${{ github.event.deployment_status.environment_url || vars.SITE_URL }}
