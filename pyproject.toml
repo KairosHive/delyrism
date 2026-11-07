@@ -19,7 +19,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "delyrism"
-version = "0.5.1"
+version = "0.5.2"
 description = "Symbol spaces, context Δ-graphs and the live delyrism engine"
 readme = "README.md"
 requires-python = ">=3.10"

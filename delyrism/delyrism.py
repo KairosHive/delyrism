@@ -156,7 +156,13 @@ class TextEmbedder:
                  device: Optional[str] = None, pooling: str = "eos",
                  default_instruction: Optional[str] = None, default_context: Optional[str] = None):
         self.backend_type = backend.lower()
-        self.model_name = model
+        # the model actually loaded (each backend's default when `model` is None)
+        self.model_name = model or {
+            "sentence-transformer": "sentence-transformers/all-mpnet-base-v2", "qwen2": "Qwen/Qwen2-Embedding",
+            "qwen3": "Qwen/Qwen3-Embedding-0.6B", "cloudflare": "@cf/baai/bge-base-en-v1.5",
+            "clap": "laion/clap-htsat-fused", "clip": "ViT-B-32/laion2b_s34b_b79k",
+            "peav": "facebook/pe-av-small", "embeddinggemma2": "google/embeddinggemma-2",
+        }.get(backend.lower())
         self.dim = dim_fallback
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.pooling = pooling.lower()

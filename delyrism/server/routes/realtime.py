@@ -345,7 +345,7 @@ def _live_graph(space_id: str, space, context: str, params: Dict[str, Any]) -> D
     edges = [{"source": u, "target": v, "delta": round(float(a["delta"]), 5),
               "sign": a["sign"], "abs_delta": round(float(a["abs_delta"]), 5)}
              for u, v, a in G.edges(data=True)]
-    return {"nodes": nodes, "edges": edges, "idx": idx, "D1": D1}
+    return {"nodes": nodes, "edges": edges, "idx": idx, "D1": D1, "vctx": np.asarray(vctx, dtype=np.float32)}
 
 
 def _relevance_vec(graph: Dict[str, Any], vq: Optional[np.ndarray], D1: Optional[np.ndarray] = None) -> Dict[str, float]:
@@ -398,6 +398,17 @@ def _text_vec(space, text: str) -> Optional[np.ndarray]:
 
 
 _CLAP_SR = 48000
+
+
+def _vec_out(v, fmt: str):
+    """A vector for a snapshot: float list (6 decimals) or base64 float32 LE."""
+    if v is None:
+        return None
+    a = np.asarray(v, dtype="<f4").reshape(-1)
+    if fmt == "b64":
+        import base64
+        return base64.b64encode(a.tobytes()).decode("ascii")
+    return [round(float(x), 6) for x in a]
 
 
 def _unit(v) -> np.ndarray:
@@ -648,6 +659,9 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "lm_t": 0.0,                                # perf_counter of the last landmark frame
         "sim_hz": 0.0,                              # JSON stream of the layout to this client (0 = off)
         "vq_target": None,                          # transcript: the embedding the query glides toward
+        "vq_raw": None,                             # the latest raw query embedding (before the media EMA / glide)
+        "shown": {"context": "", "vctx": None},     # what the layout shows: the graph's context ...
+        "scored": {"vq": None, "vq_raw": None, "kind": "text", "text": "", "active": False},   # ... and the scored query
         "transcript": prof.transcript.model_dump(), # {tau, hz} latent smoothing of spoken-text queries
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
@@ -765,18 +779,48 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         return {"relevance": rel, "active": state["vq"] is not None,
                 "query": state["query_text"], "kind": state["query_kind"]}
 
-    def _score() -> Dict[str, float]:
-        """Relevance of the active query inside the right head, then the
+    def _score(vq: Optional[np.ndarray]) -> Dict[str, float]:
+        """Relevance of the query vector `vq` inside the right head, then the
         post-embedding EMA on the activations (live media kinds only)."""
         head = _head_for_kind(space, state["query_kind"])
         D1 = _shifted_for_head(space_id, space, graph, state["context"], state["params"], head)
-        rel = _relevance_vec(graph, state["vq"], D1)
+        rel = _relevance_vec(graph, vq, D1)
         a = state["rel_smoothing"]
         prev = state["rel_prev"]
         if rel and state["query_kind"] not in ("text", "speech") and a > 0 and prev:
             rel = {k: round(a * prev.get(k, v) + (1.0 - a) * v, 4) for k, v in rel.items()}
         state["rel_prev"] = rel if rel else None
         return rel
+
+    def _query_now() -> Dict[str, Any]:
+        """The query as it is about to be scored (kept with the layout for snapshots)."""
+        vq = state["vq"]
+        return {"vq": vq, "vq_raw": state["vq_raw"], "kind": state["query_kind"],
+                "text": state["query_text"], "active": vq is not None}
+
+    def _snapshot(req_id: Any, fmt: str) -> Dict[str, Any]:
+        """One recording sample (WS {"type": "snapshot"}): the layout as the
+        sim frame has it, with the context and query vectors it was built and
+        scored from, all from the same instant."""
+        fr = sim_frame(sim, 0, 0.0, osc.scale)
+        shown, q = state["shown"], state["scored"]
+        rel = getattr(sim, "relevance", {}) or {}
+        emb = space.embedder
+        return {
+            "type": "snapshot", "id": req_id, "t": round(time.time(), 3), "graph_seq": fr["graph_seq"],
+            "space_id": space_id, "symbols": fr["symbols"],
+            "context": shown["context"], "context_vec": _vec_out(shown["vctx"], fmt),
+            "context_pending": state["context"] if state["context"] != shown["context"] else None,
+            "query_active": bool(q["active"]),
+            "query_kind": q["kind"] if q["active"] else None,
+            "query_text": q["text"] if q["active"] else None,
+            "query_vec": _vec_out(q["vq"], fmt), "query_target": _vec_out(q["vq_raw"], fmt),
+            "nodes": {**fr["nodes"], "relevance": [float(rel.get(i, 0.0)) for i in fr["nodes"]["id"]]},
+            "edges": fr["edges"],
+            "embedder": {"backend": getattr(emb, "backend_type", None), "model": getattr(emb, "model_name", None),
+                         "dim": int(space.D.shape[1])},
+            "vec_format": fmt,
+        }
 
     def _lakota_shares(nodes: bool):
         """Lakota background (app/lakota.py): shares of the graph's nodes and of a
@@ -839,6 +883,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 # what TouchDesigner draws); hz 0 = off.  Not an input either.
                 state["sim_hz"] = float(np.clip(float(m.get("hz") or 0.0), 0.0, 60.0))
                 continue
+            if t == "snapshot":
+                # read-only recording sample; does not claim the OSC output
+                fmt = "b64" if m.get("format") == "b64" else "list"
+                await ws.send_json(_snapshot(m.get("id"), fmt))
+                continue
             if t == "layout":
                 # the browser's own node positions — what the user actually sees.
                 # Not an input, so it does not claim the OSC output.
@@ -856,6 +905,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["rel_prev"] = None
                 state["vq_target"] = None
                 state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
+                state["vq_raw"] = state["vq"]
                 state["query_dirty"] = True
                 schedule_speak()          # restarts the 1 s timer on every edit
             elif t == "query_clear":
@@ -864,6 +914,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 speak["last"] = speak["top"] = None
                 state["vq"] = None
                 state["vq_target"] = None
+                state["vq_raw"] = None
                 state["pending"] = None
                 state["rel_prev"] = None
                 state["query_text"] = ""
@@ -884,6 +935,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["query_kind"] = "speech"
                 state["query_text"] = text
                 state["vq_target"] = target
+                state["vq_raw"] = target
                 if state["vq"] is None or float(state["transcript"]["tau"]) <= 0:
                     state["vq"] = target      # first words (or no smoothing): start there
                 state["query_dirty"] = True
@@ -986,6 +1038,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         else:
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
+        state["vq_raw"] = v
         a = state["audio_smoothing"]
         prev = state["vq"] if state["query_kind"] == kind else None
         # each movement description already sums up a whole window, so it
@@ -1009,10 +1062,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     ctx, params = state["context"], dict(state["params"])
                     graph = await asyncio.to_thread(_live_graph, space_id, space, ctx, params)
                     await _embed_pending()
-                    rel = await asyncio.to_thread(_score)
+                    q = _query_now()
+                    rel = await asyncio.to_thread(_score, q["vq"])
                     state["query_dirty"] = False
                     sim.set_graph(graph["nodes"], graph["edges"], list(space.symbols))
-                    sim.set_relevance(rel, state["vq"] is not None)
+                    sim.set_relevance(rel, q["active"])
+                    state["shown"] = {"context": ctx, "vctx": graph.get("vctx")}
+                    state["scored"] = q
                     await _lakota_update(nodes=True)
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
@@ -1020,8 +1076,10 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 elif state["query_dirty"]:
                     state["query_dirty"] = False
                     await _embed_pending()
-                    rel = await asyncio.to_thread(_score)
-                    sim.set_relevance(rel, state["vq"] is not None)
+                    q = _query_now()
+                    rel = await asyncio.to_thread(_score, q["vq"])
+                    sim.set_relevance(rel, q["active"])
+                    state["scored"] = q
                     await _lakota_update(nodes=False)
                     await ws.send_json({"type": "relevance", **_rel_msg(rel)})
                     media_top_changed(rel)

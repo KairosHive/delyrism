@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.5)
+# Delyrism live API (package `delyrism`, v0.5.2)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -130,6 +130,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
+| `{"type": "snapshot", "id"?: any, "format"?: "list" \| "b64"}` | one recording sample, answered at once with a `snapshot` message (below). Read-only: does not claim the OSC output |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
 | `{"type": "motion_tick", "window": 3, "contrast": 0.7, "relative": 1}` | describe the last `window` s now (not needed when `profile.motion.auto`) |
 | `{"type": "motion_reset"}` | forget the session's movement range (new dancer) |
@@ -182,7 +183,37 @@ description arrives as a `motion` message and becomes the query
 | `pose` | per tracked batch | `jpeg` (base64 drawing of the dancer with trails), `present` |
 | `spoken` | a word was spoken | `word`, `duration`, `mood`, `mood_probs` |
 | `sim` | at the subscribed rate while anything moves, 4 Hz once settled | see below |
+| `snapshot` | in answer to `snapshot` | see below |
 | `error` | | `detail` |
+
+### `snapshot` — a recording sample
+
+The layout and the vectors it was built and scored from, all from the same
+instant (the vectors are those taken when the layout last changed, not newer
+ones still being scored):
+
+```jsonc
+{"type": "snapshot", "id": <echo>, "t": 1762540000.123,      // server epoch seconds
+ "graph_seq": 4, "space_id": "…", "symbols": ["Fire", …],
+ "context": "a storm at sea",           // the context the shown graph was built from
+ "context_vec": [...] | null,           // its embedding (the Δ-graph's sentence vector), null without a context
+ "context_pending": "…" | null,         // a newer context whose graph is still being built
+ "query_active": true,
+ "query_kind": "text" | "speech" | "audio" | "image" | "video" | "av" | "motion" | "pose" | null,
+ "query_text": "lightning" | null,      // the text / transcript / movement words; "(camera)" etc. for media
+ "query_vec": [...] | null,             // the vector the relevance was scored with (after the media EMA / speech glide)
+ "query_target": [...] | null,          // the latest raw embedding: = query_vec for text, the transcript's target
+                                        // while the glide moves toward it, the newest media vector before the EMA
+ "nodes": {…the sim frame's node columns…, "relevance": [...]},   // relevance = the scored 0…1 activation;
+                                        // rel = the same after the layout's contrast curve; alive=false = fading out
+ "edges": {…the sim frame's edge columns…},                       // delta = signed Δ cosine (3 decimals)
+ "embedder": {"backend": "embeddinggemma2", "model": "google/embeddinggemma-2", "dim": 768},
+ "vec_format": "list"}
+```
+
+Vectors are unit-length float lists rounded to 6 decimals, or with
+`"format": "b64"` base64 of little-endian float32 (~40% smaller: about 15 KB
+instead of 26 KB for an 11-node graph with 768-d vectors).
 
 ### `sim` frames — the TouchDesigner view
 
