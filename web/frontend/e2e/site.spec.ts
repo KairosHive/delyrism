@@ -151,16 +151,20 @@ test("a Live session records and opens its result panel", async ({ page }) => {
   await page.getByRole("button", { name: "■ End session" }).click();
   const panel = page.getByTestId("session-panel");
   await expect(panel).toBeVisible({ timeout: 60_000 });   // the first session on a fresh server also fits the UMAP map
-  for (const label of ["A · Trajectory", "B · Territory", "C · Topology over time", "D · Phases and returns",
-                       "E · Words", "G · Session archetypes", "H · Fingerprint"])
-    await expect(panel.getByText(label)).toBeVisible();
-  await expect(panel.getByText("embers, smoke and fury")).toBeVisible();          // the words, in order
+  for (const title of ["Trajectory", "Territory", "Returns", "Topology over time", "Words", "Session archetypes", "Fingerprint"])
+    await expect(panel.getByRole("heading", { name: title, exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: /embers, smoke and fury/ })).toBeVisible();   // the words, in order
   const raw = await page.request.get(await panel.getByRole("link", { name: "↓ raw data" }).getAttribute("href") as string);
   expect(raw.ok()).toBeTruthy();
   expect((await raw.json()).raw.events.filter((e: any) => e.type === "query").length).toBeGreaterThanOrEqual(5);
   await panel.getByRole("button", { name: /weave a text/ }).click();
-  await expect(panel.locator("p.whitespace-pre-wrap")).toBeVisible();
+  await expect(panel.locator("blockquote")).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 3200 });
   await panel.screenshot({ path: "test-results/session-panel.png" });
+  // the playhead: click the session strip at 40 %, every view follows
+  const strip = panel.locator("svg.cursor-ew-resize");
+  const sb = await strip.boundingBox();
+  if (sb) await page.mouse.click(sb.x + sb.width * 0.4, sb.y + sb.height / 2);
+  await panel.screenshot({ path: "test-results/session-panel-mid.png" });
   expect(problems).toEqual([]);
 });

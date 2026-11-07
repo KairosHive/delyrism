@@ -218,8 +218,11 @@ def analyse(raw: Dict[str, Any], D: np.ndarray, XY: np.ndarray, colors: Optional
         if e["type"] == "context" and e.get("rel") and len(e["rel"]) == N:
             x, y = _attention_xy(np.asarray([e["rel"]], dtype=float), XYn)[0]
             ctx_path.append({"t": e["t"], "text": e["text"], "x": round(float(x), 4), "y": round(float(y), 4)})
+    S_now = _symbol_profile(R, descriptors, owners, symbols).argmax(1)       # the leading symbol, moment by moment
     out["trajectory"] = {"path": [{"t": round(float(a), 2), "x": round(float(x), 4), "y": round(float(y), 4),
-                                   "kind": raw["kind"][k]} for k, (a, (x, y)) in zip(np.flatnonzero(active), zip(ta, P))],
+                                   "kind": raw["kind"][k], "s": int(S_now[i]), "top": [descriptors[j] for j in top[i, :3]],
+                                   "q": raw["query"][k]}
+                                  for i, (k, a, (x, y)) in enumerate(zip(np.flatnonzero(active), ta, P))],
                          "dwells": dwells, "context_path": ctx_path,
                          "distance": round(float(step.sum()), 3)}
 

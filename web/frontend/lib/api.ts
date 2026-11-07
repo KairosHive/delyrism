@@ -441,7 +441,7 @@ export interface WordCatalystResponse {
 
 // ---------- Live sessions (delyrism/session.py) ----------
 
-export interface SessionPoint { t: number; x: number; y: number; kind?: string }
+export interface SessionPoint { t: number; x: number; y: number; kind?: string; s?: number; top?: string[]; q?: string }
 export interface SessionResult {
   summary: { duration: number; snapshots: number; active_share: number; kinds: string[]; name: string };
   layout: { id: string; symbol: string; x: number; y: number; color: string }[];
