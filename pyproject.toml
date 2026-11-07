@@ -78,8 +78,9 @@ graphemes = [
 topology = ["ripser>=0.6.7"]
 # the test suite (pytest tests/), run with DELYRISM_TEST_EMBEDDER=1 set by tests/conftest.py
 test = ["delyrism[web]", "pytest>=8", "httpx>=0.27"]
-# audio / image / video embedders (CLAP, CLIP, PE-AV) and audio contexts
+# audio / image / video embedders (CLAP, CLIP, PE-AV, EmbeddingGemma 2) and audio contexts
 media = [
+    "sentence-transformers>=6.1",     # EmbeddingGemma 2's audio path
     "librosa>=0.10",
     "soundfile>=0.12",
     "open-clip-torch>=2.24",

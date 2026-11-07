@@ -22,7 +22,7 @@ from ..delyrism import TextEmbedder
 
 ENV = "DELYRISM_TEST_EMBEDDER"
 DIM = 256
-AUDIO_BACKENDS = {"gemini-embedding-2", "clap", "peav"}     # spaces asking for these get an audio tower
+AUDIO_BACKENDS = {"gemini-embedding-2", "embeddinggemma-2", "clap", "peav"}     # spaces asking for these get an audio tower
 
 
 def enabled() -> bool:

@@ -99,7 +99,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   const can: Record<QueryMode, boolean> = {
     text: true,
     speech: sttCapable,
-    audio: audioCapable || backend === "clap" || backend === "peav" || backend === "gemini-embedding-2",
+    audio: audioCapable || backend === "clap" || backend === "peav" || backend === "gemini-embedding-2" || backend === "embeddinggemma-2",
     image: imageCapable || backend === "clip",
     video: videoCapable || backend === "peav",
     av: avCapable || backend === "peav",
@@ -113,7 +113,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
   const modes: QueryMode[] = (["text", "speech", "audio", "image", "video", "av", "pose", "motion"] as QueryMode[]).filter((m) => can[m]);
   if (modes.length === 1) modes.push("audio", "video", "av");
   const prefix = backend === "peav" ? "PE-AV" : backend === "clap" ? "CLAP" : backend === "clip" ? "CLIP"
-    : backend === "gemini-embedding-2" ? "Gemini" : "";
+    : backend === "gemini-embedding-2" ? "Gemini" : backend === "embeddinggemma-2" ? "Gemma" : "";
   const usesMic = queryMode === "audio" || queryMode === "av" || queryMode === "speech";
   // media queries (sound, frames, the drawn dancer) are centred on the session's mean server-side
   const centerable = queryMode === "audio" || queryMode === "image" || queryMode === "video" || queryMode === "av" || queryMode === "pose";
@@ -223,7 +223,7 @@ function QueryCard({ dot, status, nEdges, queryActive, error }: { dot: string; s
           {queryMode !== "pose" && !can[queryMode] && (
             <div className="text-[11px] text-warning">
               This space was built with <span className="font-mono">{backend}</span>, which has no {MODE_LABEL[queryMode]} tower. Choose
-              <span className="mx-1 font-mono">{queryMode === "image" ? "Local · CLIP ViT-B/32" : queryMode === "audio" ? "Gemini Embedding 2 (or local CLAP)" : "Local · PE-AV small"}</span>
+              <span className="mx-1 font-mono">{queryMode === "image" ? "Local · CLIP ViT-B/32" : queryMode === "audio" ? "Gemini Embedding 2 (or local CLAP / EmbeddingGemma 2)" : "Local · PE-AV small"}</span>
               in the sidebar and rebuild — descriptors and media then share one space.
             </div>
           )}

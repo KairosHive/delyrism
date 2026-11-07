@@ -211,6 +211,7 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
                 {"id": "qwen2", "label": "Local · Qwen2 Embedding", "remote": False, "audio": False, "dim": 1024},
                 {"id": "sentence-transformer", "label": "Local · sentence-transformers", "remote": False, "audio": False, "dim": 768},
                 {"id": "clap", "label": "Local · CLAP (audio+text)", "remote": False, "audio": True, "dim": 512},
+                {"id": "embeddinggemma-2", "label": "Local · EmbeddingGemma 2 (audio+text)", "remote": False, "audio": True, "dim": 768},
                 {"id": "clip", "label": "Local · CLIP ViT-B/32 (image+text)", "remote": False, "audio": False, "image": True, "dim": 512},
                 {"id": "peav", "label": "Local · PE-AV small (audio+video+text)", "remote": False, "audio": True, "video": True, "av": True, "dim": 1024},
             ],

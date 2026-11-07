@@ -34,7 +34,7 @@ export function EmbeddingModel() {
         value={backend}
         onChange={(v) => set("embedderBackend", v)}
         options={(backends.data?.embedders ?? []).map((b) => ({ value: b.id, label: b.available === false ? `${b.label} · no key on server` : b.label }))}
-        help="The model used to embed descriptors and context. Cloudflare backends are remote API calls (fast, no GPU). Local backends run inside the container — slower first call, no per-request cost. Gemini Embedding 2 (API) and CLAP (local) embed sound and words in one space, so the microphone can query the symbols."
+        help="The model used to embed descriptors and context. Cloudflare backends are remote API calls (fast, no GPU). Local backends run inside the container — slower first call, no per-request cost. Gemini Embedding 2 (API), and CLAP and EmbeddingGemma 2 (local), embed sound and words in one space, so the microphone can query the symbols."
       />
       <div className="space-y-1">
         <div className="flex items-center label-sm">

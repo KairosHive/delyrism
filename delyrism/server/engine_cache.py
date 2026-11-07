@@ -25,10 +25,13 @@ from . import testing as _testing
 
 
 # The engine knows only these primitive backend ids:
-_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav", "gemini"}
+_ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav", "gemini",
+                    "embeddinggemma"}
 
 # API embedders with an audio tower: no local model, so the hosted site offers them
 _API_PRESETS = {"gemini-embedding-2": ("gemini", "gemini-embedding-2")}
+# local multimodal presets (UI id → engine backend, model)
+_LOCAL_PRESETS = {"embeddinggemma-2": ("embeddinggemma", "google/embeddinggemma-2")}
 
 # UI-facing Cloudflare presets — same mapping the Streamlit app uses.  Each UI
 # id collapses to backend="cloudflare" + a specific @cf/... model.
@@ -44,8 +47,8 @@ _CF_PRESETS = {
 def _resolve_backend(backend: str, model: Any) -> tuple[str, Any]:
     """Translate a UI backend id (e.g. 'cloudflare-bge-m3') into the
     (engine_backend, model) pair the TextEmbedder constructor expects."""
-    if backend in _API_PRESETS:
-        engine, preset = _API_PRESETS[backend]
+    if backend in _API_PRESETS or backend in _LOCAL_PRESETS:
+        engine, preset = {**_API_PRESETS, **_LOCAL_PRESETS}[backend]
         return engine, (model or preset)
     if backend in _CF_PRESETS:
         # User-supplied model overrides the preset; otherwise use the preset.
@@ -53,7 +56,7 @@ def _resolve_backend(backend: str, model: Any) -> tuple[str, Any]:
     if backend not in _ENGINE_BACKENDS:
         raise ValueError(
             f"Unknown embedder backend '{backend}'. "
-            f"Known UI ids: {sorted({*_ENGINE_BACKENDS, *_CF_PRESETS, *_API_PRESETS})}"
+            f"Known UI ids: {sorted({*_ENGINE_BACKENDS, *_CF_PRESETS, *_API_PRESETS, *_LOCAL_PRESETS})}"
         )
     return backend, model
 

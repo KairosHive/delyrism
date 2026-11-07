@@ -190,15 +190,24 @@ class TextEmbedder:
             self._init_peav(model)
         elif self.backend_type == "gemini":
             self._init_gemini(model)
+        elif self.backend_type == "embeddinggemma":
+            self._init_embeddinggemma(model)
 
         else:
-            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav | gemini")
+            raise ValueError(f"Unknown backend '{backend}'. Choose: sentence-transformer | qwen2 | qwen3 | cloudflare | audioclip | clap | clip | peav | gemini | embeddinggemma")
 
         # Check if backend was properly initialized
-        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip", "peav", "gemini"):
+        if self._backend is None and self.backend_type not in ("audioclip", "cloudflare", "clap", "clip", "peav", "gemini", "embeddinggemma"):
             raise RuntimeError(f"[Embedder] FAILED to initialize backend '{backend}'. Check dependencies and model availability.")
 
     # ---------- init helpers ----------
+    def _init_embeddinggemma(self, model_name: Optional[str]):
+        """EmbeddingGemma 2 on the local GPU: text and audio share one space (delyrism/embeddinggemma.py)."""
+        from .embeddinggemma import GemmaEmbedder
+        self._gemma = GemmaEmbedder(model_name, device=self.device)
+        self.dim = self._gemma.dim
+        self.audio_capable = True
+
     def _init_gemini(self, model_name: Optional[str]):
         """Gemini Embedding 2 over REST: text and audio share one space (delyrism/gemini.py)."""
         from .gemini import GeminiEmbedder
@@ -520,6 +529,8 @@ class TextEmbedder:
     def embed_audio_array(self, wave: np.ndarray, sr: int) -> np.ndarray:
         if self.backend_type == "gemini":
             return self._gemini.embed_audio(np.asarray(wave, dtype=np.float32), sr)
+        if self.backend_type == "embeddinggemma":
+            return self._gemma.embed_audio(np.asarray(wave, dtype=np.float32), sr)
         if self.backend_type == "peav":
             return self._peav.embed_audio(np.asarray(wave, dtype=np.float32), sr)
         if self.backend_type == "audioclip":
@@ -670,6 +681,8 @@ class TextEmbedder:
         # --- Gemini Embedding 2 (REST, shares its space with audio) ---
         if self.backend_type == "gemini":
             return self._gemini.embed_text(list(texts))
+        if self.backend_type == "embeddinggemma":
+            return self._gemma.embed_text(list(texts))
 
         # --- Cloudflare path (fastest!) ---
         if self.backend_type == "cloudflare" and hasattr(self, "_cf_ready"):
