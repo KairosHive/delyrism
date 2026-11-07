@@ -16,13 +16,14 @@ jobs:
     runs-on: ubuntu-24.04      # Playwright 1.55 has no Chromium for ubuntu-latest (26.04)
     timeout-minutes: 15
     env:
-      E2E_URL: ${{ github.event.deployment_status.environment_url || vars.SITE_URL }}
+      # Railway's deployment_status URL is its dashboard, not the site: the site URL is a variable
+      E2E_URL: ${{ vars.SITE_URL }}
     steps:
       - uses: actions/checkout@v4
       - name: Need a URL
         run: |
           if [ -z "$E2E_URL" ]; then echo "set the SITE_URL repository variable"; exit 1; fi
-          curl -fsS "$E2E_URL/healthz"
+          curl -fsS "$E2E_URL/healthz" | tee /dev/stderr | grep -q '"ok":true'
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
