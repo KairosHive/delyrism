@@ -267,6 +267,7 @@ from delyrism.pose import (  # noqa: E402
 from ..live_sim import LiveSim  # noqa: E402
 from ..osc_bridge import bridge as osc, frame_messages, mixed  # noqa: E402
 from .. import speech  # noqa: E402
+from .. import lakota  # noqa: E402
 
 
 # ---- spoken word (TTS → TouchDesigner) — see app/speech.py ------------------
@@ -591,6 +592,14 @@ _LABELS = {"audio": "(audio)", "image": "(camera)", "video": "(video)", "av": "(
            "motion": "(movement)"}
 
 
+def _lakota_safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:  # the background keeps its last mosaic
+        print(f"[lakota] {e}")
+        return None
+
+
 @router.websocket("/graph/{space_id}")
 async def live_graph_socket(ws: WebSocket, space_id: str):
     space = engine_cache.get_space(space_id)
@@ -621,6 +630,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     emb = space.embedder
     # server-side twin of the browser's spring layout → OSC (see live_sim.py)
     sim = LiveSim()
+    sim.lakota_names = list(lakota.NAMES)       # uniform background until the first graph
     osc_token = object()
     osc.register(osc_token, lambda: {
         "layout_source": "browser" if sim.client_fresh(time.perf_counter()) else "server-sim",
@@ -706,6 +716,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     if speech.cfg.enabled and speech.cfg.mood:              # embed the mood anchors now, not at the first word
         asyncio.create_task(asyncio.to_thread(speech.mood_matrix, space))
+    asyncio.create_task(asyncio.to_thread(_lakota_safe, lakota.affinity, space))   # Lakota prototypes, once per space
 
     await ws.send_json({"type": "ready", "params": state["params"],
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
@@ -730,6 +741,21 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             rel = {k: round(a * prev.get(k, v) + (1.0 - a) * v, 4) for k, v in rel.items()}
         state["rel_prev"] = rel if rel else None
         return rel
+
+    def _lakota_shares(nodes: bool):
+        """Lakota background (app/lakota.py): shares of the graph's nodes and of a
+        text / movement query.  None if the embedder can't provide them."""
+        def run():
+            rows = lakota.node_rows(space, [n["id"] for n in graph["nodes"]]) if nodes else {}
+            q = (lakota.query_shares(space, state["vq"])
+                 if state["vq"] is not None and state["query_kind"] in ("text", "motion") else None)
+            return rows, q
+        return _lakota_safe(run)
+
+    async def _lakota_update(nodes: bool) -> None:
+        res = await asyncio.to_thread(_lakota_shares, nodes)
+        if res is not None:
+            sim.set_lakota(lakota.NAMES, res[0], res[1])
 
     async def reader() -> None:
         while True:
@@ -911,6 +937,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     state["query_dirty"] = False
                     sim.set_graph(graph["nodes"], graph["edges"], list(space.symbols))
                     sim.set_relevance(rel, state["vq"] is not None)
+                    await _lakota_update(nodes=True)
                     await ws.send_json({"type": "graph", "nodes": graph["nodes"], "edges": graph["edges"],
                                         "context": ctx, **_rel_msg(rel)})
                     media_top_changed(rel)
@@ -919,6 +946,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     await _embed_pending()
                     rel = await asyncio.to_thread(_score)
                     sim.set_relevance(rel, state["vq"] is not None)
+                    await _lakota_update(nodes=False)
                     await ws.send_json({"type": "relevance", **_rel_msg(rel)})
                     media_top_changed(rel)
             except Exception as e:

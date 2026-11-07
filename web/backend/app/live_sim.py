@@ -87,6 +87,13 @@ class LiveSim:
         self.client_fps = 0.0
         self._uid_of: Dict[str, int] = {}
         self._rng = random.Random()
+        # Lakota background (app/lakota.py): K shares per node id, the query's own shares
+        self.lakota_names: List[str] = []
+        self.lakota_of: Dict[str, np.ndarray] = {}
+        self.lakota_query: Optional[np.ndarray] = None
+        self._lak_key: Tuple[int, int] = (-1, -1)
+        self._lak_rows = np.zeros((0, 0))
+        self._lak_version = 0
         self._set_nodes_empty()
         self._set_edges_empty()
 
@@ -313,6 +320,38 @@ class LiveSim:
                 setattr(self, name, getattr(self, name)[keep_n])
             self.ids = [i for i, m in zip(self.ids, keep_n) if m]
             self.order_version += 1
+
+    # --------------------------------------------------- Lakota background
+    def set_lakota(self, names: Sequence[str], rows: Dict[str, np.ndarray],
+                   query: Optional[np.ndarray] = None, keep_query: bool = False) -> None:
+        """Shares over the Lakota symbols per node id (merged: fading nodes keep
+        theirs) and, for a text / movement query, the query's own shares."""
+        self.lakota_names = list(names)
+        self.lakota_of.update(rows)
+        if not keep_query:
+            self.lakota_query = query
+        self._lak_version += 1
+
+    def lakota_activation(self) -> Optional[np.ndarray]:
+        """Activation of each Lakota symbol: Σ w_i · shares_i over the alive nodes
+        (w = relevance with a query, else node size), plus the query's own shares
+        with the same total mass.  Never all zero once names are known."""
+        K = len(self.lakota_names)
+        if not K:
+            return None
+        key = (self.order_version, self._lak_version)
+        if key != self._lak_key or self._lak_rows.shape != (len(self.ids), K):
+            z = np.zeros(K)
+            self._lak_rows = (np.stack([self.lakota_of.get(i, z) for i in self.ids]).astype(np.float64)
+                              if self.ids else np.zeros((0, K)))
+            self._lak_key = key
+        w = (self.rel if self.query_active else self.size) * self.alive
+        act = w @ self._lak_rows if len(w) else np.zeros(K)
+        if self.query_active and self.lakota_query is not None:
+            act = act + max(float(act.sum()), 1.0) * self.lakota_query
+        if float(act.sum()) <= 1e-9:                      # empty graph: every symbol, equally
+            act = np.full(K, 1.0 / K)
+        return act
 
     # ------------------------------------------------- relevance → geometry
     def apply_rest(self) -> None:

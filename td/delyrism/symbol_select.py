@@ -1,9 +1,16 @@
 # Script CHOP: which Lakota symbols tile the background, and in what mosaic.
 #
-# Activation of each symbol = Σ over its nodes in the live graph of
+# Activation of each symbol comes from the backend as /delyrism/lakota (one
+# value per Lakota symbol, names in /delyrism/lakota/names; web/backend/app/
+# lakota.py): every activated word of the live graph — whatever symbols the
+# space was built from — is matched to the Lakota symbols by meaning, weighted
 #     no query : node size  (Σ|Δ|, the browser's node radius)
-#     query    : node relevance (the browser's node brightness)
-# (nodes fading out don't count), eased with Symbollag.  Symbol Cutoff c
+#     query    : node relevance (the browser's node brightness), plus the
+#                query's own match for a text / movement query
+# (nodes fading out don't count).  An older backend without /delyrism/lakota
+# falls back to summing the graph's nodes of Lakota-named symbols; with
+# nothing activated at all every symbol counts equally, so the background is
+# never empty.  The activation is eased with Symbollag.  Symbol Cutoff c
 # drops the bottom c of the activated symbols: the top ceil((1 − c)·n), at
 # least one, form the mosaic (50 % = top half, 100 % = only the top symbol,
 # 0 % = all), each with a share proportional to its activation among them.
@@ -19,7 +26,8 @@
 import math
 import numpy as np
 
-_s = {'act': None, 'cur': None, 'prev': None, 'mix': 1.0, 'cand': None, 'cand_t': 0.0, 'shown': None}
+_s = {'act': None, 'cur': None, 'prev': None, 'mix': 1.0, 'cand': None, 'cand_t': 0.0, 'shown': None,
+	  'lak_names': None}
 
 
 def _table(name):
@@ -55,7 +63,16 @@ def onCook(scriptOp):
 		names = [x.strip() for x in meta['symbols', 1].val.split('|')]
 
 	act = np.zeros(K)
-	if n and K:
+	frame = D.fetch('frame', None, search=False) or {}
+	if frame.get('lakota/names'):
+		_s['lak_names'] = [str(x).upper() for x in frame['lakota/names']]
+	lak, lnames = frame.get('lakota'), _s['lak_names']
+	if lak and lnames and len(lak) == len(lnames):
+		for name, v in zip(lnames, lak):              # matched by meaning in the backend
+			k = idx_of.get(name)
+			if k is not None:
+				act[k] += max(0.0, float(v))
+	elif n and K:                                     # older backend: the graph's Lakota-named symbols
 		g = lambda c, d=0.0: N[c].numpyArray()[:n] if N.chan(c) else np.full(n, d)  # noqa: E731
 		sym, size, rel, alive = g('sym', -1), g('size'), g('rel'), g('alive', 1)
 		score = rel if qa else size
@@ -64,6 +81,9 @@ def onCook(scriptOp):
 			k = idx_of.get(names[s]) if 0 <= s < len(names) else None
 			if k is not None and alive[i] >= 0.5:
 				act[k] += float(score[i])
+
+	if K and act.sum() <= 1e-9 and _s['cur'] is None:  # nothing yet: every symbol, equally
+		act[list(idx_of.values())] = 1.0
 
 	prev_act = _s['act']
 	if prev_act is None or len(prev_act) != K:

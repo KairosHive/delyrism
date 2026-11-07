@@ -38,6 +38,10 @@ same node; row j of every /edge/* array is the same edge.
   /delyrism/edge/alive   i×E
   /delyrism/edge/fade    f×E
 
+  /delyrism/lakota       f×K   activation of each Lakota background symbol (app/lakota.py):
+                               the graph's activated words matched to the Lakota symbols, for
+                               any space; order = /delyrism/lakota/names, never all zero
+
   /delyrism/end          i seq     — last message of the frame: commit here
 
 Event, outside the frame bundles (app/speech.py):
@@ -50,6 +54,7 @@ Sent with the frame when the node order changed, and once a second:
   /delyrism/symbols      s×S   archetype names (index = /node/sym)
   /delyrism/context      s
   /delyrism/query        s text  s kind (text | audio | image | video | av | "")
+  /delyrism/lakota/names s×K   Lakota symbol names (delyrism/structures/lakota.json order)
 
 Configuration: env DELYRISM_OSC (1/0), DELYRISM_OSC_HOST, DELYRISM_OSC_PORT,
 DELYRISM_OSC_HZ, DELYRISM_OSC_SCALE (sim px per output unit, default 300),
@@ -145,6 +150,9 @@ def frame_messages(sim, seq: int, t: float, scale: float, meta: Dict[str, Any],
         floats(f"{P}/edge/len", np.hypot(x1 - x0, y1 - y0)),
         ints(f"{P}/edge/alive", sim.e_alive.astype(np.int32)), floats(f"{P}/edge/fade", sim.e_fade),
     ]
+    lak = sim.lakota_activation() if hasattr(sim, "lakota_activation") else None
+    if lak is not None:
+        msgs.append(floats(f"{P}/lakota", lak))
     if labels:
         msgs += [
             strings(f"{P}/node/label", sim.ids),
@@ -152,6 +160,8 @@ def frame_messages(sim, seq: int, t: float, scale: float, meta: Dict[str, Any],
             strings(f"{P}/context", [meta.get("context", "")]),
             strings(f"{P}/query", [meta.get("query", ""), meta.get("kind", "")]),
         ]
+        if getattr(sim, "lakota_names", None):
+            msgs.append(strings(f"{P}/lakota/names", sim.lakota_names))
     msgs.append(ints(f"{P}/end", [int(seq)]))
     return msgs
 
