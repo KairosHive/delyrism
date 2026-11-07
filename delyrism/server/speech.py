@@ -85,7 +85,7 @@ class SpeechConfig:
         self.mood_tau = max(0.05, self.mood_tau)
         self.url = self.url.rstrip("/")
         if kw.get("media_kinds") is not None:
-            self.media_kinds = tuple(k for k in kw["media_kinds"] if k in ("pose", "motion"))
+            self.media_kinds = tuple(k for k in kw["media_kinds"] if k in ("pose", "motion", "speech"))
         return self.status()
 
     def status(self) -> Dict[str, Any]:

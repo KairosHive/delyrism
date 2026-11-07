@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.2)
+# Delyrism live API (package `delyrism`, v0.3)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -76,6 +76,7 @@ with the usual messages.
   "pose": {"tracker": "body"},           // body | hands | face | both; trace, fit, joints, smooth
   "audio_smoothing": null, "rel_smoothing": null,
   "motion": {"auto": true, "refresh": 3.0, "window": 3.0, "level": "full", "contrast": 0.7, "relative": 1.0},
+  "transcript": {"tau": 1.5, "hz": 20},  // latent smoothing of spoken-text queries (below)
   "osc": {"enabled": true, "host": "127.0.0.1", "port": 7000, "hz": 60},
   "speech": {"enabled": true, "url": "http://127.0.0.1:8010", "media": true, "media_kinds": ["motion"],
              "delay": 1.0, "min_gap": 4.0, "mood": true}
@@ -88,9 +89,10 @@ Live graph params (`graph`) and their defaults: `strategy "gate"`, `beta 1.2`,
 `min_abs_delta 0.01`, `within_symbol false`, `connected_only true`,
 `sign_filter "up"`, `sym_filter null`.
 
-Speech speaks the most activated word after a typed query settles (`delay`),
-and in the movement kinds listed in `media_kinds` when the top node changes
-(never cutting the previous word off: at least `min_gap` s apart). Needs the
+Speech speaks the most activated word after a typed or spoken query settles
+(`delay` s after the last change), and for the kinds listed in `media_kinds`
+("pose", "motion", "speech") when the top node changes instead (never cutting
+the previous word off: at least `min_gap` s apart). Needs the
 TTS service at `url`; without it nothing is spoken and nothing fails.
 
 ## HTTP
@@ -123,6 +125,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 |---|---|
 | `{"type": "context", "text": "…"}` | the dream: rebuilds the Δ-graph (send on every settled edit, ~200 ms debounce is plenty) |
 | `{"type": "query", "text": "…"}` | text query → relevance; speech after `delay` |
+| `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
@@ -158,7 +161,7 @@ description arrives as a `motion` message and becomes the query
 | message | when | fields |
 |---|---|---|
 | `graph` | after each context change | `nodes: [{id, symbol, color, pull, …}]` (descriptors), `edges: [{source, target, delta, …}]` |
-| `relevance` | after each query / graph change | `relevance: {descriptor: 0…1}`, `active`, `query` (text or the movement words), `kind` ("text" · "motion" · …) |
+| `relevance` | after each query / graph change, and `hz`/s while a spoken query glides | `relevance: {descriptor: 0…1}`, `active`, `query` (the text, the transcript or the movement words), `kind` ("text" · "speech" · "motion" · …) |
 | `motion` | each movement description | `text` (the words, "" when nothing moved or nobody is in frame), `level`, the qualities |
 | `pose` | per tracked batch | `jpeg` (base64 drawing of the dancer with trails), `present` |
 | `spoken` | a word was spoken | `word`, `duration`, `mood`, `mood_probs` |

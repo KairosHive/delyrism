@@ -639,10 +639,13 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "pose_opts": {**_POSE_DEFAULTS, **{k: v for k, v in prof.pose.items() if k in _POSE_DEFAULTS}},
         "lm_t": 0.0,                                # perf_counter of the last landmark frame
         "sim_hz": 0.0,                              # JSON stream of the layout to this client (0 = off)
+        "vq_target": None,                          # transcript: the embedding the query glides toward
+        "transcript": prof.transcript.model_dump(), # {tau, hz} latent smoothing of spoken-text queries
     }
     graph: Dict[str, Any] = {"nodes": [], "edges": [], "idx": {}}
     wake = asyncio.Event()
     pose_wake = asyncio.Event()
+    glide_wake = asyncio.Event()
     emb = space.embedder
     # server-side twin of the browser's spring layout → OSC (see live_sim.py)
     sim = LiveSim()
@@ -660,7 +663,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     def _speakable() -> bool:
         k = state["query_kind"]
         return speech.cfg.enabled and state["vq"] is not None and (
-            k == "text" or (speech.cfg.media and k in speech.cfg.media_kinds))
+            k == "text" or (k == "speech" and k not in speech.cfg.media_kinds)
+            or (speech.cfg.media and k in speech.cfg.media_kinds))
 
     async def speak_later() -> None:
         """Debounced voice: `speech.cfg.delay` s after the last text-query edit
@@ -738,7 +742,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     await ws.send_json({"type": "ready", "params": state["params"], "shape": dict(sim.shape),
                         "pose_opts": dict(state["pose_opts"]), "symbols": list(space.symbols),
-                        "motion": prof.motion.model_dump(),
+                        "motion": prof.motion.model_dump(), "transcript": dict(state["transcript"]),
                         "audio_capable": bool(getattr(emb, "audio_capable", False) or hasattr(emb, "_clap")),
                         "image_capable": bool(getattr(emb, "image_capable", False) or hasattr(emb, "oc_model")),
                         "video_capable": bool(getattr(emb, "video_capable", False)),
@@ -757,7 +761,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         rel = _relevance_vec(graph, state["vq"], D1)
         a = state["rel_smoothing"]
         prev = state["rel_prev"]
-        if rel and state["query_kind"] != "text" and a > 0 and prev:
+        if rel and state["query_kind"] not in ("text", "speech") and a > 0 and prev:
             rel = {k: round(a * prev.get(k, v) + (1.0 - a) * v, 4) for k, v in rel.items()}
         state["rel_prev"] = rel if rel else None
         return rel
@@ -768,7 +772,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         def run():
             rows = lakota.node_rows(space, [n["id"] for n in graph["nodes"]]) if nodes else {}
             q = (lakota.query_shares(space, state["vq"])
-                 if state["vq"] is not None and state["query_kind"] in ("text", "motion") else None)
+                 if state["vq"] is not None and state["query_kind"] in ("text", "motion", "speech") else None)
             return rows, q
         return _lakota_safe(run)
 
@@ -836,6 +840,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["query_kind"] = "text"
                 state["pending"] = None
                 state["rel_prev"] = None
+                state["vq_target"] = None
                 state["vq"] = await asyncio.to_thread(_text_vec, space, state["query_text"])
                 state["query_dirty"] = True
                 schedule_speak()          # restarts the 1 s timer on every edit
@@ -844,10 +849,33 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     speak["task"].cancel()
                 speak["last"] = speak["top"] = None
                 state["vq"] = None
+                state["vq_target"] = None
                 state["pending"] = None
                 state["rel_prev"] = None
                 state["query_text"] = ""
                 state["query_dirty"] = True
+            elif t == "transcript":
+                # spoken text (e.g. a live transcription of the last ~30 s): the
+                # query glides toward its embedding instead of jumping (glide())
+                text = str(m.get("text") or "")
+                for k in ("tau", "hz"):
+                    if m.get(k) is not None:
+                        state["transcript"][k] = float(m[k])
+                target = await asyncio.to_thread(_text_vec, space, text) if text.strip() else None
+                if target is None:
+                    continue                  # nothing said yet: hold the current query
+                if state["query_kind"] != "speech":
+                    state["rel_prev"] = None
+                    state["pending"] = None
+                state["query_kind"] = "speech"
+                state["query_text"] = text
+                state["vq_target"] = target
+                if state["vq"] is None or float(state["transcript"]["tau"]) <= 0:
+                    state["vq"] = target      # first words (or no smoothing): start there
+                state["query_dirty"] = True
+                glide_wake.set()
+                if "speech" not in speech.cfg.media_kinds:
+                    schedule_speak()          # speaks `delay` s after the transcript stops changing
             elif t == "audio_smoothing":
                 state["audio_smoothing"] = float(np.clip(float(m.get("value", 0.5)), 0.0, 0.95))
             elif t == "rel_smoothing":
@@ -988,6 +1016,34 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if state["graph_dirty"] or state["query_dirty"]:
                 wake.set()  # something arrived while we were computing
 
+    async def glide() -> None:
+        """Latent smoothing of spoken-text queries: move the query vector a
+        step toward the latest transcript embedding `hz` times a second
+        (normalised exponential approach, time constant `tau`), re-scoring
+        through the worker each step, until it arrives."""
+        last = time.perf_counter()
+        while True:
+            if state["vq_target"] is None or state["query_kind"] != "speech":
+                await glide_wake.wait()
+                glide_wake.clear()
+                last = time.perf_counter()
+                continue
+            tr = state["transcript"]
+            await asyncio.sleep(1.0 / max(1.0, float(tr["hz"])))
+            now = time.perf_counter()
+            dt, last = now - last, now
+            tgt, v = state["vq_target"], state["vq"]
+            if tgt is None or state["query_kind"] != "speech":
+                continue
+            tau = float(tr["tau"])
+            a = 1.0 if tau <= 0 or v is None else 1.0 - float(np.exp(-dt / tau))
+            nv = tgt if v is None else _unit(v + a * (tgt - v))
+            if float(np.dot(nv, tgt)) >= 1.0 - 1e-5:
+                nv, state["vq_target"] = tgt, None     # arrived: rest until the next words
+            state["vq"] = nv
+            state["query_dirty"] = True
+            wake.set()
+
     async def pose_loop() -> None:
         """Track pose frames at camera rate, apart from the worker, so the
         trajectory stays dense and the drawing stays fluid while an
@@ -1074,7 +1130,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             await asyncio.sleep(max(0.0, 1.0 / osc.hz - (time.perf_counter() - now)))
 
     tasks = [asyncio.create_task(reader()), asyncio.create_task(worker()),
-             asyncio.create_task(pose_loop()), asyncio.create_task(osc_pump())]
+             asyncio.create_task(pose_loop()), asyncio.create_task(osc_pump()),
+             asyncio.create_task(glide())]
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for d in done:

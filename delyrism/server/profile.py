@@ -42,7 +42,8 @@ class SpeechSettings(BaseModel):
     url: Optional[str] = None
     delay: Optional[float] = None
     media: Optional[bool] = None          # also speak in movement modes
-    media_kinds: Optional[List[str]] = None   # which movement kinds speak: "pose", "motion"
+    media_kinds: Optional[List[str]] = None   # kinds that speak on a top-node change: "pose", "motion", "speech"
+                                              # (others speak `delay` s after the query stops changing)
     min_gap: Optional[float] = None
     mood: Optional[bool] = None
     repeat: Optional[bool] = None
@@ -58,6 +59,15 @@ class MotionSettings(BaseModel):
     level: Literal["full", "abstract", "qualities", "body"] = "full"
     contrast: float = Field(0.7, ge=0.0, le=1.0)
     relative: float = Field(1.0, ge=0.0, le=1.0)
+
+
+class TranscriptSettings(BaseModel):
+    """Spoken-text queries ({"type": "transcript", "text": …}): each new text
+    sets a target embedding and the query vector glides toward it with time
+    constant `tau` s, re-scored `hz` times a second — latent smoothing, so the
+    graph follows speech continuously instead of jumping at every update."""
+    tau: float = Field(1.5, ge=0.0, le=30.0)     # 0 = jump straight to each new text
+    hz: float = Field(20.0, ge=1.0, le=60.0)
 
 
 class LiveProfile(BaseModel):
@@ -77,6 +87,7 @@ class LiveProfile(BaseModel):
     audio_smoothing: Optional[float] = None
     rel_smoothing: Optional[float] = None
     motion: MotionSettings = Field(default_factory=MotionSettings)
+    transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
     # ---- server-wide outputs, applied when the profile is set ----
     osc: Optional[OscSettings] = None
     speech: Optional[SpeechSettings] = None
