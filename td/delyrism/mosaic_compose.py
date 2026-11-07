@@ -21,6 +21,12 @@ On a mirror line a figure must coincide with its own reflection: only
 symbols with a matching mirror symmetry go there, turned so that axis lies
 along the line.  Asymmetric symbols appear as mirrored pairs / pinwheels.
 
+Gestalt orientation: every symbol has a principal axis (the long axis of its
+ink, from the mask's second moments).  Elongated symbols (aniso ≥ ELONG) are
+always turned so that axis follows the structure they belong to — along the
+arm on a mirror line (symbols whose symmetry would put them crosswise stay off
+the arms), along the branch on a branch, radially in the fill.
+
 Coordinates: tile units, centre (0, 0), y up, tile spans [-½, ½]².  A figure
 of scale s is an atlas canvas of side s (the symbol fills ~88 % of it).
 """
@@ -34,6 +40,7 @@ import numpy as np
 R = 200          # collision raster (pixels per tile side)
 MASK = 64        # symbol mask resolution
 GAP = 0.06       # clearance per side, fraction of the canvas
+ELONG = 1.2      # principal-axis anisotropy above which a symbol has a direction
 
 
 # ------------------------------------------------------------------ symbols
@@ -57,8 +64,15 @@ def symbol_info(alpha: np.ndarray) -> Dict:
     f = max(1, min(h, w) // MASK)
     a = alpha[: f * MASK, : f * MASK].reshape(MASK, f, MASK, f).mean(axis=(1, 3))
     solid = a > 0.3
+    v, u = np.nonzero(solid)
+    axis, aniso = 90.0, 1.0
+    if len(u) > 2:
+        x, y = u - u.mean(), -(v - v.mean())
+        w, V = np.linalg.eigh(np.cov(np.vstack([x, y])))
+        axis = math.degrees(math.atan2(V[1, 1], V[0, 1])) % 180.0      # long axis, deg from +x (y up)
+        aniso = math.sqrt(max(w[1], 1e-9) / max(w[0], 1e-9))
     return dict(solid=solid, dil=_dilate(solid, max(1, int(round(GAP * MASK)))),
-                fill=float(solid.mean()),
+                fill=float(solid.mean()), axis=axis, aniso=aniso,
                 lr=_iou(solid, solid[:, ::-1]) > 0.86,
                 ud=_iou(solid, solid[::-1, :]) > 0.86,
                 r90=_iou(solid, np.rot90(solid)) > 0.86)
@@ -147,13 +161,31 @@ class _Canvas:
 
 # ------------------------------------------------------------------ recipe
 def _ray_phis(info: Dict, theta: float) -> List[float]:
-    """Orientations for which the figure is its own mirror image across the line at theta."""
+    """Orientations for which the figure is its own mirror image across the line at
+    theta — for an elongated symbol only those with its long axis along the line."""
     out = []
     if info["lr"]:
         out += [theta - 90, theta + 90]        # its vertical axis along the line (out / in)
     if info["ud"]:
         out += [theta, theta + 180]
+    if info["aniso"] >= ELONG:
+        out = [p for p in out if _axis_off(info["axis"] + p, theta) < 12.0]
     return out
+
+
+def _axis_off(a: float, b: float) -> float:
+    """Angle between two undirected axes (deg, 0–90)."""
+    d = (a - b) % 180.0
+    return min(d, 180.0 - d)
+
+
+def align(info: Dict, direction: float, mirror: bool = False, flip: bool = False) -> np.ndarray:
+    """Orientation putting the symbol's long axis along `direction` (its 'up' for
+    symbols without a clear axis); flip = turned 180°, mirror = reflected."""
+    a = info["axis"] if info["aniso"] >= ELONG else 90.0
+    if mirror:
+        a = 180.0 - a                          # the reflected symbol's axis
+    return orient(direction - a + (180.0 if flip else 0.0), mirror)
 
 
 def compose(infos: Dict[int, Dict], symbols: Sequence[int], shares: Sequence[float],
@@ -206,7 +238,7 @@ def compose(infos: Dict[int, Dict], symbols: Sequence[int], shares: Sequence[flo
             break
     if not placed:                                     # asymmetric only: a pinwheel near the centre
         for k in by_deficit(syms):
-            if put(k, sc * 0.55, sc * 0.18, sc * 0.6, orient(rng.choice([0.0, 90.0]))):
+            if put(k, sc * 0.55, sc * 0.18, sc * 0.6, align(infos[k], 0.0, flip=bool(rng.random() < 0.5))):
                 break
 
     # 2 · snowflake: arms grow outward along the two mirror rays of the
@@ -219,15 +251,14 @@ def compose(infos: Dict[int, Dict], symbols: Sequence[int], shares: Sequence[flo
         dx, dy = math.cos(math.radians(direction)), math.sin(math.radians(direction))
         cands = by_deficit(syms)
         k = cands[0] if rng.random() < 0.75 else cands[min(1, len(cands) - 1)]
-        mirror = bool(rng.random() < 0.5)
-        phi = direction - 90.0 + (180.0 if rng.random() < 0.5 else 0.0)
+        M = align(infos[k], direction, mirror=bool(rng.random() < 0.5), flip=bool(rng.random() < 0.5))
         step = s * rng.uniform(1.15, 1.45)
         for i in range(n):
             d = s * 0.9 + i * step
             x, y = x0 + d * dx, y0 + d * dy
             if not (0.0 < y < x - 0.01 and x < 0.48):
                 break
-            if not put(k, x, y, s, orient(phi, mirror)):
+            if not put(k, x, y, s, M):
                 break
             if depth > 0 and i == n // 2 and rng.random() < 0.45:
                 turn = float(rng.choice([45.0, -45.0, 90.0, -90.0]))
@@ -276,9 +307,10 @@ def compose(infos: Dict[int, Dict], symbols: Sequence[int], shares: Sequence[flo
         y = round(rng.uniform(0.0, x) / grid) * grid
         if y < 0.02 or x - y < 0.02:
             continue                                   # stay off the mirror lines
+        radial = round(math.degrees(math.atan2(y, x)) / 45.0) * 45.0      # radial, snapped to 45°
         for k in by_deficit(syms)[:2]:
-            phi = float(rng.choice([0, 45, 90, 135, 180, 225, 270, 315]))
-            if put(k, x, y, s, orient(phi, bool(rng.random() < 0.3))):
+            M = align(infos[k], radial, mirror=bool(rng.random() < 0.3), flip=bool(rng.random() < 0.5))
+            if put(k, x, y, s, M):
                 break
 
     tot = sum(ink.values()) or 1.0
