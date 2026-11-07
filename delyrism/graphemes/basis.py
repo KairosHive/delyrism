@@ -115,11 +115,11 @@ class Fragment:
     down: bool              # pen down (drawing) or up (travelling between strokes)
 
 
-CUT_COST = 0.02     # optimal cutting: the price of one cut, against the share of motion the graphemes miss
+CUT_COST = 0.01     # optimal cutting: the price of one cut, against the share of the symbol's motion the graphemes miss
 
 
 def segment_optimal(P: np.ndarray, Wk: np.ndarray, lam: float = CUT_COST, max_cand: int = 110,
-                    min_pts: int = 4) -> List[int]:
+                    min_pts: int = 4, total: Optional[float] = None) -> List[int]:
     """Cut points of a pen-down path P (n, 2) chosen by dynamic programming:
     minimise sum over fragments of (share of its motion the graphemes Wk
     miss) x (its length / the stroke's length) + lam per fragment.  Each
@@ -131,8 +131,9 @@ def segment_optimal(P: np.ndarray, Wk: np.ndarray, lam: float = CUT_COST, max_ca
         return [0, n - 1]
     m = min(n, max_cand)
     cand = np.round(np.linspace(0, n - 1, m)).astype(int)
-    total = float(np.linalg.norm(np.diff(P, axis=0), axis=1).sum())
-    if total < 1e-9:
+    own = float(np.linalg.norm(np.diff(P, axis=0), axis=1).sum())
+    total = own if total is None else float(total)      # the length a cut's saving is measured against
+    if own < 1e-9 or total < 1e-9:
         return [0, n - 1]
     idx, u = np.arange(n, dtype=float), np.linspace(0, 1, L + 1)
     best = np.full(m, np.inf)
@@ -174,11 +175,15 @@ def _default_planar() -> Optional[np.ndarray]:
 
 
 def fragments(X: np.ndarray, pen: np.ndarray, fs: float = FS, corner_deg: Optional[float] = 70.0,
-              method: str = "optimal", W: Optional[np.ndarray] = None, lam: float = CUT_COST) -> List[Fragment]:
+              method: str = "optimal", W: Optional[np.ndarray] = None, lam: float = CUT_COST,
+              scale: str = "symbol") -> List[Fragment]:
     """Cut at pen changes, then each pen-down run:
     "optimal"  where the graphemes W (rows; default: the six of the saved
                basis) rebuild each fragment best, with a cost lam per cut
-               (segment_optimal); scale-free
+               (segment_optimal); scale-free.  scale "symbol" (default)
+               measures what a cut saves against the whole drawing's ink,
+               so cuts go where the symbol needs them; "stroke" measures
+               it against each stroke on its own
     "speed"    at pronounced speed minima and sharp turns (heading change
                above corner_deg), the cut the basis was learned with."""
     if method == "optimal" and W is None:
@@ -186,6 +191,7 @@ def fragments(X: np.ndarray, pen: np.ndarray, fs: float = FS, corner_deg: Option
         if W is None:
             method = "speed"
     out: List[Fragment] = []
+    sym_len = float(np.linalg.norm(np.diff(X[:, :2], axis=0), axis=1)[pen[1:] & pen[:-1]].sum())   # all pen-down ink
     edges = np.flatnonzero(np.diff(pen.astype(int))) + 1
     starts = np.r_[0, edges]
     ends = np.r_[edges, len(pen)]
@@ -196,7 +202,7 @@ def fragments(X: np.ndarray, pen: np.ndarray, fs: float = FS, corner_deg: Option
             out.append(Fragment(a, b, False))
             continue
         if method == "optimal":
-            cuts = segment_optimal(X[a:b + 1, :2], W, lam)
+            cuts = segment_optimal(X[a:b + 1, :2], W, lam, total=sym_len if scale == "symbol" else None)
             out += [Fragment(a + p, a + q, True) for p, q in zip(cuts[:-1], cuts[1:]) if q > p]
             continue
         v = np.linalg.norm(np.gradient(X[s0:e0, :2], axis=0), axis=1) * fs
