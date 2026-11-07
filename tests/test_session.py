@@ -73,6 +73,20 @@ def test_trajectory_topology_archetypes(synthetic):
     assert arche and all(len(v) >= 2 for v in arche.values())
 
 
+def test_moments_without_a_query_are_valid_json():
+    """The raw download is parsed by browsers: no NaN, a moment with no query is null."""
+    from delyrism.session import to_json
+    rec = SessionRecorder("x", ["a", "b"], {"a": "A", "b": "B"}, ["A", "B"])
+    rec.snapshot(None, "text", "", t=0.0)
+    rec.snapshot(np.array([0.2, 0.1]), "text", "q", t=1.0)
+    rec.snapshot(np.array([0.1, 0.3]), "text", "q", t=2.0)
+    rec.ended = 2.0
+    raw = rec.to_raw()
+    assert raw["rel"][0] is None
+    text = to_json({"raw": raw, "result": analyse(raw, np.eye(2), np.array([[0.0, 0.0], [1.0, 1.0]]))})
+    assert "NaN" not in text and json.loads(text)["raw"]["rel"][0] is None
+
+
 def test_empty_session_is_safe():
     rec = SessionRecorder("x", ["a", "b"], {"a": "A", "b": "B"}, ["A", "B"])
     rec.snapshot(None, "text", "")

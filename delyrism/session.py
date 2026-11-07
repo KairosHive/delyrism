@@ -76,15 +76,13 @@ class SessionRecorder:
         self.ended = self.now()
 
     def to_raw(self) -> Dict[str, Any]:
-        n = len(self.descriptors)
-        rel = np.stack([r if r is not None else np.full(n, np.nan, np.float32) for r in self.rel]) \
-            if self.rel else np.zeros((0, n), np.float32)
         return {
             "format": "delyrism-session/1", "space_id": self.space_id, "name": self.name,
             "started": self.started, "duration": round(self.ended if self.ended is not None else self.now(), 3),
             "descriptors": self.descriptors, "owners": self.owners, "symbols": self.symbols,
             "t": [round(x, 3) for x in self.t], "kind": self.kind, "query": self.query,
-            "rel": np.round(rel, 5).tolist(), "events": self.events,
+            # a moment with no query is null (valid JSON, unlike NaN)
+            "rel": [None if r is None else np.round(r, 5).tolist() for r in self.rel], "events": self.events,
         }
 
 
@@ -169,7 +167,8 @@ def analyse(raw: Dict[str, Any], D: np.ndarray, XY: np.ndarray, colors: Optional
     descriptors, owners, symbols = raw["descriptors"], raw["owners"], raw["symbols"]
     N = len(descriptors)
     t = np.asarray(raw["t"], dtype=float)
-    R_all = np.asarray(raw["rel"], dtype=float).reshape(len(t), N) if len(t) else np.zeros((0, N))
+    R_all = (np.array([[np.nan] * N if row is None else row for row in raw["rel"]], dtype=float).reshape(len(t), N)
+             if len(t) else np.zeros((0, N)))
     active = ~np.isnan(R_all).any(1) if len(t) else np.zeros(0, bool)
     R, ta = R_all[active], t[active]
     D = np.asarray(D, dtype=float)
@@ -353,4 +352,6 @@ def analyse(raw: Dict[str, Any], D: np.ndarray, XY: np.ndarray, colors: Optional
 
 
 def to_json(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))
+    """Strict JSON (NaN is refused: browsers cannot parse it)."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                      default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))
