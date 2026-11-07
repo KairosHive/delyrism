@@ -63,3 +63,4 @@ python-osc
 
 # ---- Pose query (delyrism/pose.py, Live tab) ----
 mediapipe>=0.10.14       # PoseLandmarker; pulls opencv-contrib-python
+pywavelets>=1.6          # delyrism/graphemes.py: wavelet packet best basis (learning only)
