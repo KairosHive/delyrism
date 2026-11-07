@@ -21,6 +21,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from delyrism import SymbolSpace, TextEmbedder
 
+from . import testing as _testing
+
 
 # The engine knows only these primitive backend ids:
 _ENGINE_BACKENDS = {"sentence-transformer", "qwen2", "qwen3", "cloudflare", "audioclip", "clap", "clip", "peav"}
@@ -147,6 +149,11 @@ def get_embedder(cfg: Dict[str, Any]) -> Tuple[str, TextEmbedder]:
     fp = _hash(cfg)
     with _embedder_lock:
         emb = _embedder_cache.get(fp)
+        if emb is None and _testing.enabled():          # tests / offline runs, see testing.py
+            emb = _testing.HashEmbedder(default_instruction=cfg.get("default_instruction"),
+                                        default_context=cfg.get("default_context"))
+            _add_encode_cache(emb)
+            _embedder_cache[fp] = emb
         if emb is None:
             engine_backend, engine_model = _resolve_backend(
                 cfg.get("backend", "cloudflare-bge-m3"),

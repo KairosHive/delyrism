@@ -76,6 +76,8 @@ graphemes = [
 ]
 # Topology tab (persistent homology)
 topology = ["ripser>=0.6.7"]
+# the test suite (pytest tests/), run with DELYRISM_TEST_EMBEDDER=1 set by tests/conftest.py
+test = ["delyrism[web]", "pytest>=8", "httpx>=0.27"]
 # audio / image / video embedders (CLAP, CLIP, PE-AV) and audio contexts
 media = [
     "librosa>=0.10",
@@ -100,3 +102,7 @@ exclude = ["delyrism.legacy*"]
 
 [tool.setuptools.package-data]
 delyrism = ["structures/*.json", "graphemes/data/*.npz", "graphemes/*.html", "graphemes/samples/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

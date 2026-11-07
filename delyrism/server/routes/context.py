@@ -107,10 +107,11 @@ async def encode_audio(
     space = engine_cache.get_space(space_id)
     if space is None:
         raise HTTPException(status_code=404, detail="unknown space_id")
-    if not hasattr(space.embedder, "embed_audio_array"):
+    # every TextEmbedder has embed_audio_array; only an audio tower can run it
+    if not getattr(space.embedder, "audio_capable", False):
         raise HTTPException(
             status_code=400,
-            detail="active embedder backend does not support audio (use clap or audioclip)",
+            detail="this space's embedder has no audio tower: rebuild it with an audio-capable backend",
         )
     try:
         import librosa

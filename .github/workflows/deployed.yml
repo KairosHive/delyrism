@@ -1,0 +1,35 @@
+# The browser tests against the deployed website, with its real embedder.
+# Runs when Railway reports a successful deployment, every night, and by hand.
+# Set the repository variable SITE_URL (Settings → Secrets and variables →
+# Actions → Variables) to the public Railway URL.
+name: deployed site
+
+on:
+  deployment_status:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      E2E_URL: ${{ github.event.deployment_status.environment_url || vars.SITE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Need a URL
+        run: |
+          if [ -z "$E2E_URL" ]; then echo "set the SITE_URL repository variable"; exit 1; fi
+          curl -fsS "$E2E_URL/healthz"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - working-directory: web/frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run e2e

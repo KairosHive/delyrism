@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import profile as live_profile
+from . import testing as _testing
 from .routes import analysis, builder, context, delta, live, realtime, spaces, story, topology
 
 # readiness for process managers: /healthz → "ready" once the warm-up (if any) is done
@@ -105,6 +106,8 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
               builder.router, builder.legacy_router,      # /miner alias kept for older clients
               topology.router, realtime.router, live.router):
         app.include_router(r)
+    if _testing.enabled():                       # DELYRISM_TEST_EMBEDDER=1 only
+        app.include_router(_testing.router())
 
     @app.get("/healthz")
     def healthz():
