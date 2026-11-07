@@ -14,7 +14,7 @@ import { useSidebar } from "./store";
 import type { DeltaEdge } from "./api";
 import { startMicCapture, type MicCapture } from "./liveAudio";
 import { startCameraCapture, type CameraCapture } from "./liveCamera";
-import { createTracker, packLandmarks, type Tracker } from "./poseTracker";
+import { createTracker, packLandmarks, type Tracker, type TrackerKind } from "./poseTracker";
 
 export interface LiveNode { id: string; symbol: string; color: string; pull: number; }
 export interface LiveGraph {
@@ -45,6 +45,8 @@ export interface TrackStats {
   trackFps: number;     // frames tracked per second (target: poseFps)
   detectMs: number;     // MediaPipe time per tracked frame
   previewFps: number;   // pose drawings back from the server per second
+  lagMs: number;        // camera capture → landmarks sent (worker only; 0 on the page)
+  offThread: boolean;   // tracking in a worker on the camera's own frames (else on the page, from the <video>)
 }
 
 export type QueryKind = "text" | "audio" | "image" | "video" | "av" | "pose" | "motion";
@@ -125,6 +127,7 @@ interface LiveState {
   posePresent: boolean;          // a dancer was found in the latest tracked frame
   trackerState: "off" | "loading" | "GPU" | "CPU" | "error";   // the browser landmark tracker
   trackStats: TrackStats | null;  // measured rates while tracking (2 Hz)
+  fastShutter: boolean;          // cap the camera's exposure at one frame time while tracking (full rate in dim light)
   motionWindow: number;          // seconds of movement per description
   motionContrast: number;        // 0..1, how much of the shared "movement description" direction is removed
   motionRelative: number;        // 0 = fixed calibration … 1 = each quality against this session's own range
@@ -161,6 +164,7 @@ interface LiveState {
   setRelSmoothing: (v: number) => void;
   setSendInterval: (v: number) => void;
   setMotionRefresh: (v: number) => void;
+  setFastShutter: (v: boolean) => void;
   setPoseOpts: (patch: Partial<PoseOpts>) => void;
   resetPose: () => void;
   exportPose: (format: "mp4" | "npz", seconds: number) => void;
@@ -229,7 +233,7 @@ function startTracking(get: () => LiveState, set: (p: Partial<LiveState>) => voi
     if (v !== video) watch(v);
     if (now - lastStats >= 500) {
       lastStats = now;
-      set({ trackStats: { camFps: rates.cam.fps(now), trackFps: rates.track.fps(now), detectMs, previewFps: rates.preview.fps(now) } });
+      set({ trackStats: { camFps: rates.cam.fps(now), trackFps: rates.track.fps(now), detectMs, previewFps: rates.preview.fps(now), lagMs: 0, offThread: false } });
     }
     if (!tracker || !v || v.readyState < 2 || !tracks(s.queryMode)) return;
     // new camera frames only, while the frame callback is alive (it can pause
@@ -239,7 +243,7 @@ function startTracking(get: () => LiveState, set: (p: Partial<LiveState>) => voi
       fresh = false;
     }
     const interval = 1000 / Math.max(1, s.poseFps);
-    if (now < due - 4) return;                                  // ahead of the set rate: skip this frame
+    if (now < due - 0.5 * interval) return;                     // ahead of the set rate: skip (half an interval of slack for jitter)
     due = now - due > interval ? now + interval : due + interval;   // far behind → resync, else keep the cadence
     const t0 = performance.now();
     let rows: Float32Array | null = null;
@@ -260,10 +264,83 @@ function startTracking(get: () => LiveState, set: (p: Partial<LiveState>) => voi
   };
 }
 
+// ---- off-thread tracking (preferred) -----------------------------------------
+// Where the browser can hand the camera's frames to a worker
+// (MediaStreamTrackProcessor + transferable streams: Chrome, Edge), MediaPipe
+// runs there — see trackWorker.ts.  The page only forwards the landmark
+// payloads to the socket, so graph rendering, React and a covered window can
+// no longer starve the tracker.  Elsewhere the on-page loop above is used.
+let worker: Worker | null = null;
+let workerCam: CameraCapture | null = null;
+let workerKind: TrackerKind | null = null;
+let workerFrames: { close: () => void } | null = null;
+let workerFailed = false;
+
+function stopWorker(terminate = false) {
+  if (worker) worker.postMessage({ type: "stop" });
+  workerFrames?.close();
+  workerFrames = null;
+  workerCam = null;
+  workerKind = null;
+  if (terminate && worker) { worker.terminate(); worker = null; }
+}
+
+function startWorker(get: () => LiveState, set: (p: Partial<LiveState>) => void, cam: CameraCapture, kind: TrackerKind): boolean {
+  const frames = cam.frames(1);
+  if (!frames) return false;
+  try {
+    if (!worker) {
+      worker = new Worker(new URL("./trackWorker.ts", import.meta.url));
+      worker.onmessage = (e: MessageEvent) => {
+        const m = e.data;
+        if (m.type === "lm") get()._sendBinary?.(6, m.buf);
+        else if (m.type === "stats") {
+          set({ trackStats: { camFps: m.camFps, trackFps: m.trackFps, detectMs: m.detectMs, lagMs: m.lagMs,
+                              previewFps: rates.preview.fps(performance.now()), offThread: true } });
+        } else if (m.type === "state") {
+          set({ trackerState: m.state, ...(m.error ? { liveError: m.error } : {}) });
+        }
+      };
+      worker.onerror = (e) => {
+        // the worker could not run (bundling, GPU in workers, ...): track on the page instead
+        console.warn("[liveGraph] tracking worker failed, tracking on the page:", e.message);
+        e.preventDefault?.();
+        workerFailed = true;
+        stopWorker(true);
+        void ensureTracker(get, set);
+      };
+    }
+    worker.postMessage({ type: "start", frames: frames.readable, kind, fps: get().poseFps, origin: performance.timeOrigin },
+                       [frames.readable as unknown as Transferable]);
+  } catch (e) {
+    console.warn("[liveGraph] tracking worker unavailable, tracking on the page:", e);
+    frames.close();
+    workerFailed = true;
+    stopWorker(true);
+    return false;
+  }
+  workerFrames = frames;
+  workerCam = cam;
+  workerKind = kind;
+  return true;
+}
+
 /** Build, swap or retire the tracker so it matches the current mode and choice. */
 async function ensureTracker(get: () => LiveState, set: (p: Partial<LiveState>) => void): Promise<void> {
   const s = get();
   const want = tracks(s.queryMode) && s._cam ? s.poseOpts.tracker : null;
+  if (s._cam) void s._cam.fastShutter(!!want && s.fastShutter);
+  if (want && !workerFailed && s._cam) {
+    if (workerCam === s._cam && worker) {
+      if (workerKind !== want) { worker.postMessage({ type: "kind", kind: want }); workerKind = want; }
+      return;
+    }
+    stopWorker();
+    stopTracking();
+    if (tracker) { tracker.close(); tracker = null; }
+    if (startWorker(get, set, s._cam, want)) return;
+  }
+  stopWorker();
   if (!want) {
     stopTracking();
     if (tracker) { tracker.close(); tracker = null; }
@@ -393,6 +470,7 @@ export const useLive = create<LiveState>((set, get) => ({
   posePresent: false,
   trackStats: null,
   trackerState: "off",
+  fastShutter: true,
   motionWindow: 3.0,
   motionContrast: 0.7,
   motionRelative: 1.0,
@@ -459,6 +537,7 @@ export const useLive = create<LiveState>((set, get) => ({
     const s = get();
     if (s._ticker) clearInterval(s._ticker);
     s._mic?.stop();
+    stopWorker(true);
     s._cam?.stop();
     stopTracking();
     if (tracker) { tracker.close(); tracker = null; }
@@ -481,6 +560,11 @@ export const useLive = create<LiveState>((set, get) => ({
   exportPose: (format, seconds) => get()._send?.({ type: "pose_export", format, seconds }),
   setSendInterval: (v) => { set({ sendInterval: v }); restartTicker(get, set); },
   setMotionRefresh: (v) => { set({ motionRefresh: v }); restartTicker(get, set); },
+  setFastShutter: (v) => {
+    set({ fastShutter: v });
+    const cam = get()._cam;
+    if (cam && tracks(get().queryMode)) void cam.fastShutter(v);
+  },
   setRelSmoothing: (v) => { set({ relSmoothing: v }); get()._send?.({ type: "rel_smoothing", value: v }); },
   setAudioSmoothing: (v) => { set({ audioSmoothing: v }); get()._send?.({ type: "audio_smoothing", value: v }); },
   setParams: (patch) => {
@@ -491,6 +575,9 @@ export const useLive = create<LiveState>((set, get) => ({
   },
   set: (k, v) => set({ [k]: v } as any),
 }));
+
+// the worker keeps its own copy of the tracking rate
+useLive.subscribe((s, p) => { if (s.poseFps !== p.poseFps) worker?.postMessage({ type: "fps", fps: s.poseFps }); });
 
 /** The Live tab's own default for the number of strongest Δ edges (the
  *  Explorer keeps its own sidebar value). */

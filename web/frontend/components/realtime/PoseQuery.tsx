@@ -51,18 +51,25 @@ export function TrackerPicker({ allow }: { allow?: PoseTracker[] }) {
 /** Measured tracking rates, so the "tracking" setting can be checked live:
  *  camera frames in, frames tracked, MediaPipe time per frame, drawings back. */
 export function TrackRate() {
-  const { st, target } = useLive(useShallow((s) => ({ st: s.trackStats, target: s.poseFps })));
+  const { st, target, mode, shutter, setShutter } = useLive(useShallow((s) => ({
+    st: s.trackStats, target: s.poseFps, mode: s._cam?.mode ?? null, shutter: s.fastShutter, setShutter: s.setFastShutter,
+  })));
   if (!st) return null;
   const reach = Math.min(target, st.camFps || target);
   const short = st.trackFps < 0.9 * reach;
-  const camShort = st.camFps > 0 && st.camFps < 0.9 * target;
+  const camShort = st.camFps > 0 && st.camFps < 0.9 * Math.min(target, 30);
   const budget = st.detectMs > 1000 / Math.max(1, target);
   const f = (x: number) => x.toFixed(x < 10 ? 1 : 0);
   return (
     <div className={`col-span-full font-mono text-[10px] leading-tight ${short ? "text-warning" : "text-ink-500"}`}
-         title="camera: new frames per second delivered · tracked: frames run through MediaPipe (target = the tracking setting) · ms: MediaPipe time per frame · drawing: pose drawings back from the server">
-      camera {f(st.camFps)} fps · tracked {f(st.trackFps)}/{target} fps · {st.detectMs.toFixed(1)} ms/frame · drawing {f(st.previewFps)} fps
-      {camShort && <span className="text-warning"> · the camera delivers only {f(st.camFps)} fps</span>}
+         title="camera: new frames per second delivered (and its mode) · tracked: frames run through MediaPipe (target = the tracking setting) · ms: MediaPipe time per frame · lag: camera capture to landmarks sent · drawing: pose drawings back from the server">
+      camera {f(st.camFps)} fps{mode ? ` @ ${mode.width}×${mode.height}` : ""} · tracked {f(st.trackFps)}/{target} fps ·{" "}
+      {st.detectMs.toFixed(1)} ms/frame{st.offThread ? ` · lag ${st.lagMs.toFixed(0)} ms` : " · on page"} · drawing {f(st.previewFps)} fps
+      <label className="ml-2 inline-flex cursor-pointer items-center gap-1 align-middle text-ink-400"
+             title="Cap the camera's exposure at one frame time while tracking: full frame rate in dim light, darker picture. Off = the camera's own auto exposure.">
+        <input type="checkbox" className="h-3 w-3" checked={shutter} onChange={(e) => setShutter(e.target.checked)} /> fast shutter
+      </label>
+      {camShort && <span className="text-warning"> · the camera delivers only {f(st.camFps)} fps{shutter ? " — more light helps" : " — try fast shutter"}</span>}
       {budget && <span className="text-warning"> · MediaPipe needs more than a frame&apos;s time — lower the rate or the GPU load</span>}
     </div>
   );

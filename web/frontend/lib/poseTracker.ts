@@ -4,7 +4,8 @@
 // MediaPipe's Python build on Windows has no GPU path, so the live pose and
 // movement queries track here: the tasks-vision WASM runtime with the GPU
 // delegate (WebGL) reads the <video> element directly, and only landmarks
-// travel to the server.  Rows follow delyrism/pose.py — x y z visibility
+// travel to the server (the frames come from a worker, see trackWorker.ts,
+// or from the <video> element where that is unavailable).  Rows follow delyrism/pose.py — x y z visibility
 // wx wy wz per landmark, NaN where nothing was found:
 //   body 33 · hands 42 (the subject's left hand, then right) · face 478 ·
 //   both 75 (body, then left hand, then right hand)
@@ -32,7 +33,7 @@ export interface Tracker {
   kind: TrackerKind;
   delegate: "GPU" | "CPU";
   /** rows × 7 landmarks for this video frame, or null when nothing was found */
-  detect: (video: HTMLVideoElement, tMs: number) => Float32Array | null;
+  detect: (video: TexImageSource, tMs: number) => Float32Array | null;
   close: () => void;
 }
 
@@ -104,7 +105,7 @@ export async function createTracker(kind: TrackerKind): Promise<Tracker> {
 
   const n = TRACKER_ROWS[kind];
   let lastMs = -1;
-  const detect = (video: HTMLVideoElement, tMs: number): Float32Array | null => {
+  const detect = (video: TexImageSource, tMs: number): Float32Array | null => {
     const ms = Math.max(Math.round(tMs), lastMs + 1);       // VIDEO mode wants strictly increasing time
     lastMs = ms;
     const out = new Float32Array(n * COLS).fill(NaN);
