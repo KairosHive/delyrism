@@ -18,16 +18,34 @@ GROUPS = {
 FRAME = ['seq', 'time', 'nnodes', 'nedges', 'graphseq', 'queryactive', 'awake']
 
 # Particle palette: symbol i (/delyrism/node/sym) takes colour i mod 10, in
-# place of the web app's palette (/delyrism/node/r|g|b).  Controls › Look ›
-# "TD Palette" switches back to the web colours.
+# place of the web app's palette (/delyrism/node/r|g|b).  The colours are the
+# RGB pars Pal0…Pal9 on Controls › Palette (edit them there); "Use this
+# palette" off switches back to the web colours.  PALETTE_HEX is the fallback
+# when those pars don't exist.
 PALETTE_HEX = ['#D8961F', '#C56A3D', '#4D88D3', '#629843', '#1397AE',
                '#BC6A7F', '#C850B5', '#7B70F4', '#AB2966', '#FFBDE7']
 PALETTE = np.array([[int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5)] for h in PALETTE_HEX], dtype=np.float32)
 
 
+def _controls():
+	return op.Controls if hasattr(op, 'Controls') else None
+
+
 def _use_palette():
-	c = op.Controls if hasattr(op, 'Controls') else None
+	c = _controls()
 	return not (c is not None and hasattr(c.par, 'Tdpalette') and not c.par.Tdpalette.eval())
+
+
+def _palette():
+	c = _controls()
+	if c is None or not hasattr(c.par, 'Pal0r'):
+		return PALETTE
+	cols = []
+	for i in range(100):
+		if not hasattr(c.par, f'Pal{i}r'):
+			break
+		cols.append([getattr(c.par, f'Pal{i}{ch}').eval() for ch in 'rgb'])
+	return np.array(cols, dtype=np.float32)
 BOUNDS = ['xmin', 'ymin', 'xmax', 'ymax']
 
 
@@ -50,7 +68,8 @@ def onCook(scriptOp):
 			vals[:] = a
 		cols[name] = vals
 	if group == 'nodes' and _use_palette():
-		rgb = PALETTE[np.mod(cols['sym'].astype(np.int64), len(PALETTE))]
+		pal = _palette()
+		rgb = pal[np.mod(cols['sym'].astype(np.int64), len(pal))]
 		cols['r'], cols['g'], cols['b'] = rgb[:, 0].copy(), rgb[:, 1].copy(), rgb[:, 2].copy()
 	for name, vals in cols.items():
 		scriptOp.appendChan(name).vals = vals
