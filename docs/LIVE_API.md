@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.7)
+# Delyrism live API (package `delyrism`, v0.6)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -129,8 +129,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "context", "text": "…"}` | the dream: rebuilds the Δ-graph (send on every settled edit, ~200 ms debounce is plenty) |
 | `{"type": "query", "text": "…"}` | text query → relevance; speech after `delay` |
 | `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20, "source"?: "typed"}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
-| `{"type": "query_clear", "kind"?: "text"}` | no query (relevance off). Mixing (below): with `kind`, that channel only |
-| `{"type": "mix", "weights": {"text": 1, "image": 0.5, …} \| null}` | **mix modalities** (below): every kind named is a channel of the query with that weight; the kinds left out are off (their channels dropped). `null` (or a non-object) ends mixing: the latest input is the query again |
+| `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
 | `{"type": "snapshot", "id"?: any, "format"?: "list" \| "b64"}` | one recording sample, answered at once with a `snapshot` message (below). Read-only: does not claim the OSC output |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
@@ -230,37 +229,6 @@ description arrives as a `motion` message and becomes the query
 | `snapshot` | in answer to `snapshot` | see below |
 | `error` | | `detail` |
 
-### Mixing modalities
-
-`{"type": "mix", "weights": {kind: w, …}}` (v0.7.5) puts the socket in mixing
-mode: each kind keeps a **channel** vector of its own and the query is the unit
-weighted sum of the channels that are on,
-
-```
-q = unit( Σ_kind  w_kind · v_kind )        over the kinds in `weights` (w > 0) that have a vector
-```
-
-so `{"text": 1, "image": 1}` gives equal shares and `{"text": 1, "image": 0.5}`
-lets the typed words lead.  Weights are relative (clipped to 0…10).  Within a
-channel everything works as before, per kind: a `query` or a typed `transcript`
-feeds `text`, another `transcript` feeds `speech` (both glide, each toward its
-own target), each binary frame feeds its own kind (habituated under its own
-mean, then the `audio_smoothing` EMA with the channel's previous vector), a
-movement description feeds `motion`.  Media frames queue per kind (the latest
-of each waits; without mixing one kind at a time, the latest of any), so two
-streams at once don't starve each other.  `query_clear` with `"kind"` drops
-one channel; without, every channel.  A `mix` message with fewer kinds drops
-the channels left out at once; changing a weight recomposes at once.  Kinds
-whose vectors live in different PE-AV heads can't be summed: the head of the
-channel updated last is scored and the other channels wait.
-
-Messages and snapshots say what the query is made of: `relevance.kind` is the
-one kind when one channel is in the query, `"mix"` when several;
-`relevance.query` joins the channels' texts with ` | `; `relevance.mix` and
-`snapshot.mix` are `{"weights": {…}, "channels": {kind: {"text", "weight",
-"in_query"}}}` (the snapshot adds each channel's `vec`).  The voice speaks a
-mixed query like its text channel (else its spoken one).
-
 ### Query presence
 
 The server's layout does not switch a query on and off; it fades it.  A
@@ -307,8 +275,6 @@ ones still being scored):
  "query_target": [...] | null,          // the latest raw embedding: = query_vec for text, the transcript's target
                                         // while the glide moves toward it, the newest media vector before habituation and the EMA
  "habituation": {"kind": "image", "beta_eff": 0.5} | null,   // the mean key and warm-up-scaled beta of the latest query vector
- "mix": null | {"weights": {"text": 1, "image": 0.5},            // mixing modalities (see above): the weights and
-         "channels": {"text": {"text": "lightning", "weight": 1, "in_query": true, "vec": [...]}, …}},   // each channel's vector
  "nodes": {…the sim frame's node columns…, "relevance": [...]},   // relevance = the scored 0…1 activation;
                                         // rel = the same after the layout's contrast curve; alive=false = fading out
  "edges": {…the sim frame's edge columns…},                       // delta = signed Δ cosine (3 decimals)
