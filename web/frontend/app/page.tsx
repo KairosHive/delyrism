@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/sidebar/Sidebar";
 import { Explorer } from "@/components/explorer/Explorer";
 import { StoryGenerator } from "@/components/story/StoryGenerator";
 import { ArchetypeBuilder } from "@/components/builder/ArchetypeBuilder";
+import { StructuresTab } from "@/components/generate/StructuresTab";
 import { TopologyTab } from "@/components/topology/TopologyTab";
 import { LiveTab } from "@/components/realtime/LiveTab";
 import { Title } from "@/components/header/Title";
@@ -12,14 +13,15 @@ import { BuildButton } from "@/components/header/BuildButton";
 import { TimingBadge } from "@/components/debug/TimingBadge";
 import { useSidebar } from "@/lib/store";
 
-type TabId = "explorer" | "topology" | "live" | "story" | "builder";
+type TabId = "explorer" | "topology" | "live" | "story" | "structures" | "builder";
 
 const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "explorer", label: "Explorer", hint: "context-conditioned embeddings" },
   { id: "topology", label: "Topology", hint: "shape & cycles" },
   { id: "live",     label: "Live",     hint: "context × query, animated Δ-graph" },
   { id: "story",    label: "Story",    hint: "weave motifs into micro-fiction" },
-  { id: "builder",  label: "Builder",  hint: "compose archetype sets" },
+  { id: "structures", label: "Structures", hint: "the symbols, drawn · make and edit sets" },
+  { id: "builder",  label: "Builder",  hint: "mine archetype sets from documents" },
 ];
 
 export default function Home() {
@@ -51,6 +53,16 @@ export default function Home() {
 
   // Auto-close the mobile drawer on tab change so it doesn't cover the new view.
   React.useEffect(() => { setSidebarOpen(false); }, [tab]);
+
+  // the sidebar's "generate a set…" button (and anything else) can switch tabs
+  React.useEffect(() => {
+    const on = (e: Event) => {
+      const id = (e as CustomEvent).detail as TabId;
+      if (TABS.some((t) => t.id === id)) setTab(id);
+    };
+    window.addEventListener("delyrism:tab", on);
+    return () => window.removeEventListener("delyrism:tab", on);
+  }, []);
 
   return (
     <div className="md:grid md:h-screen md:grid-cols-[300px,1fr]">
@@ -92,6 +104,7 @@ export default function Home() {
           {tab === "topology" && <TopologyTab />}
           {tab === "live" && <LiveTab />}
           {tab === "story" && <StoryGenerator />}
+          {tab === "structures" && <StructuresTab />}
           {tab === "builder" && <ArchetypeBuilder />}
         </section>
       </main>

@@ -1,4 +1,5 @@
 "use client";
+import { SymbolMark } from "@/components/generate/SymbolMark";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useQuery } from "@tanstack/react-query";
@@ -264,7 +265,7 @@ function Overlap() {
           {Array.from(bySym.entries()).map(([sym, items]) => (
             <div key={sym} className="flex flex-wrap items-center gap-1.5">
               <span className="mr-1 inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-200">
-                <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: colorMap[sym] ?? "#888" }} />{sym}
+                <SymbolMark symbol={sym} color={colorMap[sym] ?? "#888"} size={18} />{sym}
               </span>
               {items.map((n) => (
                 <span key={n.id} className="pill" style={{ borderColor: `${colorMap[sym] ?? "#888"}66`, opacity: 0.55 + 0.45 * n.rel }} title={`relevance ${n.rel.toFixed(2)}`}>

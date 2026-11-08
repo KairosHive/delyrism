@@ -11,14 +11,14 @@ router = APIRouter(prefix="/spaces", tags=["spaces"])
 
 @router.get("/presets")
 def get_presets() -> dict:
-    """List the JSON presets under delyrism/structures/."""
+    """List the JSON presets under delyrism/structures/ (each with its drawings: GET /spaces/presets/{name})."""
     return {"presets": presets.list_presets()}
 
 
 @router.get("/presets/{name}")
 def get_preset(name: str) -> dict:
     try:
-        return {"name": name, "symbols": presets.load_preset(name)}
+        return {"name": name, "symbols": presets.load_preset(name), "art": presets.load_art(name)}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

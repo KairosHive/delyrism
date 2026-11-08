@@ -5,6 +5,8 @@ import { useSubgraph } from "@/lib/hooks";
 import { SymbolLegend } from "./SymbolLegend";
 import { useMeasure } from "@/lib/useMeasure";
 import { tuneForces, recenterAndFit } from "@/lib/graphForces";
+import { useSidebar } from "@/lib/store";
+import { artOf, tintedImage } from "@/lib/symbolSets";
 
 // See components/plots/ForceGraph2DInner.tsx — refs only forward via this
 // wrapper, otherwise tuneForces / recenterAndFit run on a null ref.
@@ -12,6 +14,7 @@ const ForceGraph2D = dynamic(() => import("../plots/ForceGraph2DInner"), { ssr: 
 
 export function Subgraph() {
   const q = useSubgraph();
+  const art = useSidebar((s) => s.symbolArt);
   const [wrapRef, width] = useMeasure();
   const fgRef = React.useRef<any>(null);
 
@@ -88,15 +91,28 @@ export function Subgraph() {
               const s = Math.sqrt(node.val ?? 16) * 2.2 + 1 / scale;
               const x = node.x - s, y = node.y - s, side = s * 2;
               const radius = side * 0.18;
+              const a = artOf(art, node.label);
+              const im = a?.svg ? tintedImage(a.svg, node.color) : null;
               roundRect(ctx, x, y, side, side, radius);
-              ctx.fillStyle = node.color;
-              ctx.fill();
-              ctx.lineWidth = 1.4 / scale;
-              ctx.strokeStyle = "rgba(255,255,255,0.85)";
-              ctx.stroke();
-              ctx.lineWidth = 0.7;
-              ctx.strokeStyle = "rgba(0,0,0,0.7)";
-              ctx.stroke();
+              if (im) {
+                // the symbol's drawing, tinted, on a dark tile edged in its colour
+                ctx.fillStyle = "rgba(12,15,22,0.92)";
+                ctx.fill();
+                ctx.lineWidth = 1.2 / scale;
+                ctx.strokeStyle = node.color;
+                ctx.stroke();
+                const pad = side * 0.12;
+                ctx.drawImage(im, x + pad, y + pad, side - 2 * pad, side - 2 * pad);
+              } else {
+                ctx.fillStyle = node.color;
+                ctx.fill();
+                ctx.lineWidth = 1.4 / scale;
+                ctx.strokeStyle = "rgba(255,255,255,0.85)";
+                ctx.stroke();
+                ctx.lineWidth = 0.7;
+                ctx.strokeStyle = "rgba(0,0,0,0.7)";
+                ctx.stroke();
+              }
             } else {
               const r = Math.sqrt(node.val ?? 3) * 2 + 1 / scale;
               ctx.beginPath();

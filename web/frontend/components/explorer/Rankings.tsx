@@ -2,6 +2,7 @@
 import * as React from "react";
 import { useRankings } from "@/lib/hooks";
 import { useSidebar } from "@/lib/store";
+import { SymbolMark } from "@/components/generate/SymbolMark";
 
 type Metric = "score" | "coherence" | "pagerank";
 
@@ -74,6 +75,7 @@ export function Rankings() {
                 className={`group flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left transition
                   ${isSelected ? "bg-ink-800" : "hover:bg-ink-800/50"}`}
               >
+                <SymbolMark symbol={row.symbol} color={color} size={22} />
                 <span className="w-20 shrink-0 truncate text-[13px] font-medium" style={{ color }}>
                   {row.symbol}
                 </span>
