@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -701,7 +701,11 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         "context": "", "params": {**_GRAPH_DEFAULTS, **{k: v for k, v in prof.graph.items() if k in _GRAPH_DEFAULTS}},
         "query_text": "", "query_kind": "text",     # text | audio | image | video | av
         "vq": None,                                 # active query vector
-        "pending": None,                            # latest (kind, payload) not yet embedded
+        "pending": {},                              # kind -> payload not yet embedded (latest per kind; one kind at a time unless mixing)
+        "mix": None,                                # {kind: weight} while modalities are mixed (WS "mix"); None = the latest input is the query
+        "chan": {},                                 # mixing: kind -> {"vq", "raw", "text", "target", "hab"} (see _compose)
+        "cgen": {},                                 # mixing: per-kind generation, bumped when a channel is cleared
+        "mix_last": None, "mix_head": None, "mix_kinds": [],   # the channel updated last, the head scored in, the channels in the query
         "audio_smoothing": 0.5 if prof.audio_smoothing is None else float(prof.audio_smoothing),   # EMA on successive media vectors (before scoring)
         "rel_smoothing": 0.0 if prof.rel_smoothing is None else float(prof.rel_smoothing),         # EMA on the relevance activations (after scoring)
         "rel_prev": None,                           # previous smoothed relevance (per node id)
@@ -744,8 +748,14 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
     speak: Dict[str, Any] = {"task": None, "last": None, "top": None, "t": 0.0, "heard": 0.0,
                              "synth": False, "again": False}
 
+    def _kinds() -> List[str]:
+        """The kinds the query is made of: one, or the mixed channels."""
+        return list(state["mix_kinds"]) if state["query_kind"] == "mix" else [state["query_kind"]]
+
     def _speakable() -> bool:
         k = state["query_kind"]
+        if k == "mix":                # a mixed query speaks like its text (else its spoken, else its first) channel
+            k = next((x for x in ("text", "speech") if x in state["mix_kinds"]), (state["mix_kinds"] or ["text"])[0])
         return speech.cfg.enabled and state["vq"] is not None and (
             k == "text" or (k == "speech" and k not in speech.cfg.media_kinds)
             or (speech.cfg.media and k in speech.cfg.media_kinds))
@@ -807,7 +817,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
 
     def media_top_changed(rel: Dict[str, float]) -> None:
         """Movement modes: (re)start the voice timer when the top node changes."""
-        if not rel or not speech.cfg.media or state["query_kind"] not in speech.cfg.media_kinds:
+        if not rel or not speech.cfg.media or not any(k in speech.cfg.media_kinds for k in _kinds()):
             return
         top = max(rel, key=rel.get)
         if top != speak["top"]:
@@ -833,21 +843,86 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                         "modalities": engine_cache.modalities(emb),
                         "video_capable": bool(getattr(emb, "video_capable", False)),
                         "av_capable": bool(getattr(emb, "av_capable", False)),
-                        "pose_capable": _pose_capable()})
+                        "pose_capable": _pose_capable(), "mix_capable": True})
 
     def _rel_msg(rel: Dict[str, float]) -> Dict[str, Any]:
         return {"relevance": rel, "active": state["vq"] is not None,
-                "query": state["query_text"], "kind": state["query_kind"]}
+                "query": state["query_text"], "kind": state["query_kind"], "mix": _mix_info()}
+
+    # ---- mixing modalities (WS {"type": "mix", "weights": {kind: w}}): every kind keeps its own
+    # channel vector (habituated, EMA-blended / glided within the kind) and the query is the unit
+    # weighted sum of the channels that are on.  Without "mix" the latest input is the query.
+    def _mix_info(vecs: bool = False) -> Optional[Dict[str, Any]]:
+        mix = state["mix"]
+        if mix is None:
+            return None
+        chans = {k: {"text": c.get("text", ""), "weight": float(mix.get(k, 0.0)),
+                     "in_query": k in state["mix_kinds"], **({"vq": c["vq"]} if vecs else {})}
+                 for k, c in state["chan"].items() if c.get("vq") is not None}
+        return {"weights": dict(mix), "channels": chans}
+
+    def _compose() -> None:
+        """The query from the channels: unit(sum of weight x channel vector) over the channels
+        with a weight > 0, in one head (that of the channel updated last; the others wait)."""
+        mix = state["mix"]
+        if mix is None:
+            return
+        chans = [(k, float(mix.get(k, 0.0)), c) for k, c in state["chan"].items()
+                 if float(mix.get(k, 0.0)) > 0 and c.get("vq") is not None]
+        state["vq_target"] = None
+        if not chans:
+            if state["vq"] is not None:
+                state["vq_fade"] = state["vq"]
+            state["vq"] = state["vq_raw"] = state["hab_last"] = None
+            state["query_text"], state["mix_kinds"] = "", []
+            return
+        last = state["mix_last"] if state["mix_last"] in [k for k, _, _ in chans] else chans[-1][0]
+        head = _head_for_kind(space, last)
+        chans = [x for x in chans if _head_for_kind(space, x[0]) == head]
+        v = np.zeros_like(chans[0][2]["vq"], dtype=np.float32)
+        for _, w, c in chans:
+            v = v + np.float32(w) * c["vq"]
+        state["vq"] = _unit(v) if float(np.linalg.norm(v)) > 1e-6 else chans[-1][2]["vq"]
+        if head != state["mix_head"]:
+            state["rel_prev"] = None
+        state["mix_head"], state["mix_kinds"] = head, [k for k, _, _ in chans]
+        single = len(chans) == 1
+        state["query_kind"] = chans[0][0] if single else "mix"
+        state["query_text"] = " | ".join(c["text"] for _, _, c in chans if c.get("text"))
+        state["vq_raw"] = chans[0][2]["raw"] if single else None
+        state["hab_last"] = chans[0][2].get("hab") if single else None
+
+    def _chan_set(kind: str, vq: np.ndarray, raw: Optional[np.ndarray], text: str,
+                  target: Optional[np.ndarray] = None) -> None:
+        c = state["chan"].setdefault(kind, {})
+        c.update(vq=vq, raw=raw, text=text, target=target, hab=state["hab_last"])
+        state["mix_last"] = kind
+        _compose()
+
+    def _chan_clear(kind: str) -> None:
+        state["chan"].pop(kind, None)
+        state["cgen"][kind] = state["cgen"].get(kind, 0) + 1     # an embedding of it still running is dropped
+        state["pending"].pop(kind, None)
+        _compose()
+
+    def _queue(kind: str, payload: Any) -> None:
+        """Queue a media window (latest wins per kind; without mixing, one kind at a time)."""
+        if state["mix"] is None:
+            state["pending"].clear()
+        elif kind not in state["mix"] and kind != "motion":
+            return                    # a stream of a kind that is switched off
+        state["pending"][kind] = payload
+        state["query_dirty"] = True
 
     def _score(vq: Optional[np.ndarray]) -> Dict[str, float]:
         """Relevance of the query vector `vq` inside the right head, then the
         post-embedding EMA on the activations (live media kinds only)."""
-        head = _head_for_kind(space, state["query_kind"])
+        head = state["mix_head"] if state["query_kind"] == "mix" else _head_for_kind(space, state["query_kind"])
         D1 = _shifted_for_head(space_id, space, graph, state["context"], state["params"], head)
         rel = _relevance_vec(graph, vq, D1)
         a = state["rel_smoothing"]
         prev = state["rel_prev"]
-        if rel and state["query_kind"] not in ("text", "speech") and a > 0 and prev:
+        if rel and any(k not in ("text", "speech") for k in _kinds()) and a > 0 and prev:
             rel = {k: round(a * prev.get(k, v) + (1.0 - a) * v, 4) for k, v in rel.items()}
         state["rel_prev"] = rel if rel else None
         return rel
@@ -872,7 +947,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         vq = state["vq"]
         return {"vq": vq, "vq_raw": state["vq_raw"], "kind": state["query_kind"],
                 "text": state["query_text"], "active": vq is not None,
-                "hab": state["hab_last"]}
+                "hab": state["hab_last"], "mix": _mix_info(vecs=True)}
 
     def _snapshot(req_id: Any, fmt: str) -> Dict[str, Any]:
         """One recording sample (WS {"type": "snapshot"}): the layout as the
@@ -895,6 +970,10 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             "nodes": {**fr["nodes"], "relevance": [float(rel.get(i, 0.0)) for i in fr["nodes"]["id"]]},
             "edges": fr["edges"],
             "habituation": q.get("hab") if q["active"] else None,
+            "mix": None if q.get("mix") is None else {
+                "weights": q["mix"]["weights"],
+                "channels": {k: {**{kk: vv for kk, vv in c.items() if kk != "vq"}, "vec": _vec_out(c.get("vq"), fmt)}
+                             for k, c in q["mix"]["channels"].items()}},
             "embedder": {"backend": getattr(emb, "backend_type", None), "model": getattr(emb, "model_name", None),
                          "dim": int(space.D.shape[1])},
             "vec_format": fmt,
@@ -906,7 +985,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         def run():
             rows = lakota.node_rows(space, [n["id"] for n in graph["nodes"]]) if nodes else {}
             q = (lakota.query_shares(space, state["vq"])
-                 if state["vq"] is not None and state["query_kind"] in ("text", "motion", "speech") else None)
+                 if state["vq"] is not None and all(k in ("text", "motion", "speech") for k in _kinds()) else None)
             return rows, q
         return _lakota_safe(run)
 
@@ -944,8 +1023,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     continue
                 spec = _BIN_KINDS.get(buf[0] if buf else 0)
                 if spec and len(buf) - 1 >= spec[2]:
-                    state["pending"] = (spec[0], bytes(buf[1:]))   # latest wins
-                    state["query_dirty"] = True
+                    _queue(spec[0], bytes(buf[1:]))                # latest wins
                     wake.set()
                 continue
             raw = msg.get("text")
@@ -976,11 +1054,21 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if t == "context":
                 state["context"] = str(m.get("text") or "")
                 state["graph_dirty"] = True
+            elif t == "query" and state["mix"] is not None:
+                # mixing: the text channel (habituated like a typed query); empty = the channel off
+                text = str(m.get("text") or "")
+                raw = await asyncio.to_thread(_text_vec, space, text)
+                if raw is None:
+                    _chan_clear("text")
+                else:
+                    _chan_set("text", _habituate("text", raw), raw, text)
+                state["query_dirty"] = True
+                schedule_speak()
             elif t == "query":
                 state["qgen"] += 1
                 state["query_text"] = str(m.get("text") or "")
                 state["query_kind"] = "text"
-                state["pending"] = None
+                state["pending"].clear()
                 state["rel_prev"] = None
                 state["vq_target"] = None
                 raw = await asyncio.to_thread(_text_vec, space, state["query_text"])
@@ -990,6 +1078,17 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                     state["hab_last"] = None
                 state["query_dirty"] = True
                 schedule_speak()          # restarts the 1 s timer on every edit
+            elif t == "query_clear" and state["mix"] is not None:
+                # mixing: one channel ({"kind": ...}), else every channel
+                kind = m.get("kind")
+                for k in ([str(kind)] if kind else list(state["chan"])):
+                    _chan_clear(k)
+                if state["vq"] is None:
+                    if speak["task"] is not None:
+                        speak["task"].cancel()
+                    speak["last"] = speak["top"] = None
+                    state["rel_prev"] = None
+                state["query_dirty"] = True
             elif t == "query_clear":
                 state["qgen"] += 1
                 if state["vq"] is not None:
@@ -1001,7 +1100,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 state["vq_target"] = None
                 state["vq_raw"] = None
                 state["hab_last"] = None
-                state["pending"] = None
+                state["pending"].clear()
                 state["rel_prev"] = None
                 state["query_text"] = ""
                 state["query_dirty"] = True
@@ -1016,9 +1115,26 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 target = await asyncio.to_thread(_text_vec, space, text) if text.strip() else None
                 if target is None:
                     continue                  # nothing said yet: hold the current query
+                if state["mix"] is not None:
+                    # mixing: the typed-text or the spoken channel glides toward its own target
+                    key = "text" if m.get("source") == "typed" else "speech"
+                    tgt = _habituate(key, target)
+                    c = state["chan"].get(key)
+                    if float(state["transcript"]["tau"]) <= 0:
+                        _chan_set(key, tgt, target, text)
+                    else:
+                        # a channel starting now glides from the query as it is, else from itself
+                        start = c["vq"] if c and c.get("vq") is not None else (state["vq"] if state["vq"] is not None else tgt)
+                        _chan_set(key, start, target, text, target=tgt)
+                    state["query_dirty"] = True
+                    glide_wake.set()
+                    if "speech" not in speech.cfg.media_kinds:
+                        schedule_speak()
+                    wake.set()
+                    continue
                 if state["query_kind"] != "speech":
                     state["rel_prev"] = None
-                    state["pending"] = None
+                    state["pending"].clear()
                 state["query_kind"] = "speech"
                 state["query_text"] = text
                 state["vq_raw"] = target
@@ -1044,16 +1160,14 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 if state["pose"] is not None:
                     window = float(np.clip(float(m.get("window") or 2.0), 0.5, 10.0))
                     frames = int(np.clip(int(m.get("frames") or 16), 1, 48))
-                    state["pending"] = ("pose", (window, frames))   # latest wins
-                    state["query_dirty"] = True
+                    _queue("pose", (window, frames))                 # latest wins
             elif t == "motion_tick":
                 if state["pose"] is not None:
                     level = m.get("level") if m.get("level") in ("full", "abstract", "qualities", "body") else "full"
                     rel = m.get("relative")
-                    state["pending"] = ("motion", (float(np.clip(float(m.get("window") or 3.0), 1.0, 10.0)), level,
-                                                   float(np.clip(float(m.get("contrast") or 0.0), 0.0, 1.0)),
-                                                   1.0 if rel is None else float(np.clip(float(rel), 0.0, 1.0))))
-                    state["query_dirty"] = True
+                    _queue("motion", (float(np.clip(float(m.get("window") or 3.0), 1.0, 10.0)), level,
+                                      float(np.clip(float(m.get("contrast") or 0.0), 0.0, 1.0)),
+                                      1.0 if rel is None else float(np.clip(float(rel), 0.0, 1.0))))
             elif t == "motion_reset":
                 # forget the session's range (a new dancer, a new piece)
                 if state.get("motion_session") is not None:
@@ -1084,6 +1198,35 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 data = await asyncio.to_thread(_pose_export, state["pose"], dict(state["pose_opts"]), seconds, fmt)
                 await ws.send_json({"type": "pose_export", "format": fmt, "seconds": seconds,
                                     "data": base64.b64encode(data).decode("ascii")})
+            elif t == "mix":
+                # mix modalities: {"weights": {kind: w > 0, ...}} - each kind named is a channel of the
+                # query, weighted; the kinds left out are off.  null: back to the latest input
+                w = m.get("weights")
+                if not isinstance(w, dict):
+                    state["mix"] = None
+                    state["chan"].clear()
+                    state["pending"].clear()
+                    state["mix_kinds"] = []
+                    state["vq_target"] = None
+                    if state["query_kind"] == "mix":
+                        state["query_kind"] = "text"
+                else:
+                    mix: Dict[str, float] = {}
+                    for k, v in w.items():
+                        try:
+                            fv = float(v)
+                        except (TypeError, ValueError):
+                            continue
+                        if k in _HAB_KINDS and fv > 0:
+                            mix[k] = float(np.clip(fv, 0.0, 10.0))
+                    state["mix"] = mix
+                    for k in list(state["chan"]):
+                        if k not in mix:
+                            _chan_clear(k)
+                    _compose()
+                    if state["vq"] is None and speak["task"] is not None:
+                        speak["task"].cancel()
+                state["query_dirty"] = True
             elif t == "shape":
                 # the browser's layout knobs, mirrored into the OSC sim
                 sim.set_shape(m.get("shape") or {})
@@ -1096,14 +1239,16 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             wake.set()
 
     async def _embed_pending() -> None:
-        """Embed the latest queued media window (latest wins, one at a time)
-        and EMA-blend it into the active query vector."""
-        pend = state["pending"]
-        if pend is None:
-            return
-        state["pending"] = None
-        kind, payload = pend
-        gen = state["qgen"]
+        """Embed the queued media windows (the latest per kind, one at a time;
+        one kind at a time unless mixing) into the query."""
+        while state["pending"]:
+            kind = next(iter(state["pending"]))
+            await _embed_one(kind, state["pending"].pop(kind))
+
+    async def _embed_one(kind: str, payload: Any) -> None:
+        """Embed one media window and EMA-blend it into the active query vector
+        (or, mixing, into its own channel)."""
+        gen, cgen = state["qgen"], state["cgen"].get(kind, 0)
         label = None
         if kind == "pose":
             if state["pose"] is None:
@@ -1134,6 +1279,18 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         else:
             fn = next(f for k, f, _ in _BIN_KINDS.values() if k == kind)
             v = await asyncio.to_thread(fn, space, payload)
+        if state["mix"] is not None:
+            if state["cgen"].get(kind, 0) != cgen or kind not in state["mix"]:
+                return      # the channel was cleared or switched off while embedding
+            raw = v
+            v = _habituate(kind, v)
+            c = state["chan"].get(kind)
+            prev = c["vq"] if c else None
+            a = state["audio_smoothing"]
+            if prev is not None and a > 0 and kind != "motion":
+                v = _unit(a * prev + (1.0 - a) * v)
+            _chan_set(kind, v, raw, label or _LABELS.get(kind, ""))
+            return
         if state["qgen"] != gen:
             return          # a query / query_clear / transcript arrived while embedding: the result is stale
         state["vq_raw"] = v
@@ -1197,7 +1354,10 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
         through the worker each step, until it arrives."""
         last = time.perf_counter()
         while True:
-            if state["vq_target"] is None or state["query_kind"] != "speech":
+            mixing = state["mix"] is not None
+            gliding = (any(c.get("target") is not None for c in state["chan"].values()) if mixing
+                       else state["vq_target"] is not None and state["query_kind"] == "speech")
+            if not gliding:
                 await glide_wake.wait()
                 glide_wake.clear()
                 last = time.perf_counter()
@@ -1206,6 +1366,24 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             await asyncio.sleep(1.0 / max(1.0, float(tr["hz"])))
             now = time.perf_counter()
             dt, last = now - last, now
+            if state["mix"] is not None:
+                # mixing: every channel with a target glides on its own, then the query is recomposed
+                tau = float(tr["tau"])
+                moved = False
+                for c in list(state["chan"].values()):
+                    tgt, v = c.get("target"), c.get("vq")
+                    if tgt is None:
+                        continue
+                    a = 1.0 if tau <= 0 or v is None else 1.0 - float(np.exp(-dt / tau))
+                    nv = tgt if v is None else _unit(v + a * (tgt - v))
+                    if float(np.dot(nv, tgt)) >= 1.0 - 1e-5:
+                        nv, c["target"] = tgt, None
+                    c["vq"], moved = nv, True
+                if moved:
+                    _compose()
+                    state["query_dirty"] = True
+                    wake.set()
+                continue
             tgt, v = state["vq_target"], state["vq"]
             if tgt is None or state["query_kind"] != "speech":
                 continue
@@ -1277,8 +1455,7 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if (mot.auto and state["pose"] is not None and now - state["lm_t"] < 1.0
                     and now - last_motion >= mot.refresh):
                 last_motion = now
-                state["pending"] = ("motion", (float(mot.window), mot.level, float(mot.contrast), float(mot.relative)))
-                state["query_dirty"] = True
+                _queue("motion", (float(mot.window), mot.level, float(mot.contrast), float(mot.relative)))
                 wake.set()
             if state["sim_hz"] > 0 and now - last_sim >= 1.0 / state["sim_hz"]:
                 if sim.awake or sim.fading or now - last_sim >= 0.25:
