@@ -13,6 +13,8 @@ export const SECTION_COLORS = {
 
 // Friendly names + glyphs for the built-in JSON presets. Falls back to the raw
 // filename for any preset that isn't pre-mapped here.
+import { displaySet } from "./symbolSets";
+
 export const STRUCTURE_DISPLAY: Record<string, string> = {
   elements:        "🜂  Four Elements",
   planets:         "☉  Celestial Planets",
@@ -28,5 +30,5 @@ export const STRUCTURE_DISPLAY: Record<string, string> = {
 
 export function displayPreset(name: string | null | undefined): string {
   if (!name) return "(custom)";
-  return STRUCTURE_DISPLAY[name] ?? name;
+  return STRUCTURE_DISPLAY[name] ?? displaySet(name) ?? name;
 }

@@ -38,3 +38,4 @@ td/
 
 # Live sessions saved by local installs
 sessions/
+.playwright-mcp/

@@ -6,9 +6,10 @@ import { Section } from "../ui/Section";
 import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS, STRUCTURE_DISPLAY } from "@/lib/theme";
+import { SymbolGenerator } from "./SymbolGenerator";
+import { LOCAL_PREFIX, deleteSet, isLocal, localId, resolvePreset, useSavedSets } from "@/lib/symbolSets";
 
 interface PresetsResp { presets: string[]; }
-interface PresetResp { name: string; symbols: Record<string, string[]>; }
 
 export function SymbolicStructure() {
   const presetName = useSidebar((s) => s.presetName);
@@ -19,19 +20,27 @@ export function SymbolicStructure() {
     queryKey: ["presets"],
     queryFn: () => api.get<PresetsResp>("/spaces/presets"),
   });
+  const saved = useSavedSets();
 
   React.useEffect(() => {
     if (!presetName || symbolMapJson) return;
-    api
-      .get<PresetResp>(`/spaces/presets/${presetName}`)
-      .then((p) => set("symbolMapJson", JSON.stringify(p.symbols, null, 2)))
+    resolvePreset(presetName)
+      .then((symbols) => set("symbolMapJson", JSON.stringify(symbols, null, 2)))
       .catch(() => {});
   }, [presetName, symbolMapJson, set]);
 
   async function loadPreset(name: string) {
     set("presetName", name);
-    const p = await api.get<PresetResp>(`/spaces/presets/${name}`);
-    set("symbolMapJson", JSON.stringify(p.symbols, null, 2));
+    const symbols = await resolvePreset(name);
+    set("symbolMapJson", JSON.stringify(symbols, null, 2));
+  }
+
+  function removeSaved() {
+    if (!isLocal(presetName)) return;
+    const s = saved.find((x) => x.id === localId(presetName!));
+    if (!s || !confirm(`Delete the saved set “${s.name}”?`)) return;
+    deleteSet(s.id);
+    set("presetName", null);
   }
 
   async function loadFile(file: File) {
@@ -50,7 +59,7 @@ export function SymbolicStructure() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${presetName || "symbols"}.json`;
+    a.download = `${isLocal(presetName) ? localId(presetName!) : presetName || "symbols"}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -75,6 +84,14 @@ export function SymbolicStructure() {
                 {STRUCTURE_DISPLAY[p] ?? p}
               </option>
             ))}
+            {saved.length > 0 && (
+              <optgroup label="my sets">
+                {saved.map((s) => (
+                  <option key={s.id} value={LOCAL_PREFIX + s.id}>✦  {s.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {!presetName && <option value="(custom)">(custom)</option>}
           </select>
         </div>
         <div className="flex items-end gap-2">
@@ -93,6 +110,11 @@ export function SymbolicStructure() {
           <button className="btn" onClick={downloadJson} title="Download the current symbol map as JSON">
             ↓
           </button>
+          {isLocal(presetName) && (
+            <button className="btn" onClick={removeSaved} title="Delete this saved set from the browser">
+              ✕
+            </button>
+          )}
           <HelpTip text="Upload your own symbol map (JSON of {symbol: [descriptors...]}). Download exports the currently-loaded map — useful for backups or sharing." />
         </div>
       </div>
@@ -107,6 +129,8 @@ export function SymbolicStructure() {
           onChange={(e) => set("symbolMapJson", e.target.value)}
         />
       </details>
+
+      <SymbolGenerator />
     </Section>
   );
 }

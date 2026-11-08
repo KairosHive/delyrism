@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from . import profile as live_profile
 from . import testing as _testing
 from .. import gemini as _gemini
-from .routes import analysis, builder, context, delta, live, realtime, spaces, story, topology
+from .routes import analysis, builder, context, delta, generate, live, realtime, spaces, story, topology
 
 # readiness for process managers: /healthz → "ready" once the warm-up (if any) is done
 _state: Dict[str, Any] = {"ready": True, "warming": False, "error": None, "started": time.time()}
@@ -169,7 +169,7 @@ def create_app(profile: Union[None, str, Path, Dict[str, Any], live_profile.Live
 
     for r in (spaces.router, analysis.router, delta.router, context.router, story.router,
               builder.router, builder.legacy_router,      # /miner alias kept for older clients
-              topology.router, realtime.router, live.router):
+              topology.router, realtime.router, live.router, generate.router):
         app.include_router(r)
     if _testing.enabled():                       # DELYRISM_TEST_EMBEDDER=1 only
         app.include_router(_testing.router())
