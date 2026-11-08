@@ -90,6 +90,7 @@ export function StructuresTab() {
   const [editing, setEditing] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState<string | null>(null);
   const fileInput = React.useRef<HTMLInputElement>(null);
+  const themeTouched = React.useRef(false);      // the theme was typed by hand: "write names" leaves it
 
   // what was typed survives a reload
   React.useEffect(() => {
@@ -157,8 +158,13 @@ export function StructuresTab() {
     try {
       const existing = mode === "add" ? keys : [];
       const r = await api.post<NamesResp>("/generate/names", { description, n: count, existing });
-      setNames((prev) => (mode === "add" && prev.trim() ? prev.trimEnd() + "\n" : "") + r.names.join("\n"));
-      if (!theme.trim()) setTheme(description.trim());
+      // the list is replaced: names typed since the last run that are not in the set yet are kept in front
+      setNames((prev) => {
+        const kept = parseNames(prev).filter((x) => !have.has(keyOf(x)) && !r.names.some((y) => keyOf(y) === keyOf(x)));
+        return kept.concat(r.names).join("\n");
+      });
+      // the theme follows the description unless it was typed by hand for this set
+      if (!themeTouched.current || !theme.trim()) { setTheme(description.trim()); themeTouched.current = false; }
       if (!saveName.trim() && !current && r.title) setSaveName(r.title);
       setStatus(`${r.names.length} names by ${r.llm.split("/").pop()} — edit them, then generate`);
     } catch (e: any) {
@@ -313,6 +319,7 @@ export function StructuresTab() {
     setMode("add");
     setSaveName("");
     setTheme("");
+    themeTouched.current = false;
     setStatus("an empty set — generate or paste symbols into it, then save it under a name");
   }
   function removeSaved() {
@@ -456,8 +463,9 @@ export function StructuresTab() {
           <input
             className="input-base text-xs"
             placeholder="theme (optional) — every symbol is read through it"
+            title="the descriptors and glyph of every symbol are written through this; 'write names' fills it with the description unless you typed it"
             value={theme}
-            onChange={(e) => setTheme(e.target.value)}
+            onChange={(e) => { setTheme(e.target.value); themeTouched.current = true; }}
           />
 
           <div className="space-y-1">
