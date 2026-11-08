@@ -28,8 +28,9 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Python deps — the package's `web` extra (pyproject.toml): API, Topology,
-# Builder's PDF mining, on CPU torch.  No camera / movement / audio models:
-# MediaPipe, OpenCV, CLAP / CLIP / PE-AV, librosa and the TTS / transcription
+# Builder's PDF mining, the symbol vectorizer (headless OpenCV, for the
+# Generate tab's drawings), on CPU torch.  No camera / movement / audio
+# models: MediaPipe, CLAP / CLIP / PE-AV, librosa and the TTS / transcription
 # stack are for local installs only.  Installed against stub packages first so
 # this layer stays cached when only the code changes.
 COPY pyproject.toml README.md ./

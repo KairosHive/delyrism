@@ -5,6 +5,7 @@ import { Slider } from "../ui/Slider";
 import { Toggle } from "../ui/Toggle";
 import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
+import { SymbolMark } from "@/components/generate/SymbolMark";
 import { SECTION_COLORS } from "@/lib/theme";
 import { AudioContext } from "./AudioContext";
 import { ImageContext } from "./ImageContext";
@@ -12,6 +13,7 @@ import { DebouncedTextarea } from "../ui/DebouncedTextarea";
 
 export function ContextOptions() {
   const symbols = useSidebar((s) => s.symbols);
+  const colorMap = useSidebar((s) => s.colorMap);
   const sentence = useSidebar((s) => s.contextSentence);
   const selected = useSidebar((s) => s.selectedContextSymbols);
   const weights = useSidebar((s) => s.symbolWeights);
@@ -61,6 +63,7 @@ export function ContextOptions() {
                     : "hover:border-ink-600 hover:bg-ink-800"
                 }`}
               >
+                <SymbolMark symbol={s} color={colorMap[s] ?? "#888"} size={14} />
                 {s}
               </button>
             );

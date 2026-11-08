@@ -2,6 +2,7 @@
 import * as React from "react";
 import { Plot } from "../plots/Plot";
 import { useReduce2D, useShift } from "@/lib/hooks";
+import { artOf, tintedSvgUrl } from "@/lib/symbolSets";
 import { useSidebar } from "@/lib/store";
 
 /**
@@ -19,6 +20,7 @@ import { useSidebar } from "@/lib/store";
  */
 export function MeaningSpace() {
   const colorMap = useSidebar((s) => s.colorMap);
+  const art = useSidebar((s) => s.symbolArt);
   const drawHulls = useSidebar((s) => s.drawHulls);
   const showArrows = useSidebar((s) => s.showArrows);
   const includeCentroids = useSidebar((s) => s.includeCentroids);
@@ -75,6 +77,10 @@ export function MeaningSpace() {
   }
 
   const traces: any[] = [];
+  const images: any[] = [];
+  // a drawing spans ~7% of the cloud's extent (plotly images are in data units)
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const glyphSize = 0.07 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1e-6);
   for (const [sym, items] of groups.entries()) {
     const color = colorMap[sym] ?? "#888";
     const descs = items.filter((i) => i.kind === "descriptor");
@@ -127,13 +133,26 @@ export function MeaningSpace() {
       });
     }
     if (cents.length) {
+      const a = artOf(art, sym);
+      if (a?.svg) {
+        // the symbol's drawing, tinted, sits on its centroid (plotly layout image, in data units)
+        for (const c of cents) {
+          images.push({
+            source: tintedSvgUrl(a.svg, color), x: c.x, y: c.y, xref: "x", yref: "y",
+            sizex: glyphSize, sizey: glyphSize, xanchor: "center", yanchor: "middle",
+            sizing: "contain", layer: "above", opacity: 0.95,
+          });
+        }
+      }
       traces.push({
         x: cents.map((p) => p.x),
         y: cents.map((p) => p.y),
         text: cents.map((p) => p.label),
         type: "scatter",
         mode: "markers+text",
-        marker: { color, size: 18, symbol: "star", line: { color: "white", width: 1.5 } },
+        marker: a?.svg
+          ? { color, size: 30, symbol: "circle", opacity: 0.18, line: { color, width: 1 } }
+          : { color, size: 18, symbol: "star", line: { color: "white", width: 1.5 } },
         textposition: "top center",
         textfont: { color: "#dbe2ee", size: 11 },
         hoverinfo: "skip",
@@ -198,6 +217,7 @@ export function MeaningSpace() {
           legend: { orientation: "h", y: -0.05, font: { size: 11 } },
           hoverlabel: { bgcolor: "#10131c", bordercolor: "#3a4458", font: { color: "#e8edf3" } },
           annotations,
+          images,
         }}
         useResizeHandler
         style={{ width: "100%", height: "100%" }}

@@ -4,6 +4,7 @@
 // ProposeRequest / Reduce2DRequest payloads.
 
 import { create } from "zustand";
+import type { ArtMap } from "./symbolSets";
 
 export type Reducer2D = "umap" | "tsne" | "pca";
 export type Strategy = "gate" | "reembed" | "hybrid" | "pooling";
@@ -18,6 +19,9 @@ export interface SidebarState {
   // ----- Symbolic structure -----
   presetName: string | null;
   symbolMapJson: string; // editable text
+  // drawings and glyphs of the symbols in symbolMapJson, by upper-cased name (the Generate tab
+  // fills it; a saved set keeps it; a shipped preset has none)
+  symbolArt: ArtMap;
 
   // ----- Context Options -----
   contextSentence: string;
@@ -166,6 +170,7 @@ export const useSidebar = create<SidebarState>((set) => ({
 
   presetName: "elements",
   symbolMapJson: "",
+  symbolArt: {},
 
   contextSentence: "",
   selectedContextSymbols: [],

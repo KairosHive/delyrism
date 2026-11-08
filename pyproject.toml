@@ -67,6 +67,7 @@ vectorize = [
 web = [
     "delyrism[server,topology]",
     "pymupdf>=1.24",
+    "opencv-contrib-python-headless>=4.8",   # symbol_vectorizer for generated drawings (no GUI libs)
 ]
 # delyrism.graphemes (symbols and movement in one wavelet basis)
 graphemes = [
@@ -102,7 +103,7 @@ include = ["delyrism*", "symbol_vectorizer*"]
 exclude = ["delyrism.legacy*"]
 
 [tool.setuptools.package-data]
-delyrism = ["structures/*.json", "graphemes/data/*.npz", "graphemes/*.html", "graphemes/samples/*.png"]
+delyrism = ["structures/*.json", "structures/art/*.json", "graphemes/data/*.npz", "graphemes/*.html", "graphemes/samples/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -6,8 +6,7 @@ import { Section } from "../ui/Section";
 import { HelpTip } from "../ui/HelpTip";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS, STRUCTURE_DISPLAY } from "@/lib/theme";
-import { SymbolGenerator } from "./SymbolGenerator";
-import { LOCAL_PREFIX, deleteSet, isLocal, localId, resolvePreset, useSavedSets } from "@/lib/symbolSets";
+import { LOCAL_PREFIX, deleteSet, fileToSet, isLocal, localId, resolvePreset, useSavedSets } from "@/lib/symbolSets";
 
 interface PresetsResp { presets: string[]; }
 
@@ -25,14 +24,16 @@ export function SymbolicStructure() {
   React.useEffect(() => {
     if (!presetName || symbolMapJson) return;
     resolvePreset(presetName)
-      .then((symbols) => set("symbolMapJson", JSON.stringify(symbols, null, 2)))
+      .then(({ symbols, art }) => { set("symbolMapJson", JSON.stringify(symbols, null, 2)); set("symbolArt", art); })
       .catch(() => {});
   }, [presetName, symbolMapJson, set]);
 
   async function loadPreset(name: string) {
+    if (name === "(custom)") return;
     set("presetName", name);
-    const symbols = await resolvePreset(name);
+    const { symbols, art } = await resolvePreset(name);
     set("symbolMapJson", JSON.stringify(symbols, null, 2));
+    set("symbolArt", art);
   }
 
   function removeSaved() {
@@ -43,14 +44,16 @@ export function SymbolicStructure() {
     set("presetName", null);
   }
 
+  /** A bare {symbol: [descriptors]} map, or a set file from the Generate tab (drawings come along). */
   async function loadFile(file: File) {
     const text = await file.text();
     try {
-      JSON.parse(text);
-      set("symbolMapJson", text);
+      const f = fileToSet(text);
+      set("symbolMapJson", JSON.stringify(f.symbols, null, 2));
+      set("symbolArt", f.art);
       set("presetName", null);
-    } catch {
-      alert("Not valid JSON");
+    } catch (e: any) {
+      alert(`Not a symbol map: ${e.message}`);
     }
   }
 
@@ -70,7 +73,7 @@ export function SymbolicStructure() {
         <div className="space-y-1">
           <div className="flex items-center label-sm">
             Preset
-            <HelpTip text="A built-in {symbol: [descriptors]} map. Switch to load a different archetypal system. Mine your own via the Archetype Builder tab." />
+            <HelpTip text="A built-in {symbol: [descriptors]} map, or a set you made on the Structures tab (under 'my sets', kept in this browser). Mine your own from documents via the Builder tab." />
           </div>
           <select
             className="select-base"
@@ -130,7 +133,14 @@ export function SymbolicStructure() {
         />
       </details>
 
-      <SymbolGenerator />
+      <button
+        type="button"
+        className="btn w-full text-xs"
+        onClick={() => window.dispatchEvent(new CustomEvent("delyrism:tab", { detail: "structures" }))}
+        title="See the symbols with their drawings; write a set with a language model, draw it with FLUX.2, edit it (the Structures tab)"
+      >
+        ✦ see, make and edit sets…
+      </button>
     </Section>
   );
 }

@@ -38,8 +38,9 @@ export function Console({ hideContext = false }: { hideContext?: boolean } = {})
   async function pick(name: string) {
     if (name === "(custom)") return;
     set("presetName", name);
-    const symbols = await resolvePreset(name);
+    const { symbols, art } = await resolvePreset(name);
     set("symbolMapJson", JSON.stringify(symbols, null, 2));
+    set("symbolArt", art);
   }
 
   // ─── morphing blend effect ──────────────────────────────────────────────

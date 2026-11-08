@@ -171,26 +171,48 @@ A separate tab. Weaves Δ-graph motifs into micro-fiction with:
 
 A tab that talks to the Egregore companion service to compose new symbol sets from PDFs, images, or raw text.
 
-## Generating symbol sets
+## Structures — the symbols, drawn; sets written and drawn on the fly
 
-The Symbolic Structure section of the sidebar can write a set on the fly, the same principle as
-do-you-dream's GENERATE page (there the set is also drawn by FLUX.2 and vectorized; here it stays
-text, since the website renders no drawings). Two steps, both chat completions with a JSON schema
-on Cloudflare (`delyrism/server/symbolgen.py`, routes `/generate`):
+Every symbol has a drawing: the ten shipped structures come with theirs
+(`delyrism/structures/art/<preset>.json`, made once with `scripts/draw_structures.py`), and a set
+made on the site gets them as it is generated. The drawing is a vector sign tinted with the
+symbol's colour, and it stands for the symbol across the site: the legends, the rankings, the
+symbol chips of the context options, the identity cards, the Live tab's overlap list, the
+centroids of the 2D meaning space and the symbol nodes of the contextual subgraph.
+
+The **Structures** tab shows the current set as cards (drawing, name, descriptors; `vector` or
+`ink` view) and is where sets are made and edited. It is the same pipeline as do-you-dream's
+GENERATE page (`delyrism/server/symbolgen.py`, routes `/generate`), all on Cloudflare:
 
 1. **names** — describe the set ("plants", "the Greek pantheon", "tools of a 1920s kitchen") and
-   how many symbols, and the model names them, most central first, plus a title. Or paste your
-   own names, one per line (numbering and bullets are dropped). The list stays editable.
-2. **entries** — per name, with the optional theme and the other names of the set for shared
-   ground: 10 descriptors (the name first, lowercase, at most four words) and a `glyph`, one or two
-   sentences saying how to draw the symbol in a few basic shapes. Four names at a time, ~3 s each.
+   how many symbols, and a language model names them, most central first, with a title. Or paste
+   your own names, one per line (numbering and bullets are dropped). The list stays editable.
+2. **entry** — per name, with the optional theme and the other names of the set for shared
+   ground: 10 descriptors (the name first, lowercase, at most four words) and a *glyph*, one or two
+   sentences saying how to draw the symbol in a few basic shapes.
+3. **draw** — FLUX.2 on Workers AI draws the glyph as a bold wordless sign in black marker on
+   white paper (klein 9b by default, ~2 s; klein 4b, or dev); the picture is cleaned to flat ink
+   (paper flattened, ink thresholded, marker gloss filled, specks dropped) and vectorized with
+   `symbol_vectorizer`, framed exactly as do-you-dream frames its symbols, so the outlines,
+   centre-line strokes and geometry come out alike on both sides.
 
-The result replaces the current map or joins it (`add to current`: the new descriptors then share
-ground with the symbols already there, names already in the set are skipped). **save** keeps it in
-the browser under a name; saved sets appear in both preset dropdowns under "my sets", with their
-glyphs, so every tab can select them. Writer: GPT-6.1 Terra through the Cloudflare AI Gateway
-(`CLOUDFLARE_GATEWAY_ID`, default `default`); while the gateway refuses, DeepSeek V4.1 Flash on
-Workers AI, re-tried every 10 minutes. Override with `DELYRISM_GEN_LLM`.
+The browser is the job queue: one call per step per symbol, three symbols at a time; the server
+keeps nothing. New symbols join the current set (`add`: their descriptors share ground with it;
+names already there are skipped) or start a new one. On a card: drag to reorder, **edit** the name
+or descriptors, **redraw** (a new drawing from the same glyph), **rewrite** (new descriptors and
+glyph, then a drawing), **draw** (a first drawing for a symbol without one — *draw all* does the
+whole set, e.g. a pasted map) or **remove**. A shipped structure becomes a custom map once changed.
+
+**save** keeps a set in the browser, with its drawings; saved sets appear under *my sets* in both
+preset dropdowns, so every tab can select them, and a selected saved set takes every edit at once
+(*save a copy* forks it). **export file** writes the whole set — symbols, glyphs, vector drawings,
+geometry, seeds and prompts — as `<name>.delyrism-set.json`; the sidebar's *Upload JSON* and the
+tab's *import file* read it back, and so can do-you-dream.
+
+Writer: GPT-6.1 Terra through the Cloudflare AI Gateway (`CLOUDFLARE_GATEWAY_ID`, default
+`default`); while the gateway refuses, DeepSeek V4.1 Flash on Workers AI, re-tried every 10
+minutes. Override with `DELYRISM_GEN_LLM`. The hosted image vectorizes with headless OpenCV (the
+`web` extra); without a vectorizer the server reports `drawing: false` and sets are written only.
 
 ## Programmatic API
 

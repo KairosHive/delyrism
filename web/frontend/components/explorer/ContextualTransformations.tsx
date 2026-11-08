@@ -1,4 +1,5 @@
 "use client";
+import { SymbolMark } from "@/components/generate/SymbolMark";
 import * as React from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
@@ -263,9 +264,10 @@ function IdentityCard({
       style={{ borderColor: headerColor + "55" }}
     >
       <div
-        className="mb-2 text-[11px] font-semibold uppercase tracking-wider"
+        className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider"
         style={{ color: headerColor }}
       >
+        <SymbolMark symbol={card.symbol} color={headerColor} size={22} />
         {card.symbol}
       </div>
 
