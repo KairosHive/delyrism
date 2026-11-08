@@ -100,19 +100,25 @@ IMAGE_PROMPT = ("A single character of an unknown, invented writing system, writ
                 "no other characters, no words, no shading, no gradients, no shadow, no texture, no colour, "
                 "no frame.")
 
-NAMES_SYSTEM_PROMPT = """You name the symbols of a set for "delyrism", a semantic graph of symbols. Each symbol will become a simple hand-drawn sign with a name and a list of descriptors, and the set is explored as one semantic space: the symbols should be distinct from each other, each one a clear thing or figure that can be drawn as a sign and told in a dream, and together they should cover the set's ground evenly.
+NAMES_SYSTEM_PROMPT = """You name the symbols of a set for "delyrism", a semantic graph of symbols. Each symbol will become a sign with a name and a list of descriptors, and the set is explored as one semantic space: the symbols should be distinct from each other, each one a clear thing, being, figure, place or force that can be told in a dream, and together they should cover the set's ground evenly.
 
-From the description you are given, write:
+The description of the set is the brief, and it governs everything: every one of the names must be a member of exactly what it describes (if it says animals, every name is an animal; if it says tools, every name is a tool; if it says a time, a place, a culture, a mood or a story, every name belongs there), read it literally and follow every constraint it states (a language, a kind of name, a number of words, things to leave out, an order). Do not drift to the atmosphere around the subject, to related categories or to the obvious.
 
-names: exactly {n} symbol names, each one to three words, in the language of the description. Concrete and specific (a thing, a being, a figure, a place, a force), never abstract nouns or categories, no two names for the same thing, no name that contains another, ordered from the most central to the set to the most peripheral. When some symbols are already in the set, continue it: do not repeat them and keep the same kind of name.
+Write:
 
-title: a short title for the set, two to four words, in the same language.
+names: exactly {n} symbol names, each one to three words, in the language of the description unless it asks for another. Concrete and specific, never abstract nouns, categories or qualities; no two names for the same thing, no name that contains another; ordered from the most central to the description to the most peripheral. Symbols already in the set are listed only so that you do not repeat them (nor name the same thing in other words): they may be of another kind than the description asks for, and then the description wins, not their kind.
+
+title: a short title for the set, two to four words, in the same language, taken from the description.
 
 Example, for the description "the tools of an old kitchen", 6 names:
-{{"names": ["Hearth", "Kettle", "Mortar", "Cleaver", "Sieve", "Ladle"], "title": "Old Kitchen"}}"""
+{{"names": ["Hearth", "Kettle", "Mortar", "Cleaver", "Sieve", "Ladle"], "title": "Old Kitchen"}}
+
+Example, for the description "animals of the night", 4 names, with Owl and Bat already in the set:
+{{"names": ["Moth", "Fox", "Hedgehog", "Nightjar"], "title": "Animals of the Night"}}"""
 
 NAMES_USER_PROMPT = """Description of the set: {description}
-Symbols already in the set: {existing}"""
+Number of names: {n}
+Symbols already in the set (do not repeat; the description decides the kind): {existing}"""
 
 ENTRY_SCHEMA = {
     "type": "object",
@@ -359,7 +365,7 @@ def write_names(description: str, n: int = 8, existing: Optional[List[str]] = No
         return {"names": names, "title": " ".join(str(out.get("title") or "").split())[:60]}
 
     return _complete("writing the names", NAMES_SYSTEM_PROMPT.format(n=n),
-                     NAMES_USER_PROMPT.format(description=description,
+                     NAMES_USER_PROMPT.format(description=description, n=n,
                                               existing=", ".join(existing) or "none yet"),
                      "symbol_names", NAMES_SCHEMA, 80 + 12 * n, parse)
 
