@@ -190,8 +190,11 @@ GENERATE page (`delyrism/server/symbolgen.py`, routes `/generate`), all on Cloud
 2. **entry** — per name, with the optional theme and the other names of the set for shared
    ground: 10 descriptors (the name first, lowercase, at most four words) and a *glyph*, one or two
    sentences saying how to draw the symbol in a few basic shapes.
-3. **draw** — FLUX.2 on Workers AI draws the glyph as a bold wordless sign in black marker on
-   white paper (klein 9b by default, ~2 s; klein 4b, or dev); the picture is cleaned to flat ink
+3. **draw** — FLUX.2 on Workers AI writes the glyph as one character of an invented script in
+   black marker on white paper (klein 9b by default, ~2 s; klein 4b, or dev). The image prompt
+   carries the glyph alone: given the name, FLUX.2 drew the thing or its existing sign (Mars came
+   out as ♂), so the glyphs are abstract characters that share nothing with known signs, and the
+   meaning shapes only their gesture. The picture is cleaned to flat ink
    (paper flattened, ink thresholded, marker gloss filled, specks dropped) and vectorized with
    `symbol_vectorizer`, framed exactly as do-you-dream frames its symbols, so the outlines,
    centre-line strokes and geometry come out alike on both sides.
