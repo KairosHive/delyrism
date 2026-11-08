@@ -5,9 +5,9 @@ import { api } from "@/lib/api";
 import { useSidebar } from "@/lib/store";
 import { SECTION_COLORS, STRUCTURE_DISPLAY } from "@/lib/theme";
 import { DebouncedTextarea } from "@/components/ui/DebouncedTextarea";
+import { LOCAL_PREFIX, resolvePreset, useSavedSets } from "@/lib/symbolSets";
 
 interface PresetsResp { presets: string[]; }
-interface PresetResp { name: string; symbols: Record<string, string[]>; }
 
 /**
  * Two prominent cards at the top of the main area:
@@ -33,10 +33,13 @@ export function Console({ hideContext = false }: { hideContext?: boolean } = {})
     queryFn: () => api.get<PresetsResp>("/spaces/presets"),
   });
 
+  const saved = useSavedSets();
+
   async function pick(name: string) {
+    if (name === "(custom)") return;
     set("presetName", name);
-    const p = await api.get<PresetResp>(`/spaces/presets/${name}`);
-    set("symbolMapJson", JSON.stringify(p.symbols, null, 2));
+    const symbols = await resolvePreset(name);
+    set("symbolMapJson", JSON.stringify(symbols, null, 2));
   }
 
   // ─── morphing blend effect ──────────────────────────────────────────────
@@ -120,7 +123,7 @@ export function Console({ hideContext = false }: { hideContext?: boolean } = {})
           <select
             className="w-full appearance-none rounded-lg border border-ink-700 bg-ink-900/70 px-4 py-3 text-base text-ink-100
                        transition focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500/40"
-            value={presetName ?? ""}
+            value={presetName ?? "(custom)"}
             onChange={(e) => pick(e.target.value)}
           >
             {!presets.data && <option>Loading presets…</option>}
@@ -129,6 +132,14 @@ export function Console({ hideContext = false }: { hideContext?: boolean } = {})
                 {STRUCTURE_DISPLAY[p] ?? p}
               </option>
             ))}
+            {saved.length > 0 && (
+              <optgroup label="my sets">
+                {saved.map((s) => (
+                  <option key={s.id} value={LOCAL_PREFIX + s.id}>✦  {s.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {!presetName && <option value="(custom)">(custom)</option>}
           </select>
           <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 011.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd" />

@@ -167,6 +167,27 @@ A separate tab. Weaves Δ-graph motifs into micro-fiction with:
 
 A tab that talks to the Egregore companion service to compose new symbol sets from PDFs, images, or raw text.
 
+## Generating symbol sets
+
+The Symbolic Structure section of the sidebar can write a set on the fly, the same principle as
+do-you-dream's GENERATE page (there the set is also drawn by FLUX.2 and vectorized; here it stays
+text, since the website renders no drawings). Two steps, both chat completions with a JSON schema
+on Cloudflare (`delyrism/server/symbolgen.py`, routes `/generate`):
+
+1. **names** — describe the set ("plants", "the Greek pantheon", "tools of a 1920s kitchen") and
+   how many symbols, and the model names them, most central first, plus a title. Or paste your
+   own names, one per line (numbering and bullets are dropped). The list stays editable.
+2. **entries** — per name, with the optional theme and the other names of the set for shared
+   ground: 10 descriptors (the name first, lowercase, at most four words) and a `glyph`, one or two
+   sentences saying how to draw the symbol in a few basic shapes. Four names at a time, ~3 s each.
+
+The result replaces the current map or joins it (`add to current`: the new descriptors then share
+ground with the symbols already there, names already in the set are skipped). **save** keeps it in
+the browser under a name; saved sets appear in both preset dropdowns under "my sets", with their
+glyphs, so every tab can select them. Writer: GPT-6.1 Terra through the Cloudflare AI Gateway
+(`CLOUDFLARE_GATEWAY_ID`, default `default`); while the gateway refuses, DeepSeek V4.1 Flash on
+Workers AI, re-tried every 10 minutes. Override with `DELYRISM_GEN_LLM`.
+
 ## Programmatic API
 
 The engine works standalone, without the web stack:
