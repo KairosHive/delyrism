@@ -296,13 +296,24 @@ export function StructuresTab() {
   }
   function saveCopy() {
     if (!keys.length) return;
-    const name = saveName.trim() || `${current?.name || setTitle.replace(/^[^\w]+/, "")} copy`;
+    const name = saveName.trim() || theme.trim() || `${current?.name || setTitle.replace(/^[^\w]+/, "")} copy`;
     try {
       const s = saveSet({ name, theme: theme || current?.theme || "", symbols: map, art });
       set("presetName", LOCAL_PREFIX + s.id);
       setStatus(`saved a copy as “${s.name}”`);
       setSaveName("");
     } catch (e: any) { setError(e.message); }
+  }
+  /** An empty custom map to generate or paste into; whatever was selected stays as it is. */
+  function startEmpty() {
+    if (running.length) return;
+    set("presetName", null);
+    set("symbolMapJson", JSON.stringify({}, null, 2));
+    set("symbolArt", {});
+    setMode("add");
+    setSaveName("");
+    setTheme("");
+    setStatus("an empty set — generate or paste symbols into it, then save it under a name");
   }
   function removeSaved() {
     if (!current || !confirm(`Delete the saved set “${current.name}”?`)) return;
@@ -449,17 +460,28 @@ export function StructuresTab() {
             onChange={(e) => setTheme(e.target.value)}
           />
 
-          <div className="flex items-center gap-1.5">
-            <select className="select-base flex-1 text-xs" value={mode} onChange={(e) => setMode(e.target.value as any)}
-                    title="add the new symbols to the current set (their descriptors then share ground with it), or start a new set">
-              <option value="add">add to the current set</option>
-              <option value="replace">new set</option>
-            </select>
-            <label className="flex items-center gap-1.5 text-xs text-ink-300" title={canDraw ? "draw each symbol with FLUX.2 and vectorize it" : "the server cannot draw"}>
-              <input type="checkbox" checked={draw && canDraw} disabled={!canDraw} onChange={(e) => setDraw(e.target.checked)} />
-              draw
-            </label>
+          <div className="space-y-1">
+            <div className="grid grid-cols-2 gap-1 rounded-md border border-ink-700 p-0.5">
+              {([["add", "into the current set"], ["replace", "a new set"]] as const).map(([m, label]) => (
+                <button key={m} type="button"
+                        className={`rounded px-2 py-1 text-xs transition ${mode === m ? "bg-accent-600/30 text-accent-100" : "text-ink-300 hover:bg-ink-800 hover:text-ink-100"}`}
+                        onClick={() => setMode(m)}
+                        title={m === "add" ? "the new symbols join the current set; their descriptors share ground with it; names already there are skipped"
+                                           : "the current set is left as it is; the new symbols start a set of their own, which you can save under a new name"}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-ink-500">
+              {mode === "add"
+                ? <>the symbols join <span className="text-ink-300">{setTitle}</span>{current ? " (saved as they come)" : ""}</>
+                : <>{current ? `“${current.name}” stays as it is; ` : ""}the symbols start a new set — save it under a name afterwards</>}
+            </div>
           </div>
+          <label className="flex items-center gap-1.5 text-xs text-ink-300" title={canDraw ? "draw each symbol with FLUX.2 and vectorize it" : "the server cannot draw"}>
+            <input type="checkbox" checked={draw && canDraw} disabled={!canDraw} onChange={(e) => setDraw(e.target.checked)} />
+            draw each symbol
+          </label>
           {canDraw && info.data && (
             <div className="flex flex-wrap items-center gap-1">
               {info.data.image_models.map((m) => (
@@ -493,15 +515,25 @@ export function StructuresTab() {
           <div className="flex gap-1.5">
             <input
               className="input-base flex-1 text-xs"
-              placeholder={current ? `rename “${current.name}”…` : "save the set as…"}
+              placeholder={current ? `a name for a new set, or to rename “${current.name}”…` : "a name for the set…"}
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); current ? saveCopy() : save(); } }}
             />
-            <button className="btn" onClick={save} disabled={!keys.length}>{current ? "save" : "save as set"}</button>
+            {current ? (
+              <>
+                <button className="btn whitespace-nowrap" onClick={saveCopy} disabled={!keys.length}
+                        title="a new saved set with these symbols, under the name typed (or “… copy”); the current one stays as it is">
+                  save as new set
+                </button>
+                <button className="btn" onClick={save} disabled={!keys.length} title={`update “${current.name}” (and rename it, if a name is typed)`}>save</button>
+              </>
+            ) : (
+              <button className="btn whitespace-nowrap" onClick={save} disabled={!keys.length}>save as set</button>
+            )}
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {current && <button className="btn text-xs" onClick={saveCopy} disabled={!keys.length} title="a second set with the same symbols, to change on its own">save a copy</button>}
+            <button className="btn text-xs" onClick={startEmpty} title="an empty set to generate or paste into; the selected set is left as it is">new empty set</button>
             <button className="btn text-xs" onClick={exportFile} disabled={!keys.length}>export file</button>
             <button className="btn text-xs" onClick={() => fileInput.current?.click()}>import file</button>
             <input ref={fileInput} type="file" accept="application/json,.json" hidden
