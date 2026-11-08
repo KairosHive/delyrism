@@ -1,4 +1,4 @@
-# Delyrism live API (package `delyrism`, v0.6)
+# Delyrism live API (package `delyrism`, v0.7)
 
 How a host application — the do-you-dream installation, or anything else —
 runs live delyrism as a component: install the package, start the server with
@@ -106,6 +106,7 @@ TTS service at `url`; without it nothing is spoken and nothing fails.
 | GET | `/live/profile` | → the current profile |
 | POST | `/live/profile` | full profile → the applied profile (422 if invalid) |
 | GET | `/spaces/{space_id}` | → 200 `{space_id, symbols, descriptors, owners, embedding_dim, color_map, modalities}` · 404 unknown (e.g. after a server restart: call `/live/setup` again) |
+| GET | `/spaces/{space_id}/map` | → `{descriptors, owners, symbols, color_map, n, dim, D, xy, layout}`: every descriptor's vector (`D`: base64 float32 LE, row-major n × dim) and its place on the space's 2D map (`xy`; `layout` "umap", or "pca" when UMAP is unavailable). What a session report needs (`delyrism.session.analyse`) |
 | GET | `/spaces/presets/{name}` | → `{name, symbols}` from the shipped structures (`lakota`, `elements`, …) |
 | GET | `/realtime/osc` · POST | OSC status / `{enabled, host, port, hz, scale}`. The status has `owner: {space_id, symbols, context, layout_source, …}` for the socket TouchDesigner currently shows (null when none); TD also gets `/delyrism/space s space_id` with the labels (on owner change and about 1/s). |
 | GET | `/realtime/speech` · POST | speech status / settings (as in the profile) |
@@ -131,7 +132,7 @@ or `{"type": "error", "detail": "unknown space_id …"}` and closes with 4404.
 | `{"type": "transcript", "text": "…", "tau"?: 1.5, "hz"?: 20, "source"?: "typed"}` | spoken text, e.g. the live transcription of the last ~30 s, re-sent as it grows. **Latent smoothing**: each text sets a target embedding and the query vector glides toward it (normalised exponential approach, time constant `tau` s), re-scored `hz` times a second, so relevance moves continuously instead of jumping at each update. `relevance.kind == "speech"`, `relevance.query` = the text. Empty text holds the current query. `tau`/`hz` override the profile for this socket |
 | `{"type": "query_clear"}` | no query (relevance off) |
 | `{"type": "sim", "hz": 30}` | subscribe to the layout frames below (0 = off) |
-| `{"type": "snapshot", "id"?: any, "format"?: "list" \| "b64"}` | one recording sample, answered at once with a `snapshot` message (below). Read-only: does not claim the OSC output |
+| `{"type": "snapshot", "id"?: any, "format"?: "list" \| "b64", "vectors"?: true, "context_rel"?: false}` | one recording sample, answered at once with a `snapshot` message (below). `vectors: false` leaves the vectors out (a lighter sample); `context_rel: true` adds `context_rel_all`. Read-only: does not claim the OSC output |
 | `{"type": "pose_params", "tracker": "body", …}` | pose options (defaults from the profile) |
 | `{"type": "motion_tick", "window": 3, "contrast": 0.7, "relative": 1}` | describe the last `window` s now (not needed when `profile.motion.auto`) |
 | `{"type": "motion_reset"}` | forget the session's movement range (new dancer) |
@@ -274,6 +275,9 @@ ones still being scored):
  "query_vec": [...] | null,             // the vector the relevance was scored with (after the media EMA / speech glide)
  "query_target": [...] | null,          // the latest raw embedding: = query_vec for text, the transcript's target
                                         // while the glide moves toward it, the newest media vector before habituation and the EMA
+ "rel_all": [...] | null,               // the scored query's cosine with every descriptor of the space (space.descriptors
+                                        // order, the shifted matrix the graph is scored in): a session recording's row (below)
+ "context_rel_all": [...] | null,       // only with "context_rel": true - the context's cosine with every descriptor (raw D)
  "habituation": {"kind": "image", "beta_eff": 0.5} | null,   // the mean key and warm-up-scaled beta of the latest query vector
  "nodes": {…the sim frame's node columns…, "relevance": [...]},   // relevance = the scored 0…1 activation;
                                         // rel = the same after the layout's contrast curve; alive=false = fading out
@@ -285,6 +289,23 @@ ones still being scored):
 Vectors are unit-length float lists rounded to 6 decimals, or with
 `"format": "b64"` base64 of little-endian float32 (~40% smaller: about 15 KB
 instead of 26 KB for an 11-node graph with 768-d vectors).
+
+### Session reports (`delyrism.session`)
+
+`delyrism/session.py` turns a recording of a live run into the panels of a
+session report, without the server: `analyse(raw, D, XY, colors)` with
+`raw = {descriptors, owners, symbols, t, kind, query, rel, events, duration,
+name}` (`rel`: one row per moment with the query's cosine over every
+descriptor, `null` without a query - a snapshot's `rel_all`; events of type
+`context` (with `rel`: `context_rel_all`), `query`, `heard`, `spoken`,
+`motion`, `graph` (with `edges: [[u, v, delta], …]`)), `D` and `XY` from
+`/spaces/{id}/map`.  The result holds `summary`, `layout`, `trajectory`
+(attention path, dwells, context path), `territory` (time in the top 5 per
+descriptor, reach, never reached, symbol shares and their stream per minute),
+`topology` (groups and loops per sliding window, their changes, Δ-graph edges
+born and dying), `phases` (phases with their words and symbol, recurrence
+matrix, returns), `words`, `archetypes` and `fingerprint`.  Loops need the
+`topology` extra (ripser); without it they count 0.
 
 ### `sim` frames — the TouchDesigner view
 

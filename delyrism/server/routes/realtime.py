@@ -874,31 +874,56 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
                 "text": state["query_text"], "active": vq is not None,
                 "hab": state["hab_last"]}
 
-    def _snapshot(req_id: Any, fmt: str) -> Dict[str, Any]:
+    def _rel_all(q: Dict[str, Any]) -> Optional[list]:
+        """The scored query's cosine with every descriptor of the space (space.descriptors
+        order), in the shifted matrix the graph is scored in: a session recording's row
+        (delyrism/session.py).  None without a query or a graph."""
+        vq = q.get("vq")
+        if vq is None or graph.get("D1") is None:
+            return None
+        try:
+            D1 = _shifted_for_head(space_id, space, graph, state["shown"]["context"], state["params"],
+                                   _head_for_kind(space, q.get("kind") or "text"))
+            if D1 is None:
+                return None
+            return np.round(np.asarray(D1 @ vq, dtype=np.float32), 5).tolist()
+        except Exception:
+            return None
+
+    def _snapshot(req_id: Any, fmt: str, vectors: bool = True, context_rel: bool = False) -> Dict[str, Any]:
         """One recording sample (WS {"type": "snapshot"}): the layout as the
         sim frame has it, with the context and query vectors it was built and
-        scored from, all from the same instant."""
+        scored from, all from the same instant.  `vectors` false leaves the
+        vectors out (a lighter sample); `context_rel` adds the context's own
+        cosine with every descriptor."""
         fr = sim_frame(sim, 0, 0.0, osc.scale)
         shown, q = state["shown"], state["scored"]
         rel = getattr(sim, "relevance", {}) or {}
         emb = space.embedder
-        return {
+        vec = (lambda v: _vec_out(v, fmt)) if vectors else (lambda v: None)
+        out = {
             "type": "snapshot", "id": req_id, "t": round(time.time(), 3), "graph_seq": fr["graph_seq"],
             "space_id": space_id, "symbols": fr["symbols"],
-            "context": shown["context"], "context_vec": _vec_out(shown["vctx"], fmt),
+            "context": shown["context"], "context_vec": vec(shown["vctx"]),
             "context_pending": state["context"] if state["context"] != shown["context"] else None,
             "query_active": bool(q["active"]),
             "query_presence": round(float(sim.presence), 4),
             "query_kind": q["kind"] if q["active"] else None,
             "query_text": q["text"] if q["active"] else None,
-            "query_vec": _vec_out(q["vq"], fmt), "query_target": _vec_out(q["vq_raw"], fmt),
+            "query_vec": vec(q["vq"]), "query_target": vec(q["vq_raw"]),
             "nodes": {**fr["nodes"], "relevance": [float(rel.get(i, 0.0)) for i in fr["nodes"]["id"]]},
             "edges": fr["edges"],
+            "rel_all": _rel_all(q) if q["active"] else None,     # over every descriptor (space.descriptors order)
             "habituation": q.get("hab") if q["active"] else None,
             "embedder": {"backend": getattr(emb, "backend_type", None), "model": getattr(emb, "model_name", None),
                          "dim": int(space.D.shape[1])},
             "vec_format": fmt,
         }
+        if context_rel:
+            vctx = shown.get("vctx")
+            out["context_rel_all"] = (np.round(np.asarray(space.D @ vctx, dtype=np.float32), 5).tolist()
+                                      if vctx is not None else None)
+        return out
 
     def _lakota_shares(nodes: bool):
         """Lakota background (app/lakota.py): shares of the graph's nodes and of a
@@ -964,7 +989,8 @@ async def live_graph_socket(ws: WebSocket, space_id: str):
             if t == "snapshot":
                 # read-only recording sample; does not claim the OSC output
                 fmt = "b64" if m.get("format") == "b64" else "list"
-                await ws.send_json(_snapshot(m.get("id"), fmt))
+                await ws.send_json(_snapshot(m.get("id"), fmt, vectors=m.get("vectors", True) is not False,
+                                             context_rel=bool(m.get("context_rel"))))
                 continue
             if t == "layout":
                 # the browser's own node positions — what the user actually sees.

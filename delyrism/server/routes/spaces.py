@@ -72,6 +72,31 @@ def get_space_info(space_id: str, palette: str = "AuroraPop") -> dict:
     }
 
 
+@router.get("/{space_id}/map")
+def get_space_map(space_id: str, palette: str = "AuroraPop") -> dict:
+    """The space for a session report (delyrism/session.py): every descriptor's vector and its
+    place on the 2D map (UMAP when it fits, else the space's PCA), with owners and colours."""
+    import base64
+    import numpy as np
+    space = engine_cache.get_space(space_id)
+    if space is None:
+        raise HTTPException(status_code=404, detail="unknown space_id")
+    D = np.asarray(space.D, dtype="<f4")
+    try:
+        _model, XY, _ = engine_cache.get_umap_layout(space)
+        layout = "umap"
+    except Exception:
+        XY, layout = space._pca.transform(space.D)[:, :2], "pca"
+    XY = np.asarray(XY, dtype=float)[:, :2]
+    return {
+        "space_id": space_id, "symbols": list(space.symbols), "descriptors": list(space.descriptors),
+        "owners": dict(space.owner), "color_map": color_map_to_hex(space.get_symbol_color_dict(palette=palette)),
+        "dim": int(D.shape[1]), "n": int(D.shape[0]),
+        "D": base64.b64encode(np.ascontiguousarray(D).tobytes()).decode("ascii"),   # float32 LE, row-major n x dim
+        "xy": [[round(float(x), 5), round(float(y), 5)] for x, y in XY], "layout": layout,
+    }
+
+
 @router.get("/cache/stats")
 def stats() -> dict:
     return engine_cache.cache_stats()
