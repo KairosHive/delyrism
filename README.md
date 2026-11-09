@@ -188,13 +188,18 @@ GENERATE page (`delyrism/server/symbolgen.py`, routes `/generate`), all on Cloud
    how many symbols, and a language model names them, most central first, with a title. Or paste
    your own names, one per line (numbering and bullets are dropped). The list stays editable.
 2. **entry** — per name, with the optional theme and the other names of the set for shared
-   ground: 10 descriptors (the name first, lowercase, at most four words) and a *glyph*, one or two
-   sentences saying how to draw the symbol in a few basic shapes.
-3. **draw** — FLUX.2 on Workers AI writes the glyph as one character of an invented script in
-   black marker on white paper (klein 9b by default, ~2 s; klein 4b, or dev). The image prompt
-   carries the glyph alone: given the name, FLUX.2 drew the thing or its existing sign (Mars came
-   out as ♂), so the glyphs are abstract characters that share nothing with known signs, and the
-   meaning shapes only their gesture. The picture is cleaned to flat ink
+   ground: 10 descriptors (the name first, lowercase, at most four words) and a *glyph*: three to
+   five sentences that design the symbol as one abstract emblem whose structure carries its meaning.
+   The model reads the symbol with its descriptors as a small ontology (centre, surroundings, reach,
+   what it holds and lets out, what repeats, what opposes) and turns those relations into visual
+   structure (enclosure and opening, core and radiation, layers, rhythm, density, mass against line,
+   hollow against fill, balance or tilt), from a handful of elements: solid fills and lines of varied
+   weight, hollow and filled forms, curves, bars, dots, cut-outs. It is still not a picture of the
+   thing and not an existing sign, and the emblems of a set read as one family (do-you-dream's
+   prompt, ab7d250, verbatim).
+3. **draw** — FLUX.2 on Workers AI draws the glyph as one emblem in black ink on white paper,
+   fills and strokes (klein 9b by default, ~2 s; klein 4b, or dev). The image prompt carries the
+   glyph alone: given the name, FLUX.2 drew the thing or its existing sign (Mars came out as ♂). The picture is cleaned to flat ink
    (paper flattened, ink thresholded, marker gloss filled, specks dropped) and vectorized with
    `symbol_vectorizer`, framed exactly as do-you-dream frames its symbols, so the outlines,
    centre-line strokes and geometry come out alike on both sides.

@@ -8,8 +8,9 @@ The same principle as do-you-dream's GENERATE page (dyd/symbolgen.py): a symbol 
   entry    per name: ~10 descriptors (the name first) and a `glyph` - a plain description of how
            to draw the symbol in a few basic shapes (chat completions with a JSON schema,
            reasoning off)
-  draw     FLUX.2 on Workers AI draws the glyph as a character of an invented script in black
-           marker on white paper (the glyph alone: with the name, it drew the thing or its sign); the picture is cleaned to flat ink (`clean_ink`) and vectorized with
+  draw     FLUX.2 on Workers AI draws the glyph as one abstract emblem whose structure carries
+           the symbol's meaning, black ink on white (the glyph alone: with the name, it drew the
+           thing or its sign); the picture is cleaned to flat ink (`clean_ink`) and vectorized with
            `symbol_vectorizer` (Params() defaults, framed with PAD 0.08 like do-you-dream), so the
            outlines, centre-line strokes and geometry come out alike on both sides
 
@@ -78,10 +79,10 @@ descriptors: exactly {n} descriptors, lowercase, mostly one or two words, never 
 - When the set has a theme, read the symbol through that theme.
 - Let a few descriptors be shared ground with the other symbols of the set, so the graph can link them, but keep the symbol's own core distinct.
 
-glyph: one or two plain sentences that tell a scribe exactly how to write the symbol as a single character of an invented script: a glyph, not a picture. It must not depict the thing, any part of it or anything it suggests, and must not look like an existing sign: no astrological, planetary or alchemical signs, no letters or numerals of any real alphabet (Latin, Greek, Hebrew, runic, Chinese...), no religious or political symbols, no arrows, hearts, stars, crosses, icons or emoji. If the symbol has a well-known sign (a planet, a zodiac sign, an element, a metal, a deity), the character must share nothing with it; and never use the building blocks of astrological and alchemical signs: a circle or loop sitting on a stem, a cross or a crossbar on a stem, a crescent, a circle with a dot or a line inside. Build it from two to five strokes: straight or curved lines, hooks, loops, angles, short bars, an open or closed curve, one or two dots. Say exactly how they join, cross or stand apart (a stem bending into a hook at its top, a loop crossed by a slanted bar, two parallel strokes joined by a diagonal, a dot beside the foot). Nothing may read as a figure or a thing either: no loop or circle on a stem (a head on a body), no limbs, legs, eyes or faces, no animals, plants, suns, moons, houses or tools; script characters are usually asymmetric. It should look like a letter of a script nobody can read: abstract, balanced, written with a broad pen in a few seconds, every stroke clearly apart, no tiny details. No shading; do not mention colour, paper or writing style. Let the meaning shape only the character's gesture (rising or falling, open or closed, calm or sharp), never its picture. Vary the strokes from symbol to symbol so the characters of a set look like different letters of one script: not every character needs a stem, a hook or a dot; use zigzags, angles, waves, parallel strokes, open curves and closed shapes as well.
+glyph: three to five plain sentences that tell an artist exactly how to draw the symbol as one abstract emblem, black ink on white: a glyph whose structure carries the meaning. First read the symbol with its descriptors as one small ontology: what is at its centre, what gathers around it, what it reaches toward, what it holds in and what it lets out, what repeats, what opposes what. Then translate those relations into visual structure, not into pictures: enclosure and opening, a core and what radiates or orbits, layers, repetition and rhythm, density thinning out, a broken or a continuous line, balance or a deliberate tilt, a heavy solid mass against thin lines, a hollow against a filled shape, convergence or scattering. Compose it from a handful of elements that relate to each other: solid filled shapes and lines of varied weight, hollow and filled forms, open and closed curves, angles, bars, dots, parallel or nested strokes, cut-outs inside a fill. Say exactly what each element is, how large, where it sits and how it joins, crosses, contains or stands apart from the others, and which relation of the ontology each part embodies. One composition, readable at a glance at a small size: at most seven or eight elements, no fine texture, no tiny details, nothing hatched. It must not depict the thing, any part of it or anything it suggests, and must not look like an existing sign: no astrological, planetary or alchemical signs, no letters or numerals of any real alphabet (Latin, Greek, Hebrew, runic, Chinese...), no religious or political symbols, no arrows, hearts, stars, crosses, icons or emoji; nothing that reads as a figure, a face, limbs, an animal, a plant, a sun, a house or a tool. Do not mention colour, paper, shading or style. Symmetry or asymmetry is a choice made by the meaning. Vary the structures from symbol to symbol so the set reads as one family of emblems from one culture, each distinct.
 
 Example, for the symbol "DRAGONFLY" in a set themed "Lakota cosmology":
-{{"descriptors": ["dragonfly", "resilience", "ancestral", "message", "spiritual travel", "flight", "lightly", "blessing", "patience", "survival"], "glyph": "A tall stem that bends into a small open hook at its top, crossed a third of the way down by one short stroke slanting up to the right, with a single dot to the left of its foot."}}"""
+{{"descriptors": ["dragonfly", "resilience", "ancestral", "message", "spiritual travel", "flight", "lightly", "blessing", "patience", "survival"], "glyph": "A small solid black lens, tilted, sits a little below the centre: the body of the meaning, resilience and survival, dense and closed. From its upper tip a thin line rises and splits into two long open curves that diverge like a path forking, each thinning to nothing: spiritual travel and the message carried away lightly. Three short bars cross the left curve at even intervals, the rhythm of patience; the right curve is crossed by nothing. Below the lens, apart from it, a wide shallow arc opens upward like a shallow bowl, the ancestral ground that holds without touching; a single dot rests at its centre."}}"""
 
 USER_PROMPT = """Symbol: {name}
 Theme of the set: {theme}
@@ -89,16 +90,19 @@ Other symbols in the set: {others}"""
 
 NO_THEME = "none given; read the symbol broadly, with its everyday, mythic and dream meanings"
 
-IMAGE_PROMPT = ("A single character of an unknown, invented writing system, written by hand with a thick "
-                "black felt-tip marker on plain white paper. {drawing}"
-                "An abstract glyph, not a picture of anything: like one letter of an ancient script that nobody "
-                "can read, made of a few confident thick strokes of even width in solid matte black ink, with "
-                "slightly uneven hand-written edges; no tiny details, every stroke clearly apart, loops narrow or pointed rather than perfect circles. It is not any "
-                "existing letter, numeral, symbol, sign or icon, and not a stick figure, face, body, animal, plant or object. "
+# The image prompt carries the glyph (the language model's design, which already holds the symbol's
+# meaning as structure), never the name or the descriptors: given those, FLUX.2 draws the thing (or
+# its existing symbol, e.g. a planet's astrological sign) instead of an emblem.
+IMAGE_PROMPT = ("One abstract emblem drawn in black ink on plain white paper, the mark of an unknown culture: "
+                "a glyph whose structure carries a meaning, not a picture of anything. {drawing}"
+                "Drawn by a sure hand with brush and pen: solid matte black filled shapes next to lines of varied "
+                "weight, thick and thin, hollow forms and filled forms, open and closed curves, dots and bars, every "
+                "element clearly apart or clearly joined, edges slightly uneven as ink is. Bold and legible at a "
+                "glance, no fine texture, no hatching, no tiny details. It is not any existing letter, numeral, "
+                "symbol, sign, logo or icon, and not a figure, face, body, animal, plant, sun, house or object. "
                 "Centered and filling most of the page, with a clear white margin on every side; the white paper "
-                "fills the whole image edge to edge, in flat even light. Black ink on white only: one character, "
-                "no other characters, no words, no shading, no gradients, no shadow, no texture, no colour, "
-                "no frame.")
+                "fills the whole image edge to edge, in flat even light. Black ink on white only: one emblem, "
+                "no words, no shading, no gradients, no shadow, no texture, no colour, no frame.")
 
 NAMES_SYSTEM_PROMPT = """You name the symbols of a set for "delyrism", a semantic graph of symbols. Each symbol will become a sign with a name and a list of descriptors, and the set is explored as one semantic space: the symbols should be distinct from each other, each one a clear thing, being, figure, place or force that can be told in a dream, and together they should cover the set's ground evenly.
 
@@ -410,7 +414,7 @@ def image_prompt(name: str, descriptors: List[str], glyph: str = "") -> str:
     glyph = glyph.strip()
     if glyph and glyph[-1] not in ".!?":
         glyph += "."
-    return IMAGE_PROMPT.format(drawing=f"The character: {glyph} " if glyph else "")
+    return IMAGE_PROMPT.format(drawing=f"The emblem: {glyph} " if glyph else "")
 
 
 def draw(prompt: str, model: str = DEFAULT_IMAGE_MODEL, seed: Optional[int] = None) -> bytes:
