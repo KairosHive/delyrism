@@ -174,7 +174,9 @@ A tab that talks to the Egregore companion service to compose new symbol sets fr
 ## Structures — the symbols, drawn; sets written and drawn on the fly
 
 Every symbol has a drawing: the ten shipped structures come with theirs
-(`delyrism/structures/art/<preset>.json`, made once with `scripts/draw_structures.py`), and a set
+(`delyrism/structures/art/<preset>.json`, made once with `scripts/draw_structures.py`; the Lakota
+structure carries the Lakota dream-language symbols themselves, vectorized by `scripts/lakota_art.py`
+from do-you-dream's `td/assets/lakota`, and a redraw keeps them), and a set
 made on the site gets them as it is generated. The drawing is a vector sign tinted with the
 symbol's colour, and it stands for the symbol across the site: the legends, the rankings, the
 symbol chips of the context options, the identity cards, the Live tab's overlap list, the

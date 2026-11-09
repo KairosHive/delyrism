@@ -73,7 +73,9 @@ def main() -> int:
     os.makedirs(presets.ART_DIR, exist_ok=True)
     for p in names:
         symbols = presets.load_preset(p)
-        art = {} if a.redo else presets.load_art(p)
+        art = presets.load_art(p)
+        if a.redo:      # drawings with a source (the Lakota symbols, scripts/lakota_art.py) stay
+            art = {n: r for n, r in art.items() if r.get("source")}
         todo = [(n, ds) for n, ds in symbols.items() if n not in art]
         print(f"{p}: {len(symbols)} symbols, {len(todo)} to draw")
         if not todo:
