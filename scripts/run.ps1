@@ -6,17 +6,13 @@
 #   frontend  Next.js dev server           http://localhost:3000
 #
 # Cloudflare embedders / LLMs: CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN
-# are taken from the process or, failing that, the Windows User environment.
-# Without them pick a local embedder in the sidebar.  Run scripts/setup.ps1 once.
+# go in the repo's .env (copy .env.example), which the backend loads itself.
+# Keep them out of the Windows User environment, where every program on the
+# machine, wrangler included, would inherit them.  Without them pick a local
+# embedder in the sidebar.  Run scripts/setup.ps1 once.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-foreach ($v in 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN') {
-    if (-not [Environment]::GetEnvironmentVariable($v, 'Process')) {
-        $u = [Environment]::GetEnvironmentVariable($v, 'User')
-        if ($u) { [Environment]::SetEnvironmentVariable($v, $u.Trim(), 'Process') }
-    }
-}
 $env:HF_HUB_DISABLE_SYMLINKS_WARNING = '1'
 
 function Launch($title, $cmd) {

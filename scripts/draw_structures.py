@@ -10,7 +10,7 @@ same record the Generate tab keeps for a set made on the site.
 
 The descriptors stay as shipped: the language model only writes the glyph (how to draw the
 symbol in a few basic shapes), read through the structure's name as the theme.  Credentials:
-CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN (process or Windows User environment).
+CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN (process environment, or the repo's .env).
 """
 from __future__ import annotations
 

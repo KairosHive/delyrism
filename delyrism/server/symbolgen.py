@@ -23,8 +23,8 @@ again every 10 minutes).  The prompts are do-you-dream's, verbatim where they ov
 made on either side reads alike: descriptor 0 is the name lowercased, descriptors are lowercase,
 whitespace-collapsed, unique, at most four words.
 
-Credentials: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN from the process environment, else the
-Windows User environment.  Never printed.
+Credentials: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN from the process environment, which
+the repo's `.env` fills (delyrism/envfile.py).  Never printed.
 """
 from __future__ import annotations
 
@@ -150,16 +150,15 @@ class GenError(RuntimeError):
 
 # ---------------------------------------------------------------- credentials
 def secret(name: str) -> Optional[str]:
-    """From the process environment, else the Windows User environment.  Never logged."""
+    """From the process environment, which the repo's `.env` fills when the
+    package is imported (re-read here in case `.env` was written since).
+    Never logged."""
     v = (os.environ.get(name) or "").strip()
-    if v or os.name != "nt":
-        return v or None
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
-            return str(winreg.QueryValueEx(k, name)[0]).strip() or None
-    except (OSError, ImportError):
-        return None
+    if not v:
+        from .. import envfile
+        envfile.load()
+        v = (os.environ.get(name) or "").strip()
+    return v or None
 
 
 def missing() -> List[str]:

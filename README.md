@@ -51,7 +51,7 @@ uv pip install "delyrism[server,vectorize] @ git+https://github.com/KairosHive/d
 python -m delyrism.server --port 8000 --profile live_profile.json --warmup
 ```
 
-For Cloudflare-backed embedders + LLMs, set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. Or pick the local `sentence-transformer` backend in the sidebar for fully-offline use. Railway deployment: [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md).
+For Cloudflare-backed embedders + LLMs, copy [`.env.example`](.env.example) to `.env` and fill in `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. The package loads `.env` on import, and variables already in the process environment take precedence. Keep these keys out of system-wide environment variables, which every other program (wrangler, for one) would inherit. Or pick the local `sentence-transformer` backend in the sidebar for fully-offline use. Railway deployment: [`RAILWAY_SETUP.md`](RAILWAY_SETUP.md).
 
 ## What it does
 
