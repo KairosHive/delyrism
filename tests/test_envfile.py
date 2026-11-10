@@ -2,8 +2,24 @@
 process environment, and the credential lookup that reads it."""
 from __future__ import annotations
 
+import os
+
+import pytest
+
 from delyrism import envfile
 from delyrism.server import symbolgen
+
+
+@pytest.fixture(autouse=True)
+def restore_environ():
+    """envfile.load() writes os.environ directly, outside monkeypatch's
+    bookkeeping.  Restore the whole environment after each test, so a dummy
+    CLOUDFLARE_API_TOKEN cannot reach later tests (the session story route
+    calls Cloudflare whenever a token is set)."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def test_parse_handles_comments_quotes_and_export():
