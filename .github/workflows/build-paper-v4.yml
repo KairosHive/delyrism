@@ -1,0 +1,25 @@
+name: build-paper-v4
+on:
+  push:
+    branches: [paper-v4-build]
+    paths: ['paper/v4/**', '.github/workflows/build-paper-v4.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xu-cheng/latex-action@v3
+        with:
+          working_directory: paper/v4
+          root_file: neurips2025_v4.tex
+      - name: Commit compiled PDF
+        if: always()
+        run: |
+          git config user.name "paper-build"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f paper/v4/neurips2025_v4.pdf paper/v4/neurips2025_v4.log paper/v4/neurips2025_v4.blg || true
+          git commit -m "Compiled v4 PDF [skip ci]" || echo "nothing to commit"
+          git push
